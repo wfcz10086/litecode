@@ -4,7 +4,7 @@
 
 [中文](README.md) · **English**
 
-**One machine of your own, one AI that does everything.** In the browser it's your strategist; in the terminal it's your engineer; on WeChat it's the assistant that always picks up — same brain everywhere, every chat continues anywhere. Your model, your disk, and cloud vendors don't make a cent off you.
+**LiteCode isn't another chat window — it's the first AI employee that lives on your machine.** In the browser it's your strategist; in the terminal it's your engineer; on WeChat it's the assistant that always picks up. Same brain, real memory, real skills, works on its own schedule. Salary: zero. Data: yours. Cloud vendors don't make a cent off you.
 
 ![MIT](https://img.shields.io/badge/license-MIT-green) ![Docker](https://img.shields.io/badge/docker-one--container-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI--compatible-orange) ![Private](https://img.shields.io/badge/self--hosted-100%25-red) ![Bots](https://img.shields.io/badge/WeChat%2FWeCom-built--in-brightgreen)
 
@@ -123,6 +123,16 @@ And a side no other agent has:
 ---
 
 ## 5. OK, now the bragging
+
+### The positioning: an employee, not a tool
+
+A tool only exists while you're holding it. An employee is *there*. LiteCode is built to the employee standard:
+
+- **It remembers** — preferences you stated, things you discussed. New sessions don't start with introductions.
+- **It has skills** — 92 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
+- **It works unsupervised** — timers fire on schedule, big jobs split themselves into pipelines, failures retry with lessons learned.
+- **It's always reachable** — browser, terminal, WeChat; start a chat in one place, continue in another.
+- **It serves only you** — your machine, your model, data never leaves. It has no other master.
 
 ### Numbers first
 
