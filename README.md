@@ -4,7 +4,7 @@
 
 **中文** · [English](README.en.md)
 
-**一台自己的机器,养一个全能 AI。** 网页上它是军师,终端里它是工程师,微信里它是随叫随到的助理——背后同一个大脑,聊到哪都接得上。模型用你自己的,数据不出家门,云厂商从你这儿一分钱都赚不走。
+**LiteCode 不是又一个聊天窗口,是住进你机器里的第一个 AI 员工。** 网页上它是军师,终端里它是工程师,微信里它是随叫随到的助理——同一个大脑,有记性、有手艺、会自己按点干活。工资为零,数据归你,云厂商从你这儿一分钱都赚不走。
 
 ![MIT](https://img.shields.io/badge/license-MIT-green) ![Docker](https://img.shields.io/badge/docker-%E5%8D%95%E5%AE%B9%E5%99%A8-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI%E5%85%BC%E5%AE%B9-orange) ![Private](https://img.shields.io/badge/%E7%A7%81%E6%9C%89%E5%8C%96-100%25-red) ![Bots](https://img.shields.io/badge/%E5%BE%AE%E4%BF%A1%2F%E4%BC%81%E5%BE%AE-%E5%86%85%E7%BD%AE-brightgreen)
 
@@ -124,6 +124,16 @@ cp config.example.json config.json
 ---
 
 ## 五、凭什么值得一个 star
+
+### 先说定位:一个"员工",不是一个"工具"
+
+工具是你打开的时候才存在;员工是常驻的。LiteCode 是按员工的标准长的:
+
+- **有记性** —— 交代过的偏好、聊过的事,它都记得。新开会话不用重新自我介绍。
+- **有手艺** —— 92 项技能,写代码、写报告、做 PPT、写小说都是现成的,还能学新的:丢个技能文件进去就多一门手艺。
+- **会自己干活** —— 定时任务到点自动跑,复杂活自己拆流水线,失败了自己带着教训重试。不用你盯着。
+- **随叫随到** —— 网页、终端、微信,你在哪它在哪,聊到一半换个地方接着聊。
+- **只效忠你** —— 跑在你的机器上、用你的模型,数据不出门。它没有第二个主人。
 
 ### 数字打底
 
