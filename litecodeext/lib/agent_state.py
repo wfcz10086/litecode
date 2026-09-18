@@ -155,3 +155,19 @@ class TurnContext:
     base_history: list = field(default_factory=list)
     messages: list = field(default_factory=list)      # SETUP L340 才真正赋值, 构造时给不了
     session_id: Optional[str] = None                  # 形参型字段, 构造时显式传入 (非默认值起手)
+
+
+@dataclass
+class StreamResult:
+    """[M8-polish] `_stream_llm_call` 的多值回传持有者 (取代字符串 key 字典)。
+    评审意见落地: 8 个字段全走属性访问, 打错名 Pyright 静态可抓, 不再靠字符串对齐。
+    种子语义与原字典一致: full_text/acc_tools/finish_reason/stream_interrupted 由调用点
+    从已绑定局部灌入; 其余 4 项默认值即原段内每轮 init 的常量 (""/False/0/0)。"""
+    full_text: str = ""
+    acc_tools: dict = field(default_factory=dict)
+    finish_reason: Optional[str] = None
+    full_reasoning: str = ""
+    stream_interrupted: bool = False
+    loop_broken: bool = False
+    iter_real_prompt: int = 0
+    iter_real_completion: int = 0
