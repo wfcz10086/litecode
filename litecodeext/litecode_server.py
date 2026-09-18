@@ -41,7 +41,7 @@ from lib.config import (
 )
 from lib.sse import sse_content, sse_status, sse_stop, sse_done, sse_usage, sse_reasoning, sse_error, sse_meta, _mkid
 from lib.agent_helpers import _auto_map_build_skeleton, _safe_json_args, _um_find_table_end
-from lib.agent_state import ProjectMapState, TestTrackState, WebTestState, BatchWriteState, MiscTurnState, UsageCounters, TurnContext
+from lib.agent_state import ProjectMapState, TestTrackState, WebTestState, BatchWriteState, MiscTurnState, UsageCounters, TurnContext, StreamResult
 from lib.stats import stats_load as _stats_load, stats_save as _stats_save, stats_add as _stats_add
 from lib.guard_stats import GuardStats as _GuardStats
 from lib.stats import questions_load as _questions_load, questions_append as _questions_append
@@ -826,18 +826,16 @@ def _loop_context_budget(ctx, fixed_overhead):
 #    13 个 continue/break 经 AST 分类全部指向段内循环, 零外层出口 → 整段可迁。
 #    out 8 字段 = AST 实测段内写∩段后读; reasoning_stall_count 段内只读故为参数。
 #    写回放 finally: 与内联时"异常抛出前变量已就地更新"的可见性语义一致。──
-async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_count, out):
+async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_count, out: StreamResult):
     """vLLM 流式调用主体: yield 透传 SSE chunk, 结果经 out 回传 8 字段。"""
-    full_text = out["full_text"]
-    acc_tools = out["acc_tools"]
-    finish_reason = out["finish_reason"]
-    _full_reasoning = out["full_reasoning"]
-    _stream_interrupted = out["stream_interrupted"]
-    _loop_broken = out["loop_broken"]
-    _iter_real_prompt = out["iter_real_prompt"]
-    _iter_real_completion = out["iter_real_completion"]
-    _last_yield_ts = last_yield_ts
-    _reasoning_stall_count = reasoning_stall_count
+    full_text = out.full_text
+    acc_tools = out.acc_tools
+    finish_reason = out.finish_reason
+    full_reasoning = out.full_reasoning
+    stream_interrupted = out.stream_interrupted
+    loop_broken = out.loop_broken
+    iter_real_prompt = out.iter_real_prompt
+    iter_real_completion = out.iter_real_completion
     try:
         # ── [400-GUARD] vLLM 400 绝对防御：最多重试3次，逐级升级清理 ──
         _vllm_retry_count = 0
@@ -853,16 +851,16 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
         #   2) reasoning 累积 > 3000 字但仍无 content/tool_call → 中断
         _loop_reasoning_chars = 0      # reasoning 累积字数
         _loop_reasoning_lines: list = []  # 最近 8 行 reasoning (清洗后)
-        _loop_broken = False
+        loop_broken = False
         _reasoning_nudge_sent = False  # [v4 2026-07] 5000c nudge, 7000c 断 (原 12000/13500)
         # [FIX] 累加本轮 reasoning 原文，用于 "只推理不干活" 的回落持久化。
         # 以前 delta.reasoning 只 yield 给前端不入库 → 一旦模型只思考不产出，
         # new_msgs 里就只剩开头那条 user → 日志 saved 1 msgs → UX 直接"退出"。
-        _full_reasoning = ""
+        full_reasoning = ""
         # [TOKEN-STATS 真值 2026-09-05] 本轮上游回报的真实 token (0=本轮没拿到锚点 → 退回估算)。
         # usage 锚点此前只喂上下文预算, 没回写 token_stats → 账单是估的、预算是真的, 思考模型下系统性偏差。
-        _iter_real_prompt = 0
-        _iter_real_completion = 0
+        iter_real_prompt = 0
+        iter_real_completion = 0
         while _vllm_retry_count <= _vllm_max_retry:
             try:
                 async for chunk in _vllm_stream(ctx.messages, TOOL_DEFS,
@@ -874,9 +872,9 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             log.warning(
                                 f"  \033[31m[INTERRUPT@stream:{ctx.sid_tag}]\033[0m "
                                 f"vLLM 流中断, 已累积 text={len(full_text)}c "
-                                f"reasoning={len(_full_reasoning)}c tools={len(acc_tools)}"
+                                f"reasoning={len(full_reasoning)}c tools={len(acc_tools)}"
                             )
-                            _stream_interrupted = True
+                            stream_interrupted = True
                             break
                     # [USAGE-ANCHOR] 标准 OpenAI 的 usage 包是 choices=[] + 顶层 usage,
                     # 会被下面 `if not choices: continue` 丢掉 —— 先在这抓一次顶层 usage。
@@ -894,11 +892,11 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                 usage.last_real_prompt_tokens = _tpt
                                 usage.last_est_at_anchor = _cur_est_t
                                 usage.usage_reports += 1
-                                _iter_real_prompt = _tpt  # [TOKEN-STATS] 回写 stats 用
+                                iter_real_prompt = _tpt  # [TOKEN-STATS] 回写 stats 用
                                 _tct = _top_usage.get("completion_tokens")
                                 if isinstance(_tct, int) and _tct > 0:
                                     usage.total_completion_tokens += _tct
-                                    _iter_real_completion += _tct
+                                    iter_real_completion += _tct
                         continue
                     choice        = choices[0]
                     delta         = choice.get("delta", {})
@@ -933,11 +931,11 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             usage.last_real_prompt_tokens = _pt
                             usage.last_est_at_anchor = _cur_est
                             usage.usage_reports += 1
-                            _iter_real_prompt = _pt  # [TOKEN-STATS] 回写 stats 用
+                            iter_real_prompt = _pt  # [TOKEN-STATS] 回写 stats 用
                             _ct2 = _up_usage.get("completion_tokens")
                             if isinstance(_ct2, int) and _ct2 > 0:
                                 usage.total_completion_tokens += _ct2  # 真值优先, 覆盖估算
-                                _iter_real_completion += _ct2
+                                iter_real_completion += _ct2
 
                     # [v1.0] 推理/思考内容提取 — 多后端兼容
                     # vLLM 旧版 (< 0.9)    → delta.reasoning_content
@@ -957,9 +955,9 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             log.debug(f"[reasoning-strip] stripped tool-call literals: {_rc_stripped!r}")
                         if _rc_clean:
                             yield sse_reasoning(_rc_clean, model)
-                        _last_yield_ts = time.time()
+                        last_yield_ts = time.time()
                         # [FIX] 累积 reasoning 原文, 流结束若无 content/tools 时留作落库
-                        _full_reasoning += _rc_clean
+                        full_reasoning += _rc_clean
                         # [v1.4] 死循环检测
                         _loop_reasoning_chars += len(_reasoning_chunk)
                         # 按换行切, 清洗后只留非空短行 (长句很少重复, 不检测)
@@ -979,12 +977,12 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                          "换个问法或补充点细节再试一次吧。）\n")
                             full_text += _loop_msg
                             yield sse_content(_loop_msg, model)
-                            _loop_broken = True
+                            loop_broken = True
                             break
                         # [v4 2026-07] 阈值收紧: nudge 5000c / 中断 7000c
                         # 之前 12000/13500 → 模型每轮浪费 13500c, 多轮累计"几万字".
                         # 现在 5000c nudge → 7000c 断, 每轮最多浪费 7000c.
-                        # 叠加 _reasoning_stall_count 跨迭代升级约束.
+                        # 叠加 reasoning_stall_count 跨迭代升级约束.
                         _nudge_thresh = 5000
                         _break_thresh = 7000
                         if (_loop_reasoning_chars > _nudge_thresh
@@ -994,7 +992,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             _reasoning_nudge_sent = True
                             _nudge = (
                                 "\n（这次想得有点久了，马上就好，稍等一下……）\n"
-                                if _reasoning_stall_count > 0 else
+                                if reasoning_stall_count > 0 else
                                 "\n（还在思考中，稍等一下……）\n"
                             )
                             yield sse_content(_nudge, model)
@@ -1002,14 +1000,14 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                 and not full_text and not acc_tools):
                             log.warning(
                                 f"  [REASONING-STALL] {_loop_reasoning_chars} 字 reasoning 无进展, "
-                                f"中断 (阈值 {_break_thresh}, 本次第 {_reasoning_stall_count + 1} 次)")
+                                f"中断 (阈值 {_break_thresh}, 本次第 {reasoning_stall_count + 1} 次)")
                             _stall_msg = (
                                 "\n（这轮想得太久了，已经先停下来了，"
                                 "你可以换个说法或拆成更小的问题再问我一次。）\n"
                             )
                             full_text += _stall_msg
                             yield sse_content(_stall_msg, model)
-                            _loop_broken = True
+                            loop_broken = True
                             break
 
                     if delta.get("content"):
@@ -1060,20 +1058,20 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                     if _j < 0:
                                         # 闭标签没到, 把剩余当推理 emit, 等下一 chunk
                                         if _buf:
-                                            _full_reasoning += _buf
+                                            full_reasoning += _buf
                                             yield sse_reasoning(_buf, model)
                                         _buf = ""
                                         break
                                     # 标签内是推理
                                     if _j > 0:
-                                        _full_reasoning += _buf[:_j]
+                                        full_reasoning += _buf[:_j]
                                         yield sse_reasoning(_buf[:_j], model)
                                     _buf = _buf[_j + 8:]  # 去掉 </think>
                                     _think_open = False
                         else:
                             full_text += _ct
                             yield sse_content(_ct, model)
-                        _last_yield_ts = time.time()
+                        last_yield_ts = time.time()
                         # [v1.4] 有实质内容 → 重置死循环计数
                         _loop_reasoning_chars = 0
                         _loop_reasoning_lines.clear()
@@ -1098,9 +1096,9 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         _reasoning_nudge_sent = False  # [v2 2026-05] 一并重置 nudge 状态
 
                     # [OPT] P0-C: 工具参数累积期间发送心跳，防止客户端 read timeout
-                    if time.time() - _last_yield_ts > 15:
+                    if time.time() - last_yield_ts > 15:
                         yield ": heartbeat llm_stream\n\n"
-                        _last_yield_ts = time.time()
+                        last_yield_ts = time.time()
 
                 # async for 正常结束
                 _vllm_success = True
@@ -1132,7 +1130,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                     full_text = ""
                     acc_tools = {}
                     finish_reason = None
-                    _full_reasoning = ""
+                    full_reasoning = ""
                     continue
                 _is_400 = "400" in _vllm_err_str and (
                     "arguments" in _vllm_err_str.lower() or
@@ -1154,7 +1152,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         full_text = ""
                         acc_tools = {}
                         finish_reason = None
-                        _full_reasoning = ""
+                        full_reasoning = ""
                         continue  # 重试
                     # 其他 400: 逐级升级清理策略
                     if _vllm_retry_count == 1:
@@ -1179,7 +1177,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                     full_text = ""
                     acc_tools = {}
                     finish_reason = None
-                    _full_reasoning = ""  # [FIX] 400 重试时也清, 和 full_text/acc_tools 一致
+                    full_reasoning = ""  # [FIX] 400 重试时也清, 和 full_text/acc_tools 一致
                     continue  # 重试 while 循环
                 else:
                     # 非 400 错误，或已超重试次数 → 重新抛出
@@ -1198,14 +1196,14 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
         # while end
 
     finally:
-        out["full_text"] = full_text
-        out["acc_tools"] = acc_tools
-        out["finish_reason"] = finish_reason
-        out["full_reasoning"] = _full_reasoning
-        out["stream_interrupted"] = _stream_interrupted
-        out["loop_broken"] = _loop_broken
-        out["iter_real_prompt"] = _iter_real_prompt
-        out["iter_real_completion"] = _iter_real_completion
+        out.full_text = full_text
+        out.acc_tools = acc_tools
+        out.finish_reason = finish_reason
+        out.full_reasoning = full_reasoning
+        out.stream_interrupted = stream_interrupted
+        out.loop_broken = loop_broken
+        out.iter_real_prompt = iter_real_prompt
+        out.iter_real_completion = iter_real_completion
 
 # ── [AGENT_STREAM_REFACTOR M7b 2026-09-18] 工具调用前守卫家族, 从主循环整体迁出
 #    (原 ~242 行, 5 站点: BLOCK-MAP 强制建图+AUTO-MAP / BLOCK1.5 强制填图 /
@@ -1909,25 +1907,23 @@ async def agent_stream(
                 # ── [CONTEXT-BUDGET] LLM 调用前检查 token 预算，超限则裁剪老消息 ──
                 _loop_context_budget(_ctx, _fixed_overhead)
                 # ── [400-GUARD→M8] vLLM 调用+流解析 (迁至 _stream_llm_call, 见模块级函数) ──
-                _sll_out = {"full_text": full_text, "acc_tools": acc_tools,
-                            # full_reasoning 种子 = "" (原 L1542 段内每轮 init; 不能读
-                            # _full_reasoning —— 首轮未绑定, 会 UnboundLocalError, 门4 实抓)
-                            "finish_reason": finish_reason, "full_reasoning": "",
-                            "stream_interrupted": _stream_interrupted,
-                            # 下 4 项原为段内首创局部, 种子值 = 原 init 常量 (体内会重新 init)
-                            "loop_broken": False, "iter_real_prompt": 0,
-                            "iter_real_completion": 0}
+                # [M8-polish] dict → StreamResult dataclass (评审意见落地: 属性访问,
+                # 打错字段名 Pyright 静态可抓)。未显式传的 4 项默认值即原段内 init 常量;
+                # full_reasoning 保持 "" 种子 (首轮读局部会 Unbound, 门4 实抓过)。
+                _sll_out = StreamResult(full_text=full_text, acc_tools=acc_tools,
+                                        finish_reason=finish_reason,
+                                        stream_interrupted=_stream_interrupted)
                 async for _sll_chunk in _stream_llm_call(_ctx, _usage, model,
                         _last_yield_ts, _reasoning_stall_count, _sll_out):
                     yield _sll_chunk
-                full_text = _sll_out["full_text"]
-                acc_tools = _sll_out["acc_tools"]
-                finish_reason = _sll_out["finish_reason"]
-                _full_reasoning = _sll_out["full_reasoning"]
-                _stream_interrupted = _sll_out["stream_interrupted"]
-                _loop_broken = _sll_out["loop_broken"]
-                _iter_real_prompt = _sll_out["iter_real_prompt"]
-                _iter_real_completion = _sll_out["iter_real_completion"]
+                full_text = _sll_out.full_text
+                acc_tools = _sll_out.acc_tools
+                finish_reason = _sll_out.finish_reason
+                _full_reasoning = _sll_out.full_reasoning
+                _stream_interrupted = _sll_out.stream_interrupted
+                _loop_broken = _sll_out.loop_broken
+                _iter_real_prompt = _sll_out.iter_real_prompt
+                _iter_real_completion = _sll_out.iter_real_completion
                 # ── [STREAM-INTERRUPT] 如果 vLLM 流中被中断，保存已有内容并退出 ──
                 if _stream_interrupted:
                     _interrupt_text = "\n\n[任务已被用户中断]"
