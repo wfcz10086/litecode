@@ -1,0 +1,136 @@
+{
+  "_doc": "Feature dependency graph: which features touch which others. Used by self-test runner to order cases (deps-first) and to detect upstream regressions when downstream fails.",
+  "features": {
+    "auth": {
+      "deps": [],
+      "owned_by": ["litecodeext/web_ui.py:_require_auth"],
+      "downstream_of": []
+    },
+    "session": {
+      "deps": ["auth"],
+      "owned_by": ["litecodeext/web_ui.py /api/sessions"],
+      "downstream_of": []
+    },
+    "chat": {
+      "deps": ["auth", "session", "model"],
+      "owned_by": ["litecodeext/web_ui.py /api/chat/{sid}", "litecodeext/litecode_server.py /v1/chat/completions"],
+      "side_effects": ["memory.write", "stats.update", "tool_dispatch.run", "spawn_agent"]
+    },
+    "tool_dispatch": {
+      "deps": ["chat"],
+      "owned_by": ["litecodeext/core/tool_dispatch.py"],
+      "produces": ["execute_shell", "write_file", "patch_file", "web_search", "...22 tools"]
+    },
+    "spawn_agent": {
+      "deps": ["chat", "tool_dispatch"],
+      "owned_by": ["litecodeext/lib/agent/subagent.py:_run_subagent"],
+      "produces_via": ["explorer", "researcher", "coder", "tester", "writer", "critic", "planner", "shell"]
+    },
+    "memory": {
+      "deps": ["session"],
+      "owned_by": ["litecodeext/core/memory.py", "litecodeext/web_ui.py /api/memory/{sid}"],
+      "side_effects": ["chat.context_inject", "rule_memory.fallback"]
+    },
+    "model": {
+      "deps": ["auth"],
+      "owned_by": ["litecodeext/web_ui.py /api/models", "litecodeext/lib/config.py reload_model"],
+      "side_effects": ["chat.routing", "thinking_adapter.update"]
+    },
+    "timer": {
+      "deps": ["auth", "session?"],
+      "owned_by": ["litecodeext/core/timer_manager.py", "/api/timers"],
+      "actions_can_trigger": ["chat (action=agent)", "shell (action=shell)", "wechat (action=wechat_msg)", "notify (action=web_notify)"]
+    },
+    "DAG": {
+      "deps": ["spawn_agent"],
+      "owned_by": ["litecodeext/core/orchestrator.py", "/api/dags*"],
+      "calls": ["spawn_agent (each node)"],
+      "exposed_via": ["DAG editor panel", "runDAG()"]
+    },
+    "project_map": {
+      "deps": ["fs.write (workspace)"],
+      "owned_by": ["litecodeext/core/project_map_watcher.py"],
+      "watches": ["/tmp/litecode_workspace/*.py"]
+    },
+    "wechat": {
+      "deps": ["auth"],
+      "owned_by": ["litecodeext/wechat_bridge.py", "/api/wechat/*"],
+      "side_effects": ["timer can post to wechat"]
+    },
+    "upload": {
+      "deps": ["auth", "session", "model.supports_vision"],
+      "owned_by": ["/api/upload/{sid}"],
+      "side_effects": ["chat.multimodal_payload"]
+    },
+    "workspace": {
+      "deps": ["auth", "session"],
+      "owned_by": ["/api/workspace/* + /api/sessions/{sid}/files"],
+      "side_effects": ["project_map.watch"]
+    },
+    "interrupt": {
+      "deps": ["chat"],
+      "owned_by": ["/api/interrupt/{sid}"],
+      "stops": ["SSE stream", "agent_loop"]
+    },
+    "stats": {
+      "deps": ["chat"],
+      "owned_by": ["/api/stats"],
+      "feeds_from": ["telemetry.jsonl"]
+    },
+    "config": {
+      "deps": ["auth"],
+      "owned_by": ["/api/config", "config.json"],
+      "downstream": ["model", "memory", "wechat", "ui"]
+    }
+  },
+  "chains": [
+    {
+      "name": "search→save→recall",
+      "steps": ["chat[researcher]", "memory.save", "session.new", "chat[query]"],
+      "asserts": "second session sees recalled fact"
+    },
+    {
+      "name": "write→map→query",
+      "steps": ["tool_dispatch.write_file", "project_map.watch", "/api/map_status"],
+      "asserts": "new file appears in map"
+    },
+    {
+      "name": "DAG→run→view-output",
+      "steps": ["DAG.create", "DAG.run", "/api/dags/jobs/{id}", "agents[].output_preview"],
+      "asserts": "each agent has output_preview ≥ 60 chars or success=true"
+    },
+    {
+      "name": "timer→fire→agent_chat",
+      "steps": ["timer.create(cron+agent)", "wait 130s", "session.history"],
+      "asserts": "session has new assistant msg from cron-fired agent"
+    },
+    {
+      "name": "upload→vision→summary",
+      "steps": ["upload(zh.png)", "chat[vision_ocr]", "chat[writer summary]"],
+      "asserts": "summary contains image's Chinese keyword"
+    },
+    {
+      "name": "chat-create-DAG",
+      "steps": ["chat['做一个 BTC 报告 DAG']", "/api/dags"],
+      "asserts": "/api/dags has new entry created in last 60s"
+    },
+    {
+      "name": "chat-create-timer",
+      "steps": ["chat['每 5 分钟提醒我喝水']", "/api/timers"],
+      "asserts": "/api/timers has new entry"
+    },
+    {
+      "name": "error→search→fix",
+      "steps": ["execute_shell triggers error", "search_code_error", "patch_file", "execute_shell again"],
+      "asserts": "second exec returns 0"
+    }
+  ],
+  "regression_rules": {
+    "_doc": "If feature X fails, also re-run these dependent features to detect cascade",
+    "auth_fail":     ["session", "chat", "memory", "timer", "DAG", "model"],
+    "session_fail":  ["chat", "memory", "upload", "workspace"],
+    "chat_fail":     ["tool_dispatch", "spawn_agent", "DAG"],
+    "tool_dispatch_fail": ["spawn_agent", "DAG"],
+    "model_fail":    ["chat (might still work in degraded mode with error frame)"]
+  }
+}

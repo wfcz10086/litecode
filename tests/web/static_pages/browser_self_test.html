@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Browser Self-Test (LiteCode v1.9 P40)</title>
+<style>
+body { font-family: monospace; background: #1e293b; color: #e2e8f0; padding: 20px; max-width: 800px; margin: auto; }
+h1 { color: #60a5fa; }
+.box { border: 1px solid #475569; padding: 12px; margin: 12px 0; border-radius: 6px; }
+.box.success { border-color: #10b981; background: #064e3b40; }
+.box.error { border-color: #ef4444; background: #7f1d1d40; }
+input, button, textarea { font-family: inherit; padding: 6px; background: #0f172a; color: #e2e8f0; border: 1px solid #475569; border-radius: 4px; }
+button { cursor: pointer; background: #3b82f6; border: none; padding: 8px 16px; }
+button:hover { background: #2563eb; }
+#out { white-space: pre-wrap; min-height: 60px; }
+.fold-h { cursor: pointer; user-select: none; padding: 4px; }
+.fold-c { display: none; padding: 8px; background: #0f172a; }
+.fold-h.open + .fold-c { display: block; }
+</style>
+</head>
+<body>
+<h1 id="title">Browser Self-Test Page</h1>
+<p id="desc">用于 v1.9 P40 浏览器自动化端到端验证 — Playwright 自己操作自己。</p>
+
+<div class="box" id="box-input">
+  <h3>1. 输入 + 提交</h3>
+  <input id="inp" placeholder="type something" />
+  <button id="btn-submit" onclick="onSubmit()">Submit</button>
+  <div id="out">(no submit yet)</div>
+</div>
+
+<div class="box" id="box-fold">
+  <h3>2. 折叠展开</h3>
+  <div class="fold-h" id="fold-trigger" onclick="this.classList.toggle('open')">
+    ▶ 点击展开（当前折叠）
+  </div>
+  <div class="fold-c">
+    <p>这段文本只有展开后可见。Playwright 应能 click trigger → 验证 .fold-c 可见。</p>
+  </div>
+</div>
+
+<div class="box" id="box-async">
+  <h3>3. 异步加载</h3>
+  <button id="btn-load" onclick="loadAsync()">Load (1s 后填充)</button>
+  <div id="async-out">(empty)</div>
+</div>
+
+<div class="box" id="box-form">
+  <h3>4. 表单 multi-field</h3>
+  <form id="myform" onsubmit="event.preventDefault(); onForm(this);">
+    <input name="name" placeholder="name" required /><br>
+    <input name="email" type="email" placeholder="email" required /><br>
+    <textarea name="msg" rows="2" placeholder="message"></textarea><br>
+    <button type="submit">Send Form</button>
+  </form>
+  <div id="form-out">(no form submit)</div>
+</div>
+
+<div class="box" id="box-counter">
+  <h3>5. 计数器（多次点击）</h3>
+  <button id="btn-inc" onclick="onInc()">+1</button>
+  <span id="counter">0</span>
+</div>
+
+<div class="box" id="box-meta">
+  <h3>Meta</h3>
+  <p>Title: <span id="meta-title"></span></p>
+  <p>UA: <span id="meta-ua"></span></p>
+  <p>Path: <span id="meta-path"></span></p>
+</div>
+
+<script>
+function onSubmit() {
+  const v = document.getElementById('inp').value;
+  document.getElementById('out').textContent = 'Submitted: ' + v;
+  document.getElementById('box-input').classList.add('success');
+}
+
+function loadAsync() {
+  document.getElementById('async-out').textContent = 'loading...';
+  setTimeout(() => {
+    document.getElementById('async-out').textContent = 'async loaded ✓';
+    document.getElementById('box-async').classList.add('success');
+  }, 800);
+}
+
+function onForm(form) {
+  const data = new FormData(form);
+  const obj = {};
+  for (const [k, v] of data.entries()) obj[k] = v;
+  document.getElementById('form-out').textContent = 'Form: ' + JSON.stringify(obj);
+  document.getElementById('box-form').classList.add('success');
+}
+
+let _cnt = 0;
+function onInc() {
+  _cnt++;
+  document.getElementById('counter').textContent = _cnt;
+  if (_cnt >= 3) document.getElementById('box-counter').classList.add('success');
+}
+
+document.getElementById('meta-title').textContent = document.title;
+document.getElementById('meta-ua').textContent = navigator.userAgent.slice(0, 80);
+document.getElementById('meta-path').textContent = location.pathname;
+</script>
+</body>
+</html>

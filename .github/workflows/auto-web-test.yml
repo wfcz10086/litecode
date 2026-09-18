@@ -1,0 +1,72 @@
+name: P34-d-10 Auto Web Test (self_test 71)
+
+# v2.0 #6 / #12 — self-hosted only (镜像太大 + Docker-in-Docker + chromium 在 GH runner 跑不动)
+# 触发: push 到 master 或手动 dispatch. self-hosted runner 需要先准备好:
+#   - docker compose 已起 (litecode @ :18789, web_ui @ :18790)
+#   - browser_server.js 可启 (setsid + node + puppeteer-core + chrome)
+#   - vision fallback 模型可达 (qwen3.6 @ your-model-host.example:11435 等)
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'tests/run_auto_web_test.py'
+      - 'tests/web/vision_check.py'
+      - 'browser_node/browser_server.js'
+      - 'litecodeext/lib/browser_login.py'
+      - '.github/workflows/auto-web-test.yml'
+  workflow_dispatch:
+    inputs:
+      max_cases:
+        description: '用例数上限 (默认 40)'
+        required: false
+        default: '40'
+      skip_vision:
+        description: '跳过 vision_check (true=快速)'
+        required: false
+        default: 'false'
+
+jobs:
+  auto-web-test:
+    runs-on: self-hosted
+    timeout-minutes: 35   # ★硬指标 #11 ≤30 min + 5 min buffer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verify services
+        run: |
+          curl -sf http://127.0.0.1:18789/health || (echo "litecode server down"; exit 1)
+          curl -sf http://127.0.0.1:18790/ -o /dev/null || (echo "web ui down"; exit 1)
+
+      - name: Ensure browser_server up
+        run: |
+          if ! docker exec litecode bash -c "ss -tln | grep -q 19000"; then
+            docker exec -d litecode bash -c "setsid node /opt/browser_node/browser_server.js >/tmp/bs.log 2>&1 < /dev/null"
+            for i in {1..15}; do
+              docker exec litecode bash -c "ss -tln | grep -q 19000" && break
+              sleep 2
+            done
+          fi
+          docker exec litecode bash -c "ss -tln | grep 19000"
+
+      - name: Run P34-d-10 driver
+        env:
+          MAX_CASES: ${{ github.event.inputs.max_cases || '40' }}
+          SKIP_VISION_FLAG: ${{ github.event.inputs.skip_vision == 'true' && '--skip-vision' || '' }}
+        run: |
+          python3 tests/run_auto_web_test.py \
+            --max-cases "$MAX_CASES" \
+            $SKIP_VISION_FLAG
+
+      - name: Upload report artifact
+        if: always()   # 失败也上传
+        uses: actions/upload-artifact@v4
+        with:
+          name: auto-web-test-${{ github.run_id }}
+          path: reports/auto_web_test/
+          retention-days: 30
+
+      - name: Smoke check after
+        if: always()
+        run: bash tests/smoke.sh

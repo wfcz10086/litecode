@@ -1,0 +1,4 @@
+/* D1 占位 - 逐步从 web_assets/app.css 迁移 */
+:root { color-scheme: dark; }
+body { margin: 0; font-family: system-ui, sans-serif; background: #1a1a1a; color: #e0e0e0; }
+#app { display: flex; align-items: center; justify-content: center; height: 100vh; font-size: 1.2rem; }

@@ -1,0 +1,182 @@
+# ╔══════════════════════════════════════════════════════════════╗
+# ║  LiteCode v12-r1  docker-compose (host network)             ║
+# ║  配置说明见 .env.example                                     ║
+# ║  [host-mode] 容器直接使用宿主机网络栈：                      ║
+# ║   - 宿主机上占用的端口 = 容器监听的端口, 无需 -p 映射        ║
+# ║   - 容器里 127.0.0.1:18789 == 宿主机 127.0.0.1:18789         ║
+# ║   - Agent 起的任意端口 (如 45555) 也直接暴露到宿主机         ║
+# ║   - 局限: 只能在 Linux 宿主机生效 (Mac/Windows Docker 忽略)  ║
+# ╚══════════════════════════════════════════════════════════════╝
+
+services:
+  litecode:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        LITECODE_TAR: litecodeext_v12.tar.gz
+
+    image: litecode:v12-r1
+    container_name: litecode
+    restart: unless-stopped
+    command: all
+
+    # [host-mode] 使用宿主机网络, 放弃端口映射;
+    # 容器内进程直接绑宿主机网卡, Agent 起的动态端口 (crypto_monitor 45555 等)
+    # 不需要额外改 compose 也能访问。
+    network_mode: host
+
+    volumes:
+      - ./workspace:/tmp/litecode_workspace
+      - ./sessions:/tmp/litecode_workspace/sessions
+      - ./config.json:/opt/litecode/config.json
+      - ./web_sessions:/root/.litecode/web_sessions
+      - ./wechat_creds:/root/.wechatbot
+      - ./wechat_media:/root/.litecode/wechat_media
+      # [v1.10 B2 fix] skills/drafts 持久化 — agent 用 create_skill 创建草稿不丢
+      - ./workspace/skills_drafts:/opt/litecode/skills/drafts
+      # [2026-07-26] 项目扩展 skills (陪伴 companion / 毛泽东思想 mao-zedong)
+      - ./skills_extra/companion:/opt/litecode/skills/companion:ro
+      - ./skills_extra/mao-zedong:/opt/litecode/skills/mao-zedong:ro
+      # [migrate-2026-05] 把容器内剩余 stateful 文件挂出来, podman→docker 迁移时不再丢
+      - ./litecode_state/timers.json:/root/.litecode/timers.json
+      - ./litecode_state/web_auth_tokens.json:/root/.litecode/web_auth_tokens.json
+      - ./litecode_state/dag_jobs:/root/.litecode/dag_jobs
+      # [ssh-2026-05] host SSH key 只读挂入容器, 让 LiteCode AI 能 ssh 远程机器
+      # (Dockerfile 装 openssh-client 提供 ssh 二进制)
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # [entrypoint-mount-2026-05-25] entrypoint.sh 用 host 文件覆盖镜像内的,
+      # 改动不用重 build (品牌名 OpenClaw→LiteCode / 目录名修正等). 只读防误改.
+      - ./entrypoint.sh:/entrypoint.sh:ro
+      # [2026-08-25 清理] browser_search.py/tool_dispatch.py (core/) 和
+      # thinking_adapter.py/transport.py/config.py/browser_login.py/tools/defs.py (lib/)
+      # 的个体文件 mount 已被下面的整目录 mount (core/、lib/) 覆盖, 属死重复, 删除.
+      - ./litecodeext/litecode_server.py:/opt/litecode/litecode_server.py:ro
+      - ./litecodeext/web_ui.py:/opt/litecode/web_ui.py:ro
+      # [wecom-2026-07-26] 企业微信智能机器人桥 + per-bot SQLite store, 走 mount 免重 build
+      - ./litecodeext/wecom_bridge.py:/opt/litecode/wecom_bridge.py:ro
+      - ./litecodeext/wecom_store.py:/opt/litecode/wecom_store.py:ro
+      # [wecom-2026-07-26] 从 web_ui.py 抽出的 WeCom 消息桥 (make_wc_on_msg / make_wc_sender)
+      - ./litecodeext/wecom_chat_bridge.py:/opt/litecode/wecom_chat_bridge.py:ro
+      # [dag-2026-07-27] 从 web_ui.py 抽出的 DAG 状态 + 启动器 (231 行)
+      - ./litecodeext/dag_state.py:/opt/litecode/dag_state.py:ro
+      # 每个 bot 一份 SQLite: contacts/messages/media/rate_limit, 3 天 media_id 缓存
+      - ./wecom_state:/root/.wecom
+      # [litecli-mount 2026-07-25] CLI 入口 (三端对齐 CLI 端): dag nl-* / sessions abort/resume / docker mgmt
+      # 容器内老拷贝停在 6/2, 没这个 mount 新加的 subcommand 都跑不到. 三端对齐必需.
+      - ./litecodeext/litecli.py:/opt/litecode/litecli.py:ro
+      # [web_ui.html-mount 2026-07-24] 前端主 HTML 骨架 (sidebar 按钮 + panel 容器) 改动免重 build
+      # 没这个 mount, 加新面板 (产出物/后台/DAG) 只改文件不生效, D 系列冒烟必失败
+      - ./litecodeext/web_ui.html:/opt/litecode/web_ui.html:ro
+      # workspace_router.py 个体 mount 已被下面 routers/ 整目录 mount 覆盖, 删除
+      # [web_assets-mount 2026-06-22] 前端 JS/CSS 改动不用重 build 也不用 docker cp,
+      # restart 即生效. 历史踩坑: addMsg 漏扫 tool_result 里 PNG 路径 → 刷新图没了.
+      - ./litecodeext/web_assets:/opt/litecode/web_assets:ro
+      # [routers-mount 2026-07-22] 整个 routers/ 目录挂载，D1~D10 加新路由免重 build
+      - ./litecodeext/routers:/opt/litecode/routers:ro
+      # [plugins-mount 2026-07-24] S1-N artifacts_v2 + S1-* plugin refactor 依赖整个 plugins/ 目录
+      # 没这个 mount, routers/artifacts_v2_router 会 import plugins.artifacts.store 失败
+      - ./litecodeext/plugins:/opt/litecode/plugins:ro
+      # [fix 2026-07-25] T-52c 抽出 gateway/ 包后 compose 漏挂, litecode_server line 2929 ImportError 死循环重启
+      - ./litecodeext/gateway:/opt/litecode/gateway:ro
+      # [core-mount 2026-07-24] orchestrator / itrace / _when_eval 等新拆核心走 mount
+      - ./litecodeext/core:/opt/litecode/core:ro
+      # [lib-mount 2026-07-24] dag_schema / dag_ai_gen / memory / skills 等 lib 变动频繁, 走目录 mount
+      - ./litecodeext/lib:/opt/litecode/lib:ro
+      # [v3-mount 2026-07-24] v3 provider + workflow engine, 后续 DAG 收敛依赖
+      - ./litecodeext/v3:/opt/litecode/v3:ro
+      # [FIX 2026-08-31] 此前漏挂 —— 容器用的是 2026-05-22 打进镜像的旧模板,
+      # 宿主上对 SOUL.md / IDENTITY.md 等人设文件的所有修改从未进过生产。
+      - ./litecodeext/workspace_template:/opt/litecode/workspace_template:ro
+      # [FIX 2026-08-31] 同批漏挂 —— 实测容器跑的是旧版:
+      #   wechat_bridge.py 容器内停留在 2026-08-25, 08-28 的超时修复从未上线,
+      #   导致短消息触发的长任务被硬性 180s 掐断 (实测截断点全部恰好 181s)。
+      #   prompts/RULES.md 与 skills/ 同样长期漂移 (skills 宿主独有 73 个文件)。
+      - ./litecodeext/wechat_bridge.py:/opt/litecode/wechat_bridge.py:ro
+      - ./litecodeext/prompts:/opt/litecode/prompts:ro
+      - ./litecodeext/skills:/opt/litecode/skills:ro
+      # [FIX 2026-08-31] 主提示词, 容器内停留在 2026-05-06 —— 近 4 个月的
+      # 人设/思维方式/搜索纪律修改全部未生效 (lib/prompt.py 是热加载, 读的就是这个文件)
+      - ./litecodeext/AGENT_PROMPT.md:/opt/litecode/AGENT_PROMPT.md:ro
+      # [browser-server-node 2026-05-25] 替换 Python+Playwright 为 Node+puppeteer-core,
+      # 复用容器内 google-chrome (148.x), 不再下 chromium binary.
+      # browser_node 目录含 node_modules (puppeteer-core@22 + express), 44MB.
+      # 单例 + 用完即关由 browser_server.js 自身 idle timer 实现.
+      - ./browser_node:/opt/browser_node:rw
+      # [plugin-external-mount 2026-07-24] /opt/pptx /opt/cad 挂进容器, 让 plugins.registry 扫描到
+      # 用户: "整个ui 没有像 kimi.com 那样对话" 之后要 DAG 内直接调 pptx_render/cad_generate
+      - /opt/pptx:/opt/pptx:ro
+      - /opt/cad:/opt/cad:ro
+      # [#44 docker-mgmt 2026-07-25] docker.sock 走 HTTP-over-UDS, 让 LiteCode 管容器
+      # 白名单前缀走 LITECODE_DOCKER_SCOPE (默认 litecode,searxng,pptx,cad)
+      - /var/run/docker.sock:/var/run/docker.sock:rw
+
+    environment:
+      - BACKEND_URL=${BACKEND_URL:-https://aigc.gether.net/v1}
+      - API_KEY=${API_KEY:-EMPTY}
+      - MODEL_ID=${MODEL_ID:-deepseek-v4-pro}
+      - SERVER_TOKEN=${SERVER_TOKEN:-CHANGE_ME_TOKEN}
+      - SERVER_PORT=${SERVER_PORT:-18789}
+      - WEB_PORT=${WEB_PORT:-18790}
+      - NOVNC_PORT=${NOVNC_PORT:-18800}
+      - VNC_PORT=${VNC_PORT:-5999}
+      - TZ=Asia/Shanghai
+      - WEB_PASSWORD=${WEB_PASSWORD:-}
+      - VNC_ALWAYS=${VNC_ALWAYS:-1}
+      - WX_KEEPALIVE_HOURS=${WX_KEEPALIVE_HOURS:-22}
+      - WX_KEEPALIVE_MSG=${WX_KEEPALIVE_MSG:-🤖 会话即将过期，回复任意消息即可续期~}
+      # [2026-05-29] vision-route 覆盖: 主模型不支持 vision 时, 临时路由到此 model id
+      # 不动 config.json vision_fallback_id 字段, 运维可随时切换
+      # 默认空, 走 config.json 里 vision_fallback_id (用户 2026-05-29 弃用 glm-5)
+      - LITECODE_VISION_FALLBACK=${LITECODE_VISION_FALLBACK:-}
+      # [plugin-path 2026-07-24] 让 plugin.registry 扫到 /opt/pptx /opt/cad
+      - LITECODE_PLUGIN_PATH=${LITECODE_PLUGIN_PATH:-/opt/pptx:/opt/cad}
+
+    healthcheck:
+      test: ["CMD", "curl", "-sf",
+             "-H", "Authorization: Bearer ${SERVER_TOKEN:-CHANGE_ME_TOKEN}",
+             "http://127.0.0.1:${SERVER_PORT:-18789}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+    # [v12.6-opt] 资源限制，防止失控进程吃光宿主机
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+        reservations:
+          memory: 1G
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  # [2026-05-25] SearXNG sidecar — 本机搜索网关 (JSON API, 不被反爬)
+  # host network 模式下与 litecode 同栈, LiteCode 直接调 http://127.0.0.1:18888
+  # 配置文件由 ./searxng_config/settings.yml 提供 (GRANIAN_PORT=18888)
+  searxng:
+    image: searxng/searxng:latest
+    container_name: searxng
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - ./searxng_config:/etc/searxng:rw
+    environment:
+      - GRANIAN_PORT=18888
+      - GRANIAN_HOST=127.0.0.1
+      - SEARXNG_BASE_URL=http://127.0.0.1:18888/
+      - TZ=Asia/Shanghai
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    depends_on: []

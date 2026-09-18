@@ -1,0 +1,61 @@
+name: auto-verify
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - 'reports/**'
+      - 'workspace/**'
+      - '*.md'
+  pull_request:
+    branches: [master]
+
+jobs:
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal deps
+        run: |
+          pip install -q fastapi uvicorn httpx requests pydantic prompt_toolkit psutil pyyaml
+      - name: Run offline tests
+        run: |
+          cd litecodeext && python3 tests/test_full.py --offline
+
+  syntax-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile all Python
+        run: |
+          python3 -m compileall -q litecodeext/ || exit 1
+
+  contract-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - name: SSE 契约残留检查
+        run: |
+          # 检查是否有人误删 SSE 关键字段
+          for field in "delta" "tool_call" "tool_result" "iter" "subagent" "done" "error"; do
+            if ! grep -rq "\"type\":\s*\"$field\"\|'type':\s*'$field'" litecodeext/ 2>/dev/null; then
+              echo "WARN: SSE type=$field 在代码中未找到"
+            fi
+          done
+      - name: env 变量残留检查
+        run: |
+          for var in OPENCLAW_URL OPENCLAW_TOKEN; do
+            if ! grep -rq "$var" litecodeext/ 2>/dev/null; then
+              echo "ERROR: env $var 不见了 (违反冻结)"
+              exit 1
+            fi
+          done

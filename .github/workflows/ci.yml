@@ -1,0 +1,74 @@
+name: ci
+
+on:
+  push:
+    branches: [master]
+    paths-ignore:
+      - 'reports/**'
+      - 'workspace/**'
+      - 'wechat_creds/**'
+      - 'docs/**'
+      - '*.md'
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile Python
+        run: python3 -m compileall -q litecodeext/ scripts/
+      - name: Check shell scripts
+        run: |
+          find . -name "*.sh" -not -path "./.git/*" -not -path "./workspace/*" | while read f; do
+            bash -n "$f" || exit 1
+          done
+      - name: Validate config.json
+        run: python3 -m json.tool config.json > /dev/null
+
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal deps
+        run: pip install -q fastapi uvicorn httpx requests pydantic prompt_toolkit psutil pyyaml
+      - name: Run smoke tests
+        run: bash tests/smoke.sh --strict
+
+  offline-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install minimal deps
+        run: pip install -q fastapi uvicorn httpx requests pydantic prompt_toolkit psutil pyyaml
+      - name: Run offline tests
+        run: cd litecodeext && python3 tests/test_full.py --offline
+
+  swe-bench-smoke:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: pip install -q datasets fastapi uvicorn httpx requests pydantic prompt_toolkit psutil pyyaml
+      - name: Run swe-bench smoke (5 tasks)
+        run: python3 litecodeext/tests/swe_bench.py --smoke

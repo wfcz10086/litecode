@@ -1,0 +1,364 @@
+{
+    "server": {
+        "host": "0.0.0.0",
+        "port": 18789,
+        "token": "CHANGE_ME"
+    },
+    "model": {
+        "id": "qwen3.8-flash-next-local",
+        "provider": "qwen",
+        "deployment": "vllm",
+        "served_model_name": "Qwen3.8-Flash-Next",
+        "backend_type": "openai",
+        "backend_url": "http://your-model-host.example:8000/v1",
+        "api_key": "CHANGE_ME",
+        "api_format": "openai-chat",
+        "context_window": 96000,
+        "max_tokens": 8192,
+        "enable_thinking": true,
+        "thinking_budget": 4096,
+        "supports_vision": true,
+        "_note": "自建 4×RTX4090, vLLM 0.1.dev20073+g8e685d198. 【官方规格】125B/6B激活 MoE + 视觉编码器; 原生 262144 上下文 (本部署起服务时设的 204800), YaRN 可扩到 1M 但静态缩放会伤短文本性能, 非必要别开。【思考】默认开, 走 <think>...</think>; chat_template_kwargs 支持 enable_thinking / preserve_thinking (都默认 true), 另有顶层 reasoning_effort (xhigh 默认 / medium / low)。【官方采样参数】思考模式 temperature=1.0 top_p=0.95 top_k=20 min_p=0 presence_penalty=0; 非思考模式 temperature=0.7 top_p=0.80 top_k=20 presence_penalty=1.5。【2026-08-28 实测】模板起手正常 <think>\\n; 已挂 reasoning-parser, 思考走 message.reasoning / delta.reasoning (非 reasoning_content), usage 带 reasoning_tokens; 裸调正常闭合 </think>; 思考与工具调用并存; 流式 TTFT 1.08s 吞吐 90.9 字符/s。【官方 agent 提示】多轮 agent 任务里降低 reasoning_effort 不一定更快 —— 分析不足会导致失败重试, 总延迟和 token 消耗反而上升。"
+    },
+    "default_model_id": "qwen3.8-flash-next-local",
+    "models": [
+        {
+            "id": "deepseek-v4-pro",
+            "label": "[#1] DeepSeek-V4-Pro (gether 网关)",
+            "provider": "deepseek",
+            "deployment": "gateway",
+            "backend_type": "openai",
+            "backend_url": "https://aigc.gether.net/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 128000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false
+        },
+        {
+            "id": "deepseek-v4-flash",
+            "label": "[#1b] DeepSeek-V4-Flash (gether 中转)",
+            "provider": "deepseek",
+            "deployment": "gateway",
+            "backend_type": "openai",
+            "backend_url": "https://aigc.gether.net/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 128000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false,
+            "_note": "gether 中转 flash (2026-07-26 官方 direct 欠费后切换)"
+        },
+        {
+            "id": "qwen3.8-flash-next-local",
+            "label": "[#3] Qwen3.8-Flash-Next (自建 4×4090, 200K, 视觉, 免费)",
+            "provider": "qwen",
+            "deployment": "vllm",
+            "served_model_name": "Qwen3.8-Flash-Next",
+            "backend_type": "openai",
+            "backend_url": "http://your-model-host.example:8000/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 96000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 4096,
+            "supports_vision": true,
+            "_note": "自建 4×RTX4090, vLLM 0.1.dev20073+g8e685d198. 【官方规格】125B/6B激活 MoE + 视觉编码器; 原生 262144 上下文 (本部署起服务时设的 204800), YaRN 可扩到 1M 但静态缩放会伤短文本性能, 非必要别开。【思考】默认开, 走 <think>...</think>; chat_template_kwargs 支持 enable_thinking / preserve_thinking (都默认 true), 另有顶层 reasoning_effort (xhigh 默认 / medium / low)。【官方采样参数】思考模式 temperature=1.0 top_p=0.95 top_k=20 min_p=0 presence_penalty=0; 非思考模式 temperature=0.7 top_p=0.80 top_k=20 presence_penalty=1.5。【2026-08-28 实测】模板起手正常 <think>\\n; 已挂 reasoning-parser, 思考走 message.reasoning / delta.reasoning (非 reasoning_content), usage 带 reasoning_tokens; 裸调正常闭合 </think>; 思考与工具调用并存; 流式 TTFT 1.08s 吞吐 90.9 字符/s。【官方 agent 提示】多轮 agent 任务里降低 reasoning_effort 不一定更快 —— 分析不足会导致失败重试, 总延迟和 token 消耗反而上升。"
+        },
+        {
+            "id": "vllm-qwen3-30b-remote",
+            "label": "[#0] vLLM Qwen3-30B-A3B (远程 198.51.100.13:8000, 8x RTX 4500 Ada, ctx 30000)",
+            "provider": "qwen",
+            "deployment": "vllm",
+            "backend_type": "openai",
+            "backend_url": "http://127.0.0.1:8000/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 30000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 4096,
+            "supports_vision": false,
+            "_note": "远程 vLLM (Qwen3-30B-A3B, max_model_len=30000, 2026-07-25 由 LiteCode dogfood 从 32768 改为 30000). 需先起 SSH 隧道: ssh -L 8000:localhost:8000 -N -p55102 root@198.51.100.13"
+        },
+        {
+            "id": "Qwen3.6-35B",
+            "label": "[#2] Qwen3.6-35B-AWQ (vLLM 私有, 100t/s, 识图)",
+            "provider": "qwen",
+            "deployment": "vllm",
+            "backend_type": "openai",
+            "backend_url": "http://198.51.100.12:8000/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 80000,
+            "max_tokens": 8192,
+            "enable_thinking": false,
+            "thinking_budget": 4096,
+            "supports_vision": true,
+            "_note": "RTX 4500 Ada ×4 (96G), vLLM v0.21 TP=4, KV fp8+Prefix Cache, 最大并发49, Qwen3 Reasoning+Tool Calling+视觉"
+        },
+        {
+            "id": "kimi-k2.7-code",
+            "label": "[#3] Kimi K2.7-Code (Moonshot 官方 API, 思考常开)",
+            "provider": "kimi",
+            "deployment": "official",
+            "backend_type": "openai",
+            "backend_url": "https://api.moonshot.cn/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 262144,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false,
+            "_note": "K2.7-code 思考常开; thinking:{type:enabled}; temperature 强制 1. (kimi-k3 端点 2026-07 期间频繁 429; K2.7 是稳定替代)"
+        },
+        {
+            "id": "glm-5.2",
+            "label": "[#4] GLM-5.2 (智谱官方 API, Deep Think)",
+            "provider": "glm",
+            "deployment": "official",
+            "backend_type": "openai",
+            "backend_url": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 131072,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false,
+            "_note": "GLM-5.2 Deep Think 模式; enable_thinking + reasoning_effort"
+        },
+        {
+            "id": "glm-5.3-flash",
+            "label": "[#5] GLM-5.3-Flash (智谱官方, 320B/18B MoE, 原生多模态, 1M)",
+            "provider": "glm",
+            "deployment": "official",
+            "backend_type": "openai",
+            "backend_url": "https://open.bigmodel.cn/api/paas/v4",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 200000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": true,
+            "_note": "GLM-5.3-Flash (2026-08-26 发布, 320B/18B MoE, 原生多模态, MIT, 1M上下文, 智能指数57≈Opus4.8, $0.075/$0.25 每M). 智谱官方正确 model id = glm-5.3-flash (glm-5.3-flash-x 不存在). [预置未激活] 2026-09-05: 该账户 1113 余额不足, 充值后即可用; gether中转 key 已失效. 要切默认: 改 default_model_id=glm-5.3-flash. 原生多模态可考虑替代 Qwen3.6-35B 视觉兜底。"
+        },
+        {
+            "id": "deepseek-flash",
+            "label": "[#5] DeepSeek-Flash (deepseek 官方 API, 低延迟 flash 档)",
+            "provider": "deepseek",
+            "deployment": "official",
+            "backend_type": "openai",
+            "backend_url": "https://api.deepseek.com/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 131072,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false,
+            "_note": "官方 DeepSeek-Flash; 低延迟档位 (改自 deepseek-chat 2026-07-24)"
+        },
+        {
+            "id": "qwen3.7-max",
+            "label": "[#6] Qwen3.7-Max (阿里云百炼官方 API)",
+            "provider": "qwen",
+            "deployment": "official",
+            "backend_type": "openai",
+            "backend_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 131072,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 8192,
+            "supports_vision": false,
+            "_note": "DashScope OpenAI 兼容; enable_thinking + thinking_budget"
+        },
+        {
+            "id": "qwen3.7-plus",
+            "label": "[#4] Qwen3.7-Plus (gether 中转)",
+            "provider": "qwen",
+            "deployment": "gateway",
+            "backend_type": "openai",
+            "backend_url": "https://aigc.gether.net/v1",
+            "api_key": "CHANGE_ME",
+            "api_format": "openai-chat",
+            "context_window": 128000,
+            "max_tokens": 8192,
+            "enable_thinking": true,
+            "thinking_budget": 4096,
+            "supports_vision": false,
+            "_note": "gether 中转, 与 deepseek-v4-flash 同一 key. 实测: 思考默认开且**不可关** — chat_template_kwargs.enable_thinking / thinking:{type:disabled} 中转层都不转发, 各跑2次思考字符 不传[1069,928] True[937,722] False[1157,841] disabled[867,760], 四组同分布=参数无效, 不是 LiteCode 的 bug, 别去查。工具调用正常(4.2s), 首字 4-14s。若要可控思考请直连 vLLM 并配 deployment=vllm(走 chat_template_kwargs 分支)。"
+        }
+    ],
+    "paths": {
+        "workspace_base": "/tmp/litecode_workspace",
+        "sessions_dir": "/tmp/litecode_workspace/sessions",
+        "logs_dir": "/tmp/litecode_workspace/logs"
+    },
+    "agent": {
+        "max_iterations": 9999,
+        "max_iter_soft_cap": 500,
+        "tool_loop_break_threshold": 8,
+        "max_error_streak": 8,
+        "task_timeout_seconds": 7200,
+        "session_ttl": 86400
+    },
+    "memory": {
+        "soft_token_limit": 60000,
+        "hard_token_limit": 75000,
+        "msg_soft_count": 90,
+        "msg_hard_count": 160,
+        "rule_based_fallback": true,
+        "compress_timeout": 300,
+        "smart_memory_timeout": 60,
+        "smart_memory_attempts": 1,
+        "smart_memory_max_tokens": 800
+    },
+    "iteration_trace": {
+        "enabled": true,
+        "log_level": "VERBOSE",
+        "save_path": "/tmp/litecode_workspace/logs/iteration_full.log",
+        "include_memory_diff": true,
+        "include_raw_prompt": true,
+        "max_prompt_chars": 2000
+    },
+    "web_ui": {
+        "port": 18790,
+        "auth": {
+            "enabled": true,
+            "password": "CHANGE_ME",
+            "session_days": 7
+        }
+    },
+    "wechat": {
+        "enabled": true,
+        "keepalive_hours": 22,
+        "keepalive_message": "🤖 会话即将过期，回复任意消息即可续期~",
+        "send_interval": 1.5,
+        "vision_model": "Qwen3.6-35B",
+        "download_timeout": 240,
+        "attachment_preview_chars": 2000,
+        "attachment_total_budget": 6000,
+        "preprocess_timeout": 120,
+        "agent_call_timeout": 1800,
+        "agent_connect_timeout": 30
+    },
+    "vision_fallback_id": "Qwen3.6-35B",
+    "search": {
+        "domestic": [
+            {
+                "name": "bing",
+                "url_template": "https://cn.bing.com/search?q={q}"
+            },
+            {
+                "name": "duckduckgo",
+                "url_template": "https://html.duckduckgo.com/html/?q={q}"
+            },
+            {
+                "name": "ecosia",
+                "url_template": "https://www.ecosia.org/search?q={q}"
+            },
+            {
+                "name": "yandex",
+                "url_template": "https://yandex.com/search/?text={q}"
+            },
+            {
+                "name": "sogou",
+                "url_template": "https://www.sogou.com/web?query={q}"
+            },
+            {
+                "name": "so360",
+                "url_template": "https://www.so.com/s?q={q}"
+            },
+            {
+                "name": "baidu",
+                "url_template": "https://www.baidu.com/s?wd={q}"
+            }
+        ],
+        "international": [
+            {
+                "name": "bing",
+                "url_template": "https://www.bing.com/search?q={q}"
+            },
+            {
+                "name": "duckduckgo",
+                "url_template": "https://html.duckduckgo.com/html/?q={q}"
+            },
+            {
+                "name": "ecosia",
+                "url_template": "https://www.ecosia.org/search?q={q}"
+            },
+            {
+                "name": "qwant",
+                "url_template": "https://www.qwant.com/?q={q}"
+            },
+            {
+                "name": "yandex",
+                "url_template": "https://yandex.com/search/?text={q}"
+            },
+            {
+                "name": "mojeek",
+                "url_template": "https://www.mojeek.com/search?q={q}"
+            },
+            {
+                "name": "google",
+                "url_template": "https://www.google.com/search?q={q}"
+            }
+        ],
+        "default_mode": "international"
+    },
+    "imagegen": {
+        "enabled": false,
+        "default_provider": "comfyui_remote",
+        "providers": {
+            "comfyui_remote": {
+                "type": "comfyui",
+                "endpoint": "http://198.51.100.13:8188",
+                "workflow_template": "sdxl_base_workflow.json",
+                "timeout_sec": 180,
+                "poll_interval_sec": 2,
+                "_note": "远端 ComfyUI 集群 (vllm-gpu 主机同址); workflow_template 走 /opt/litecode/skills/imagegen/workflows/ 相对路径"
+            },
+            "dalle3": {
+                "type": "openai_dalle",
+                "endpoint": "https://api.openai.com/v1/images/generations",
+                "api_key_env": "OPENAI_API_KEY",
+                "model": "dall-e-3",
+                "default_size": "1024x1024",
+                "default_quality": "standard",
+                "timeout_sec": 60
+            },
+            "sd_api": {
+                "type": "sd_webui",
+                "endpoint": "http://127.0.0.1:7860/sdapi/v1/txt2img",
+                "timeout_sec": 120,
+                "_note": "AUTOMATIC1111 SD WebUI 兼容 API"
+            }
+        },
+        "defaults": {
+            "size": "1024x1024",
+            "steps": 20,
+            "cfg_scale": 7.0,
+            "seed": -1,
+            "negative_prompt": "low quality, blurry, distorted, watermark"
+        },
+        "output": {
+            "save_dir": "/tmp/openclaw_workspace/imagegen",
+            "format": "png",
+            "artifact_owner_prefix": "plugin:imagegen"
+        }
+    },
+    "_model_backup_qwen": null,
+    "wecom": {
+        "enabled": true
+    }
+}

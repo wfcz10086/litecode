@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>LiteCode · Artifacts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#FBFBF9;--bg-2:#F5F4F0;--card:#FFF;--card-hover:#FAFAF7;
+  --border:#ECEBE5;--border-strong:#DFDDD4;
+  --text:#1A1A1A;--text-2:#5F5F5F;--text-3:#999;--text-4:#C6C4BD;
+  --primary:#1F1F1F;--accent:#4F7EF7;--success:#16A34A;--danger:#DC2626;
+  --radius:14px;--radius-lg:22px;
+  --shadow-sm:0 1px 3px rgba(0,0,0,.04);
+  --shadow:0 4px 24px rgba(0,0,0,.06);
+  --font:"Inter","Noto Sans SC","PingFang SC","Microsoft YaHei",-apple-system,sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--text);font-size:14px;line-height:1.55;-webkit-font-smoothing:antialiased;min-height:100vh}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:0;background:0;color:inherit}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:4px}
+
+.top{display:flex;align-items:center;padding:14px 24px;gap:12px;border-bottom:1px solid var(--border);background:var(--bg);height:56px}
+.top .brand{font-weight:700;font-size:15px}
+.top .sub{font-size:12px;color:var(--text-3);margin-left:8px}
+.top .actions{margin-left:auto;display:flex;gap:8px}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;background:var(--card);border:1px solid var(--border-strong);font-size:12px;color:var(--text-2);transition:.15s}
+.pill:hover{background:var(--card-hover);color:var(--text)}
+.pill.primary{background:var(--primary);color:#fff;border-color:var(--primary)}
+.pill.danger{color:var(--danger);border-color:#F3D0CE}
+.pill.danger:hover{background:#FDECEA}
+
+.shell{display:grid;grid-template-columns:260px 1fr;height:calc(100vh - 56px)}
+.side{background:var(--bg-2);border-right:1px solid var(--border);padding:14px 12px;overflow-y:auto}
+.side h4{font-size:11px;font-weight:600;color:var(--text-3);letter-spacing:.6px;text-transform:uppercase;padding:6px 10px 8px}
+.owner-item{display:flex;align-items:center;padding:8px 10px;border-radius:8px;cursor:pointer;font-size:13px;color:var(--text-2);gap:8px;transition:.12s;margin-bottom:2px}
+.owner-item:hover{background:var(--card)}
+.owner-item.active{background:var(--card);box-shadow:var(--shadow-sm);color:var(--text);font-weight:500}
+.owner-item .dot{width:6px;height:6px;border-radius:50%;background:var(--accent)}
+.owner-item .dot.timer{background:#EA8A16}
+.owner-item .dot.bg{background:var(--success)}
+.owner-item .dot.plugin{background:var(--accent)}
+.owner-item .cnt{margin-left:auto;font-size:11px;color:var(--text-3);background:var(--bg-2);border:1px solid var(--border);border-radius:10px;padding:1px 8px}
+
+.main{padding:24px 32px;overflow-y:auto}
+.hero{margin-bottom:24px}
+.hero .h1{font-size:32px;font-weight:800;letter-spacing:-.5px}
+.hero .subtitle{font-size:14px;color:var(--text-3);margin-top:4px}
+.stat-row{display:flex;gap:10px;margin-top:16px;flex-wrap:wrap}
+.stat{padding:6px 12px;border-radius:20px;background:var(--card);border:1px solid var(--border-strong);font-size:12px;color:var(--text-2)}
+.stat b{color:var(--text);margin-right:4px}
+
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px;margin-top:16px}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px 18px;transition:.15s;position:relative;box-shadow:var(--shadow-sm)}
+.card:hover{box-shadow:var(--shadow);transform:translateY(-1px)}
+.card .kind{display:inline-block;font-size:10px;font-weight:700;letter-spacing:.5px;color:var(--accent);background:#EEF3FE;padding:3px 8px;border-radius:6px;text-transform:uppercase}
+.card .name{margin-top:8px;font-weight:600;font-size:14px;color:var(--text);word-break:break-all}
+.card .meta{margin-top:8px;font-size:12px;color:var(--text-3);display:flex;justify-content:space-between}
+.card .owner{margin-top:4px;font-size:11px;color:var(--text-4);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;word-break:break-all}
+.card .row{margin-top:12px;display:flex;gap:6px;flex-wrap:wrap}
+.card .row .btn{font-size:11px;padding:4px 10px;border-radius:12px;border:1px solid var(--border);color:var(--text-2);background:var(--card);transition:.12s}
+.card .row .btn:hover{background:var(--bg-2);color:var(--text)}
+.card .row .btn.danger{border-color:#F3D0CE;color:var(--danger)}
+.card .row .btn.danger:hover{background:#FDECEA}
+.empty{padding:60px 20px;text-align:center;color:var(--text-3);font-size:14px}
+
+.toast{position:fixed;bottom:24px;right:24px;background:var(--primary);color:#fff;padding:10px 16px;border-radius:8px;box-shadow:var(--shadow);font-size:13px;opacity:0;transition:.2s;pointer-events:none}
+.toast.show{opacity:1}
+</style>
+</head>
+<body>
+
+<div class="top">
+  <div class="brand">Artifacts</div>
+  <div class="sub">timer · bg · plugin 通用产出物</div>
+  <div class="actions">
+    <a class="pill" href="/">← 回主页</a>
+    <button class="pill" id="refresh">刷新</button>
+  </div>
+</div>
+
+<div class="shell">
+  <aside class="side">
+    <h4>Owner</h4>
+    <div class="owner-item active" data-owner="__all__">
+      <span class="dot"></span>全部
+      <span class="cnt" id="cnt-all">0</span>
+    </div>
+    <h4 style="margin-top:12px">按类型</h4>
+    <div class="owner-item" data-owner="__pfx__timer:">
+      <span class="dot timer"></span>Timer
+      <span class="cnt" id="cnt-timer">0</span>
+    </div>
+    <div class="owner-item" data-owner="__pfx__bg:">
+      <span class="dot bg"></span>BG
+      <span class="cnt" id="cnt-bg">0</span>
+    </div>
+    <div class="owner-item" data-owner="__pfx__plugin:">
+      <span class="dot plugin"></span>Plugin
+      <span class="cnt" id="cnt-plugin">0</span>
+    </div>
+    <h4 style="margin-top:12px">按 owner</h4>
+    <div id="owner-list"></div>
+  </aside>
+
+  <main class="main">
+    <div class="hero">
+      <div class="h1">产出物</div>
+      <div class="subtitle" id="subtitle">Timer / BG / Plugin 的输出统一在这里，可下载 · 可预览 · 可清理</div>
+      <div class="stat-row" id="stats"></div>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" style="display:none">暂无产出物</div>
+  </main>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = "/api/artifacts_v2";
+const state = { items: [], owners: [], filter: "__all__" };
+
+function fmtBytes(n){
+  if(!n) return "0 B";
+  if(n < 1024) return n + " B";
+  if(n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+  return (n/1024/1024).toFixed(1) + " MB";
+}
+function toast(msg){
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(()=>t.classList.remove("show"), 1800);
+}
+function pill(text){
+  return `<span class="stat">${text}</span>`;
+}
+
+async function fetchAll(){
+  const r = await fetch(API);
+  if(!r.ok){ toast("加载失败 " + r.status); return; }
+  const d = await r.json();
+  state.items = d.items || [];
+  const r2 = await fetch(API + "/owners");
+  const d2 = r2.ok ? await r2.json() : {owners:[]};
+  state.owners = d2.owners || [];
+  render();
+}
+
+function render(){
+  const total = state.items.length;
+  document.getElementById("cnt-all").textContent = total;
+  const byPfx = pfx => state.items.filter(i => (i.owner||"").startsWith(pfx)).length;
+  document.getElementById("cnt-timer").textContent = byPfx("timer:");
+  document.getElementById("cnt-bg").textContent = byPfx("bg:");
+  document.getElementById("cnt-plugin").textContent = byPfx("plugin:");
+
+  const list = document.getElementById("owner-list");
+  list.innerHTML = state.owners.map(o=>`
+    <div class="owner-item" data-owner="${o}">
+      <span class="dot ${o.startsWith('timer:')?'timer':o.startsWith('bg:')?'bg':'plugin'}"></span>
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:150px" title="${o}">${o}</span>
+      <span class="cnt">${state.items.filter(i=>i.owner===o).length}</span>
+    </div>
+  `).join("");
+
+  document.querySelectorAll(".owner-item").forEach(el=>{
+    el.classList.toggle("active", el.dataset.owner === state.filter);
+    el.onclick = ()=>{ state.filter = el.dataset.owner; render(); };
+  });
+
+  let filtered = state.items;
+  if(state.filter !== "__all__"){
+    if(state.filter.startsWith("__pfx__")){
+      const p = state.filter.replace("__pfx__","");
+      filtered = state.items.filter(i => (i.owner||"").startsWith(p));
+    } else {
+      filtered = state.items.filter(i => i.owner === state.filter);
+    }
+  }
+
+  const totalSize = filtered.reduce((s,i)=>s+(i.size||0),0);
+  document.getElementById("stats").innerHTML =
+      pill(`<b>${filtered.length}</b> 个 artifact`)
+    + pill(`<b>${fmtBytes(totalSize)}</b> 累计`)
+    + pill(`<b>${new Set(filtered.map(i=>i.owner)).size}</b> 个 owner`);
+
+  document.getElementById("empty").style.display = filtered.length ? "none" : "block";
+  document.getElementById("grid").innerHTML = filtered.map(i=>`
+    <div class="card">
+      <span class="kind">${i.kind}</span>
+      <div class="name" title="${i.name}">${i.name}</div>
+      <div class="owner">${i.owner}</div>
+      <div class="meta">
+        <span>${fmtBytes(i.size)}</span>
+        <span>${i.ts_iso || ''}</span>
+      </div>
+      <div class="row">
+        <a class="btn" target="_blank" href="${API}/blob/${i.aid}">预览</a>
+        <a class="btn" href="${API}/blob/${i.aid}?download=1" download="${i.name}">下载</a>
+        <button class="btn danger" onclick="delOne('${i.aid}','${(i.name||'').replace(/'/g,"")}')">删除</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function delOne(aid, name){
+  if(!confirm(`删除 ${name} ?`)) return;
+  const r = await fetch(`${API}/${aid}`, {method:"DELETE"});
+  if(r.ok){ toast("已删除"); await fetchAll(); }
+  else toast("删除失败 " + r.status);
+}
+
+document.getElementById("refresh").onclick = fetchAll;
+fetchAll();
+</script>
+</body>
+</html>

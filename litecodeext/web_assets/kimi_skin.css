@@ -1,0 +1,165 @@
+/* kimi_skin.css — 暖白皮肤族 (data-theme="kimi" | "pptx")
+ * 参考 memory/reference_pptx_design_tokens: 暖白 #FBFBF9 + Inter/Noto + 圆角 14/22.
+ * - kimi: 橙色 chip (#FF6B00) — Kimi.com 感
+ * - pptx: 企业蓝 (#4F7EF7) + 黑主色 (#1A1A1A) — PPT Studio tokens 直译
+ * 大多数样式共享, 只在 accent/新建按钮/主按钮上区分色相.
+ */
+
+html[data-theme="kimi"]{
+  --bg:#FBFBF9; --bg2:#F5F3EE; --bg3:#EFEDE6;
+  --sf:#FFFFFF; --sf2:#F5F4F0; --card:#FFFFFF;
+  --bd:#E8E4DC; --bd2:#DDD8CE;
+  --tx:#1A1A1A; --tx1:#1A1A1A; --tx2:#5C5C5C; --tx3:#8A8A8A;
+  --ac:#FF6B00; --ac2:#FF6B00; --ac3:#22c55e;
+  --ok:#22c55e; --err:#dc2626; --warn:#eab308; --dg:#dc2626; --wn:#eab308;
+  --rr:22px; --rr2:14px; --rs:10px;
+  --hover-tint:rgba(255,107,0,.08);
+  --tool-bg:rgba(255,107,0,.06); --tool-bd:rgba(255,107,0,.28);
+  --tool-result-bg:rgba(34,197,94,.06);
+  --shadow-card:0 2px 12px rgba(0,0,0,.05);
+  --shadow-confirm:0 12px 40px rgba(0,0,0,.15);
+}
+
+html[data-theme="pptx"]{
+  --bg:#FBFBF9; --bg2:#F5F4F0; --bg3:#ECEBE5;
+  --sf:#FFFFFF; --sf2:#FAFAF7; --card:#FFFFFF;
+  --bd:#ECEBE5; --bd2:#DFDDD4;
+  --tx:#1A1A1A; --tx1:#1A1A1A; --tx2:#5F5F5F; --tx3:#999999;
+  --ac:#4F7EF7; --ac2:#3B6BE6; --ac3:#16A34A;
+  --ok:#16A34A; --err:#DC2626; --warn:#EA8A16; --dg:#DC2626; --wn:#EA8A16;
+  --primary:#1F1F1F; --primary-hover:#000000;
+  --rr:22px; --rr2:14px; --rs:8px;
+  --hover-tint:rgba(79,126,247,.08);
+  --tool-bg:rgba(79,126,247,.06); --tool-bd:rgba(79,126,247,.28);
+  --tool-result-bg:rgba(22,163,74,.06);
+  --shadow-card:0 1px 3px rgba(0,0,0,.04), 0 1px 2px rgba(0,0,0,.03);
+  --shadow-confirm:0 16px 48px rgba(0,0,0,.09);
+}
+
+html[data-theme="kimi"] body,
+html[data-theme="pptx"] body{
+  background:#FBFBF9;
+  font-family:'Inter','Noto Sans SC',system-ui,-apple-system,'PingFang SC','Segoe UI',Roboto,sans-serif;
+  color:#1A1A1A;
+}
+
+/* login */
+html[data-theme="kimi"] #ls, html[data-theme="pptx"] #ls{background:#FBFBF9}
+html[data-theme="kimi"] .lbox, html[data-theme="pptx"] .lbox{background:#FFF;border:1px solid var(--bd);box-shadow:0 8px 32px rgba(0,0,0,.06);border-radius:22px}
+html[data-theme="kimi"] .lt, html[data-theme="pptx"] .lt{color:#1A1A1A;font-weight:600}
+html[data-theme="kimi"] .ls2, html[data-theme="pptx"] .ls2{color:var(--tx2)}
+html[data-theme="kimi"] .ll, html[data-theme="pptx"] .ll{color:var(--ac)}
+html[data-theme="kimi"] .li_, html[data-theme="pptx"] .li_{background:#F5F3EE;border:1px solid var(--bd);border-radius:14px;color:#1A1A1A}
+html[data-theme="kimi"] .li_:focus, html[data-theme="pptx"] .li_:focus{border-color:var(--ac);background:#FFF}
+html[data-theme="kimi"] .lb_{background:var(--ac);color:#FFF;border-radius:14px;font-weight:500}
+html[data-theme="kimi"] .lb_:hover{background:#e55e00}
+html[data-theme="pptx"] .lb_{background:var(--primary);color:#FFF;border-radius:14px;font-weight:500}
+html[data-theme="pptx"] .lb_:hover{background:var(--primary-hover)}
+
+/* sidebar */
+html[data-theme="kimi"] #sb, html[data-theme="pptx"] #sb{background:var(--bg2);border-right:1px solid var(--bd)}
+html[data-theme="kimi"] #sbh{background:#EFEDE6;border-bottom:1px solid var(--bd)}
+html[data-theme="pptx"] #sbh{background:var(--bg2);border-bottom:1px solid var(--bd)}
+html[data-theme="kimi"] .logo, html[data-theme="pptx"] .logo,
+html[data-theme="kimi"] .logo .ld, html[data-theme="pptx"] .logo .ld{color:#1A1A1A}
+html[data-theme="kimi"] .lm, html[data-theme="pptx"] .lm{color:var(--ac)}
+html[data-theme="kimi"] #ncb{background:var(--ac);color:#FFF;border-radius:10px;font-weight:500;border:0}
+html[data-theme="kimi"] #ncb:hover{background:#e55e00}
+html[data-theme="pptx"] #ncb{background:var(--primary);color:#FFF;border-radius:10px;font-weight:500;border:0}
+html[data-theme="pptx"] #ncb:hover{background:var(--primary-hover)}
+html[data-theme="kimi"] #sess-search, html[data-theme="pptx"] #sess-search,
+html[data-theme="kimi"] #sess-sort, html[data-theme="pptx"] #sess-sort{background:#FFF;border:1px solid var(--bd);color:#1A1A1A;border-radius:10px}
+html[data-theme="kimi"] .sbt, html[data-theme="pptx"] .sbt{color:#1A1A1A;background:transparent;border-radius:10px;transition:background .12s,color .12s}
+html[data-theme="kimi"] .sbt:hover{background:rgba(255,107,0,.08);color:var(--ac)}
+html[data-theme="pptx"] .sbt:hover{background:rgba(79,126,247,.08);color:var(--ac)}
+html[data-theme="kimi"] .sbf, html[data-theme="pptx"] .sbf{background:var(--bg3)}
+html[data-theme="kimi"] .sbf-status, html[data-theme="pptx"] .sbf-status{background:#FFF;border:1px solid var(--bd);border-radius:12px}
+html[data-theme="kimi"] .sbf-model-id, html[data-theme="pptx"] .sbf-model-id{color:#1A1A1A}
+html[data-theme="kimi"] .sbf-srv-label, html[data-theme="pptx"] .sbf-srv-label,
+html[data-theme="kimi"] .sbf-srv-status, html[data-theme="pptx"] .sbf-srv-status{color:var(--tx2)}
+html[data-theme="kimi"] .sl_.act, html[data-theme="pptx"] .sl_.act,
+html[data-theme="kimi"] .sl_:hover, html[data-theme="pptx"] .sl_:hover{background:#FFF;border-color:var(--bd2)}
+html[data-theme="kimi"] .sl_ .st, html[data-theme="pptx"] .sl_ .st{color:#1A1A1A}
+html[data-theme="kimi"] .sl_ .sd, html[data-theme="pptx"] .sl_ .sd{color:var(--tx2)}
+
+/* header */
+html[data-theme="kimi"] #hdr, html[data-theme="pptx"] #hdr{background:#FBFBF9;border-bottom:1px solid var(--bd);color:#1A1A1A}
+html[data-theme="kimi"] #ct, html[data-theme="pptx"] #ct{color:#1A1A1A;font-weight:500}
+html[data-theme="kimi"] .hp, html[data-theme="pptx"] .hp{background:#F5F3EE;color:#1A1A1A;border-radius:10px;border:1px solid var(--bd)}
+html[data-theme="kimi"] #ib, html[data-theme="pptx"] #ib,
+html[data-theme="kimi"] .abtn, html[data-theme="pptx"] .abtn{background:#FFF;color:#1A1A1A;border:1px solid var(--bd);border-radius:10px}
+html[data-theme="kimi"] .abtn:hover, html[data-theme="kimi"] #ib:hover,
+html[data-theme="pptx"] .abtn:hover, html[data-theme="pptx"] #ib:hover{border-color:var(--ac);color:var(--ac);background:#FFF}
+html[data-theme="kimi"] #mbu, html[data-theme="pptx"] #mbu{color:#1A1A1A;background:transparent}
+html[data-theme="kimi"] #mbu:hover, html[data-theme="pptx"] #mbu:hover{color:var(--ac)}
+
+/* messages */
+html[data-theme="kimi"] #main, html[data-theme="pptx"] #main,
+html[data-theme="kimi"] #mw, html[data-theme="pptx"] #mw{background:#FBFBF9}
+html[data-theme="kimi"] .msg.u{background:#FFF3E5;border:1px solid #FFD9B3;color:#1A1A1A;border-radius:22px 22px 6px 22px}
+html[data-theme="pptx"] .msg.u{background:#EEF3FE;border:1px solid #C9D8FB;color:#1A1A1A;border-radius:22px 22px 6px 22px}
+html[data-theme="kimi"] .msg.a, html[data-theme="pptx"] .msg.a{background:transparent;border:0;color:#1A1A1A}
+html[data-theme="kimi"] .msg.a pre, html[data-theme="pptx"] .msg.a pre,
+html[data-theme="kimi"] .msg.a code, html[data-theme="pptx"] .msg.a code{background:#F5F3EE;border-radius:10px;color:#1A1A1A}
+html[data-theme="kimi"] .msg.s, html[data-theme="pptx"] .msg.s{background:#FFF7ED;border:1px solid #FED7AA;color:#7C2D12;border-radius:14px}
+html[data-theme="kimi"] .empty .etitle, html[data-theme="pptx"] .empty .etitle{color:#1A1A1A;font-weight:600}
+html[data-theme="kimi"] .empty .ehint, html[data-theme="pptx"] .empty .ehint{color:var(--tx2)}
+html[data-theme="kimi"] .elogo, html[data-theme="pptx"] .elogo{color:var(--ac)}
+html[data-theme="kimi"] .sg, html[data-theme="pptx"] .sg{background:#FFF;border:1px solid var(--bd);color:#1A1A1A;border-radius:20px;padding:8px 16px;font-weight:500;transition:all .12s}
+html[data-theme="kimi"] .sg:hover{border-color:var(--ac);color:var(--ac);background:#FFF7ED}
+html[data-theme="pptx"] .sg:hover{border-color:var(--ac);color:var(--ac);background:#EEF3FE}
+
+/* [#16 3段折叠] tool group + reasoning brackets — 暖白皮下低对比蓝色 */
+html[data-theme="kimi"] .tgb, html[data-theme="pptx"] .tgb{border:1px solid var(--tool-bd);background:var(--tool-bg)}
+html[data-theme="kimi"] .tgh, html[data-theme="pptx"] .tgh{color:var(--tx2)}
+html[data-theme="kimi"] .tgh:hover, html[data-theme="pptx"] .tgh:hover{background:rgba(0,0,0,.03)}
+html[data-theme="kimi"] .tgh .tgi, html[data-theme="pptx"] .tgh .tgi{color:var(--tx3)}
+html[data-theme="kimi"] .tg, html[data-theme="pptx"] .tg{background:var(--tool-bg);border:1px dashed var(--tool-bd)}
+html[data-theme="kimi"] .rsb, html[data-theme="pptx"] .rsb{border:1px solid var(--bd);background:var(--bg2)}
+html[data-theme="kimi"] .rsh, html[data-theme="pptx"] .rsh{color:var(--tx2)}
+html[data-theme="kimi"] .rsc, html[data-theme="pptx"] .rsc{color:var(--tx2)}
+
+/* composer — 大圆角气泡 */
+html[data-theme="kimi"] #ia, html[data-theme="pptx"] #ia{background:#FBFBF9;border-top:1px solid var(--bd);padding:14px 20px 20px}
+html[data-theme="kimi"] #iw, html[data-theme="pptx"] #iw{background:#FFF;border:1px solid var(--bd);border-radius:22px;box-shadow:0 2px 12px rgba(0,0,0,.03);transition:all .15s;padding:10px 14px}
+html[data-theme="kimi"] #iw:focus-within{border-color:var(--ac);box-shadow:0 4px 16px rgba(255,107,0,.12)}
+html[data-theme="pptx"] #iw:focus-within{border-color:var(--ac);box-shadow:0 4px 16px rgba(79,126,247,.15)}
+html[data-theme="kimi"] #mi, html[data-theme="pptx"] #mi{background:transparent;color:#1A1A1A;font-size:14px;line-height:1.55}
+html[data-theme="kimi"] #mi::placeholder, html[data-theme="pptx"] #mi::placeholder{color:var(--tx3)}
+html[data-theme="kimi"] #upb, html[data-theme="pptx"] #upb{background:#F5F3EE;color:var(--tx2);border-radius:14px;border:0}
+html[data-theme="kimi"] #upb:hover{background:#FFF3E5;color:var(--ac)}
+html[data-theme="pptx"] #upb:hover{background:#EEF3FE;color:var(--ac)}
+html[data-theme="kimi"] #sdb{background-color:#FF6B00;color:#FFF;border-radius:14px;font-weight:600;border:0}
+html[data-theme="kimi"] #sdb:hover{background-color:#e55e00}
+html[data-theme="pptx"] #sdb{background-color:#1F1F1F;color:#FFF;border-radius:14px;font-weight:600;border:0}
+html[data-theme="pptx"] #sdb:hover{background-color:#000000}
+html[data-theme="kimi"] #sdb:disabled, html[data-theme="pptx"] #sdb:disabled{background:#E8E4DC;color:var(--tx3);cursor:not-allowed}
+
+/* panels */
+html[data-theme="kimi"] .pnl, html[data-theme="pptx"] .pnl{background:rgba(26,26,26,.35)}
+html[data-theme="kimi"] .pb_, html[data-theme="pptx"] .pb_{background:#FFF;border:1px solid var(--bd);box-shadow:0 8px 32px rgba(0,0,0,.08);border-radius:22px}
+html[data-theme="kimi"] .ph_, html[data-theme="pptx"] .ph_{border-bottom:1px solid var(--bd);color:#1A1A1A}
+html[data-theme="kimi"] .pt_, html[data-theme="pptx"] .pt_{color:#1A1A1A;font-weight:600}
+html[data-theme="kimi"] .px_, html[data-theme="pptx"] .px_{color:var(--tx2)}
+html[data-theme="kimi"] .px_:hover, html[data-theme="pptx"] .px_:hover{color:var(--ac)}
+html[data-theme="kimi"] .pbd_, html[data-theme="pptx"] .pbd_{color:#1A1A1A}
+
+/* Drawflow canvas (v2 dag_editor_simple.js 用 drawflow lib) */
+html[data-theme="kimi"] .drawflow, html[data-theme="pptx"] .drawflow{background:#FBFBF9}
+html[data-theme="kimi"] .drawflow-node, html[data-theme="pptx"] .drawflow-node{background:#FFF !important;border:1px solid var(--bd) !important;color:#1A1A1A !important;box-shadow:var(--shadow-card) !important;border-radius:12px !important}
+html[data-theme="kimi"] .drawflow-node .box, html[data-theme="pptx"] .drawflow-node .box{color:#1A1A1A !important}
+html[data-theme="kimi"] .drawflow-node.selected, html[data-theme="pptx"] .drawflow-node.selected{border-color:var(--ac) !important;box-shadow:0 0 0 2px rgba(79,126,247,.2) !important}
+html[data-theme="kimi"] .drawflow .connection .main-path, html[data-theme="pptx"] .drawflow .connection .main-path{stroke:var(--bd2) !important;stroke-width:2px}
+html[data-theme="kimi"] #dag-editor-panel, html[data-theme="pptx"] #dag-editor-panel{background:var(--bg2);border-left:1px solid var(--bd);color:#1A1A1A}
+html[data-theme="kimi"] #dag-editor-panel input, html[data-theme="pptx"] #dag-editor-panel input,
+html[data-theme="kimi"] #dag-editor-panel select, html[data-theme="pptx"] #dag-editor-panel select,
+html[data-theme="kimi"] #dag-editor-panel textarea, html[data-theme="pptx"] #dag-editor-panel textarea{background:#FFF;border:1px solid var(--bd);color:#1A1A1A;border-radius:8px}
+html[data-theme="kimi"] .df-btn, html[data-theme="pptx"] .df-btn{background:#FFF;color:#1A1A1A;border:1px solid var(--bd);border-radius:10px}
+html[data-theme="kimi"] .df-btn:hover, html[data-theme="pptx"] .df-btn:hover{border-color:var(--ac)}
+html[data-theme="kimi"] .df-btn.prim{background:var(--ac);color:#FFF;border-color:var(--ac)}
+html[data-theme="kimi"] .df-btn.prim:hover{background:#e55e00}
+html[data-theme="pptx"] .df-btn.prim{background:var(--primary);color:#FFF;border-color:var(--primary)}
+html[data-theme="pptx"] .df-btn.prim:hover{background:var(--primary-hover)}
+
+/* toast */
+html[data-theme="kimi"] #toast, html[data-theme="pptx"] #toast{background:#FFF;color:#1A1A1A;border:1px solid var(--bd);box-shadow:0 4px 12px rgba(0,0,0,.1)}

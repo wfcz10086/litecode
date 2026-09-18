@@ -1,0 +1,25 @@
+#!/bin/bash
+# litecli — 宿主机 wrapper, 转发到容器内 /opt/litecode/litecli.py
+# 安装: sudo ln -sf $(pwd)/litecli /usr/local/bin/litecli
+# 也可: alias litecli='docker exec -i litecode python3 /opt/litecode/litecli.py'
+
+set -e
+CONTAINER="${LITECODE_CONTAINER:-litecode}"
+
+if ! command -v docker >/dev/null 2>&1; then
+    echo "litecli: docker not found" >&2; exit 1
+fi
+
+# 自动选择是否用 sudo (ubuntu user 没在 docker group 或者 docker socket 无读权限时)
+DOCKER="docker"
+if ! docker ps >/dev/null 2>&1; then
+    DOCKER="sudo docker"
+fi
+
+if ! $DOCKER ps --format '{{.Names}}' 2>/dev/null | grep -qx "$CONTAINER"; then
+    echo "litecli: container '$CONTAINER' not running (set LITECODE_CONTAINER to override)" >&2
+    exit 2
+fi
+
+# 透传 stdin/stdout/stderr — login 输密码 / chat 流式 / sessions show 长输出 都需要
+exec $DOCKER exec -i "$CONTAINER" python3 /opt/litecode/litecli.py "$@"
