@@ -5,22 +5,21 @@
         "token": "CHANGE_ME"
     },
     "model": {
-        "id": "qwen3.8-flash-next-local",
+        "id": "Qwen3.6-35B",
         "provider": "qwen",
         "deployment": "vllm",
-        "served_model_name": "Qwen3.8-Flash-Next",
         "backend_type": "openai",
-        "backend_url": "http://your-model-host.example:8000/v1",
+        "backend_url": "http://your-vlm-host.example:8000/v1",
         "api_key": "CHANGE_ME",
         "api_format": "openai-chat",
-        "context_window": 96000,
+        "context_window": 80000,
         "max_tokens": 8192,
-        "enable_thinking": true,
+        "enable_thinking": false,
         "thinking_budget": 4096,
         "supports_vision": true,
-        "_note": "自建 4×RTX4090, vLLM 0.1.dev20073+g8e685d198. 【官方规格】125B/6B激活 MoE + 视觉编码器; 原生 262144 上下文 (本部署起服务时设的 204800), YaRN 可扩到 1M 但静态缩放会伤短文本性能, 非必要别开。【思考】默认开, 走 <think>...</think>; chat_template_kwargs 支持 enable_thinking / preserve_thinking (都默认 true), 另有顶层 reasoning_effort (xhigh 默认 / medium / low)。【官方采样参数】思考模式 temperature=1.0 top_p=0.95 top_k=20 min_p=0 presence_penalty=0; 非思考模式 temperature=0.7 top_p=0.80 top_k=20 presence_penalty=1.5。【2026-08-28 实测】模板起手正常 <think>\\n; 已挂 reasoning-parser, 思考走 message.reasoning / delta.reasoning (非 reasoning_content), usage 带 reasoning_tokens; 裸调正常闭合 </think>; 思考与工具调用并存; 流式 TTFT 1.08s 吞吐 90.9 字符/s。【官方 agent 提示】多轮 agent 任务里降低 reasoning_effort 不一定更快 —— 分析不足会导致失败重试, 总延迟和 token 消耗反而上升。"
+        "_note": "RTX 4500 Ada ×4 (96G), vLLM v0.21 TP=4, KV fp8+Prefix Cache, 最大并发49, Qwen3 Reasoning+Tool Calling+视觉"
     },
-    "default_model_id": "qwen3.8-flash-next-local",
+    "default_model_id": "Qwen3.6-35B",
     "models": [
         {
             "id": "deepseek-v4-pro",
