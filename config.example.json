@@ -72,7 +72,7 @@
         },
         {
             "id": "vllm-qwen3-30b-remote",
-            "label": "[#0] vLLM Qwen3-30B-A3B (远程 198.51.100.13:8000, 8x RTX 4500 Ada, ctx 30000)",
+            "label": "[#0] vLLM Qwen3-30B-A3B (远程 your-gpu-host.example:8000, 8x RTX 4500 Ada, ctx 30000)",
             "provider": "qwen",
             "deployment": "vllm",
             "backend_type": "openai",
@@ -84,7 +84,7 @@
             "enable_thinking": true,
             "thinking_budget": 4096,
             "supports_vision": false,
-            "_note": "远程 vLLM (Qwen3-30B-A3B, max_model_len=30000, 2026-07-25 由 LiteCode dogfood 从 32768 改为 30000). 需先起 SSH 隧道: ssh -L 8000:localhost:8000 -N -p55102 root@198.51.100.13"
+            "_note": "远程 vLLM (Qwen3-30B-A3B, max_model_len=30000, 2026-07-25 由 LiteCode dogfood 从 32768 改为 30000). 需先起 SSH 隧道: ssh -L 8000:localhost:8000 -N -p55102 root@your-gpu-host.example"
         },
         {
             "id": "Qwen3.6-35B",
@@ -92,7 +92,7 @@
             "provider": "qwen",
             "deployment": "vllm",
             "backend_type": "openai",
-            "backend_url": "http://198.51.100.12:8000/v1",
+            "backend_url": "http://your-vlm-host.example:8000/v1",
             "api_key": "CHANGE_ME",
             "api_format": "openai-chat",
             "context_window": 80000,
@@ -322,7 +322,7 @@
         "providers": {
             "comfyui_remote": {
                 "type": "comfyui",
-                "endpoint": "http://198.51.100.13:8188",
+                "endpoint": "http://your-gpu-host.example:8188",
                 "workflow_template": "sdxl_base_workflow.json",
                 "timeout_sec": 180,
                 "poll_interval_sec": 2,

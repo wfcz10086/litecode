@@ -22,20 +22,20 @@ lsof netstat nmap 带宽 bandwidth io 负载 temperature 温度 fan 风扇 ipmi
 **不能**直接 `execute_shell` 跑 curl/apt/chmod (那会跑在本机或容器里, 不在目标机).
 
 判定信号:
-- IP / 域名 + 端口号 (`198.51.100.13 端口：54501`)
+- IP / 域名 + 端口号 (`your-gpu-host.example 端口：54501`)
 - "登录 user" / "ssh user@host" / "去 X 上" / "在 hostname 上"
 - 用户名 + 密码 / 私钥路径
 - "帮我到 X 的 /tmp" / "在那台机器" / "目标机"
 
 ### ❌ 错误模式 (典型 bug, 不要再犯)
-用户说: "198.51.100.13 端口:54501 登录 root XXX 帮我到 /tmp curl ..."
+用户说: "your-gpu-host.example 端口:54501 登录 root XXX 帮我到 /tmp curl ..."
 错误执行: `execute_shell({"command": "cd /tmp && curl ..."})` ← 跑在容器里, 用户没看到任何远端变化
 
 ### ✅ 正确模式: SSH 包装
 ```bash
 # 密码登录: sshpass + 多步骤 heredoc
 sshpass -p 'PASSWORD' ssh -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10 \
-  -p 54501 root@198.51.100.13 'bash -s' << 'REMOTE_EOF'
+  -p 54501 root@your-gpu-host.example 'bash -s' << 'REMOTE_EOF'
   set -e
   hostname; whoami; pwd    # ← 必须先打印, 作为"我在远端"的证据
   cd /tmp
@@ -59,7 +59,7 @@ sshpass -p 'X' ssh -p P user@host \
 ### 容器宿主网络限制
 如果本机是 docker 容器, SSH 出去前先确认网络可达:
 ```bash
-ping -c 1 -W 2 198.51.100.13 || echo "container 网络受限, 报错给用户而不是改在本机跑"
+ping -c 1 -W 2 your-gpu-host.example || echo "container 网络受限, 报错给用户而不是改在本机跑"
 ```
 
 ### 远端不可逆操作的红线

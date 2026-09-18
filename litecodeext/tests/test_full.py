@@ -1253,7 +1253,7 @@ def _offline_v10_core() -> list:
         # 真实值不是占位符
         assert _is_placeholder('sk-EXAMPLE0000000000000000') is False
         assert _is_placeholder('woyaofacai@your-model-host.example2026') is False
-        assert _is_placeholder('http://198.51.100.14:20000/v1') is False
+        assert _is_placeholder('http://your-llm-host.example:20000/v1') is False
     _test("[v1.0] entrypoint: 占位符识别逻辑", test_entrypoint_placeholder_protection)
 
     # ── 20. subagent 每轮进度日志 (v1.0) ──

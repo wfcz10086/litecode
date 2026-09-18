@@ -13,7 +13,7 @@ remote 远程 ssh sshpass 目标机 target-host paramiko
 docker container 容器 recreate restart 重建 重启 inspect logs
 vllm qwen inference 推理 max-model-len context-length 上下文
 tensor-parallel gpu 显存 nvidia-smi rtx cuda oom
-198.51.100.13 远程主机 服务器 host
+your-gpu-host.example 远程主机 服务器 host
 
 ---
 
