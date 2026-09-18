@@ -4,7 +4,7 @@
 
 [中文](README.md) · **English**
 
-**Run an all-in-one AI assistant on your own machine.** Chat in the browser, use it from the terminal, or ping it on WeChat. It talks to *your* model, keeps everything on *your* disk, and never sends a byte to any cloud you don't own.
+**One machine of your own, one AI that does everything.** In the browser it's your strategist; in the terminal it's your engineer; on WeChat it's the assistant that always picks up — same brain everywhere, every chat continues anywhere. Your model, your disk, and cloud vendors don't make a cent off you.
 
 ![MIT](https://img.shields.io/badge/license-MIT-green) ![Docker](https://img.shields.io/badge/docker-one--container-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI--compatible-orange) ![Private](https://img.shields.io/badge/self--hosted-100%25-red) ![Bots](https://img.shields.io/badge/WeChat%2FWeCom-built--in-brightgreen)
 
@@ -79,29 +79,43 @@ Working on day one:
 - 🖼️ Paste a screenshot, it reads it. Ask for slides, it renders them. Need an image — DALL·E / SD / ComfyUI are already wired.
 - ⌨️ One line in the terminal: it writes files, runs commands, shows you the diff, and tells you what it cost in tokens.
 
+And a side no other agent has:
+
+- 💞 **Companion mode** — 2 a.m., you type *"can't sleep, feeling low"*. It won't prescribe a sleep schedule; it says *"I'm here. Say whatever you want."* Preaching is literally banned in this mode. Emotional signals trigger it automatically.
+- 🎭 **Strategist mode** — ask *"can I trust this bullish news?"* and instead of repeating the headline, it dissects the game: who planted this, who profits, who's the counterparty, what are the variables — both sides argued, then a verdict. One toggle. Rule #1: **ask who benefits before asking if it's true.**
+- ✍️ **Serious novel-writing** — 21 genres, each with its own skill, long-form outline engineering for consistency, and a final "de-AI-flavor" audit pass so the prose doesn't read like a bot.
+
 ---
 
 ## 4. Screenshots
 
+**DAG pipeline editor** — draggable palette on the left (9 agent types + ready-made tools + decision branches + sub-pipelines), wire nodes up, hit Build:
+
+![DAG editor](docs/screenshots/03_dag_editor.jpg)
+
+**CLI** — one prompt in: files written, diff shown, commands run, tokens reported:
+
+![CLI](docs/screenshots/02_cli.jpg)
+
+**WeChat** — scan a QR to connect; a vision-fallback model auto-covers when your main model can't see images:
+
+![WeChat](docs/screenshots/04_wechat.jpg)
+
 <table>
 <tr>
-<td align="center" width="33%"><b>🏗️ DAG editor — AI pipelines, Jenkins-style</b><br><img src="docs/screenshots/03_dag_editor.jpg" width="100%"></td>
-<td align="center" width="33%"><b>⌨️ CLI — one prompt, code written & run</b><br><img src="docs/screenshots/02_cli.jpg" width="100%"></td>
-<td align="center" width="33%"><b>📱 WeChat — scan a QR and go</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
+<td align="center" width="50%"><b>🤖 WeCom bot — true streaming replies</b><br><img src="docs/screenshots/05_wecom.jpg" width="100%"></td>
+<td align="center" width="50%"><b>🧠 Memory — it remembers your chats</b><br><img src="docs/screenshots/06_memory.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>🤖 WeCom bot — true streaming replies</b><br><img src="docs/screenshots/05_wecom.jpg" width="100%"></td>
-<td align="center"><b>🧠 Memory — it remembers your chats</b><br><img src="docs/screenshots/06_memory.jpg" width="100%"></td>
 <td align="center"><b>🔌 Models — hot-switch anytime</b><br><img src="docs/screenshots/07_models.jpg" width="100%"></td>
+<td align="center"><b>⏰ Scheduled tasks + run history</b><br><img src="docs/screenshots/08_timer.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>⏰ Scheduled tasks</b><br><img src="docs/screenshots/08_timer.jpg" width="100%"></td>
-<td align="center"><b>📦 Artifacts store</b><br><img src="docs/screenshots/09_artifacts.jpg" width="100%"></td>
 <td align="center"><b>📊 Usage & cost at a glance</b><br><img src="docs/screenshots/10_stats.jpg" width="100%"></td>
+<td align="center"><b>🐳 Manage Docker from chat</b><br><img src="docs/screenshots/11_docker.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>🐳 Manage Docker from chat</b><br><img src="docs/screenshots/11_docker.jpg" width="100%"></td>
-<td align="center"><b>🗂️ Projects</b><br><img src="docs/screenshots/12_projects.jpg" width="100%"></td>
+<td align="center"><b>📦 Artifacts store</b><br><img src="docs/screenshots/09_artifacts.jpg" width="100%"></td>
 <td align="center"><b>⌨️ Full CLI command set</b><br><img src="docs/screenshots/14_cli_cmds.jpg" width="100%"></td>
 </tr>
 </table>
@@ -148,9 +162,9 @@ Free APIs → a local SearXNG aggregator → 14 engines in parallel → a real b
 - 🖥️ **Talk-to-control desktop** — it opens a browser on a remote desktop, clicks around, and screenshots back to you.
 - 📄 **Office suite** — Word / Excel / PPT / PDF in and out; drop a file into WeChat, get a file back.
 
-### 🔗 Free upgrade for the AI tools you already use
+### 🔗 Buff every AI tool you already own
 
-The gateway speaks standard OpenAI. Point any client with a custom base_url (translation plugins, ChatBox, Dify, LangChain…) at `http://your-box:18789/v1` and its model suddenly has tools, search, memory and 92 skills. Pass a fixed `user` field to keep memory across requests.
+The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 92 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
 
 ---
 
