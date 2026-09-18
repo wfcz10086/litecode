@@ -82,7 +82,7 @@ class DeepSearchTool:
         self.workspace = workspace
         # [deep-search LLM 后端] 优先用传入/配置的 backend_url; 下面是内置默认(自建 vLLM,
         # 可继续用)。发布脱敏时该 IP 会被替换为占位符 —— 改这里或传参即可换成你自己的端点。
-        self.backend_url = (backend_url or "http://198.51.100.14:8001/v1").rstrip("/")
+        self.backend_url = (backend_url or "http://your-llm-host.example:8001/v1").rstrip("/")
         self.api_key = api_key
         self.model_id = model_id
         self.search_sources = search_sources or _DEFAULT_SEARCH_SOURCES
