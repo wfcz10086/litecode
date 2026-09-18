@@ -2,221 +2,199 @@
 
 # ⚔️ LiteCode
 
-### One box. Three fronts. Zero cloud.
+**中文** · [English](README.en.md)
 
-**English** · [中文](README.zh.md)
+**在你自己的电脑上跑一个全能 AI 助手。** 网页上能聊,终端里能用,微信里也能找它干活。模型接你自己的,数据全在你自己盘上,不用交钱给任何云。
 
-**The sharpest self-hosted AI arsenal.** One `./start.sh` turns a machine you own into a full-time AI engineering team — a Web command center, a terminal that fights beside you, and WeChat / WeCom bots that never leave your pocket. Your models. Your disk. Your rules.
-
-![MIT](https://img.shields.io/badge/license-MIT-green) ![Docker](https://img.shields.io/badge/docker-one--container-blue) ![OpenAI-compatible](https://img.shields.io/badge/API-OpenAI--compatible-orange) ![Self-hosted](https://img.shields.io/badge/self--hosted-100%25%20private-red) ![Bots](https://img.shields.io/badge/WeChat%20%2F%20WeCom-built--in-brightgreen)
+![MIT](https://img.shields.io/badge/license-MIT-green) ![Docker](https://img.shields.io/badge/docker-%E5%8D%95%E5%AE%B9%E5%99%A8-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI%E5%85%BC%E5%AE%B9-orange) ![Private](https://img.shields.io/badge/%E7%A7%81%E6%9C%89%E5%8C%96-100%25-red) ![Bots](https://img.shields.io/badge/%E5%BE%AE%E4%BF%A1%2F%E4%BC%81%E5%BE%AE-%E5%86%85%E7%BD%AE-brightgreen)
 
 ![LiteCode Web UI](docs/screenshots/01_overview.jpg)
 
-⭐ **If LiteCode ships one task for you today, pay it back with a star — 3 seconds for you, rocket fuel for us.**
+⭐ 觉得好用的话,顺手点个 star,就是对我们最大的支持。
 
 </div>
 
 ---
 
-## The numbers first
+## 一、怎么跑起来(照抄就行)
 
-| 72 | 92 | 9 | 14 | 5 | 4 | 3 | 1 |
-|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| native tools | skills | agent types | search engines | model backends | memory tiers | fronts (Web/CLI/bots) | container |
+你需要:一台 Linux 机器(家里服务器、云主机、旧电脑都行)+ 装好 Docker。
 
-No cluster. No SaaS bill. No data leaving home.
+**第 1 步:把代码下下来**
+
+```bash
+git clone https://github.com/wfcz10086/litecode && cd litecode
+```
+
+**第 2 步:告诉它你的模型在哪**
+
+```bash
+cp config.example.json config.json
+```
+
+然后打开 `config.json`,找到 `model` 那一段,填两个东西:
+
+- `backend_url`:你的模型地址。自己搭的 vLLM、Ollama,或者买的中转 API 都行,只要是 OpenAI 格式的接口(就是地址长得像 `http://xxx:8000/v1` 那种)。
+- `api_key`:模型的 key。自己搭的没设 key 就填 `EMPTY`。
+
+没有模型?随便找个卖 OpenAI 兼容 API 的中转站,把地址和 key 填进来就能用。
+
+**第 3 步:启动**
+
+```bash
+./start.sh
+```
+
+第一次会自动构建镜像,慢一点,等它跑完。之后再启动就是几秒钟的事。
+
+**第 4 步:打开浏览器**
+
+访问 `http://你机器的IP:18790`,看到登录页就成功了。
 
 ---
 
-## What it does for you — on day one
+## 二、怎么登录
 
-- 📄 **Drop a PDF into your WeChat** → get the summary back in chat, on your phone, from your own model.
-- 🗣️ **Say** *"scan this repo and write an architecture report"* → LiteCode **builds a 3-step pipeline by itself** (scan → analyze → write) and runs it like Jenkins runs a build.
-- ⏰ **Every morning at 9:00** a cron DAG pulls the data you care about and pushes a briefing to WeCom — while you're still on coffee.
-- 🖼️ **Paste a screenshot** → the vision model reads it. **Ask for slides** → the pptx plugin renders them. **Need an image?** `image_gen` has DALL·E / SD / ComfyUI wired in.
-- ⌨️ **One prompt in the terminal** → files written, diffs rendered, shell executed, tokens accounted. The CLI is a weapon, not an afterthought.
+一共就三个地方要认证,都很简单:
 
----
+| 在哪 | 怎么进 | 密码在哪改 |
+|---|---|---|
+| **网页**(:18790) | 输一个密码 | `config.json` 里的 `web_ui.auth.password`,把 `CHANGE_ME_PASSWORD` 改成你自己的 |
+| **API**(:18789) | 请求头带 `Authorization: Bearer 你的token` | `config.json` 里的 `server.token`,把 `CHANGE_ME_TOKEN` 改成你自己的 |
+| **命令行** | 先 `litecli login` 输一次密码,之后就不用管了 | 跟网页共用一个密码 |
 
-## 92 skills — it doesn't just work, it has personality
+没有注册、没有多账号那套复杂东西。这是你一个人的机器,一个密码、一个 token,完事。
 
-- 💞 **Companion mode** — when you say *"I'm exhausted"*, it doesn't lecture you about sleep. It listens, empathizes, and *sees* you — short, warm, zero preaching. Auto-triggers on emotional signals. Rare in AI tools, and people love it.
-- 🎭 **Strategist mode** — one click flips on game-theory glasses: *who benefits, before what's true*. It dissects interests / players / variables / both sides — for markets, hype-checking, or any narrative someone's pushing.
-- ✍️ **21-genre novel pipeline** — xianxia, wuxia, sci-fi, romance, palace-intrigue, system-flow, horror… each genre its own skill, plus long-form engineering and an **anti-AI-tell audit** that polishes prose until it stops sounding like a bot.
-- 📊 **Deep reports** — 5,000–20,000 words, searching *while* writing, with citation-density checks.
-- 💰 **Crypto tracking** with scheduled briefings to your WeChat / WeCom · data scraping & analysis · log forensics.
-- 🛠️ **Engineer's kit** — Chinese code review, bug localization, API scaffolding, systematic debugging, TDD, Linux & remote-SSH ops.
-- 📄 **Office suite** — docx / xlsx / pptx generation, PDF + OCR pipeline, HTML-to-report. Drop a file into WeChat, get a file back.
-
-> Skills are **files-as-plugins**: write one `SKILL.md` (there's a `skill-creator` to help) and your AI learns a new trade.
+> 提醒:启动前记得把上面两个 `CHANGE_ME` 改掉,别用默认值裸奔公网。
 
 ---
 
-## Screenshots
+## 三、它能帮你干什么
+
+装好第一天就能用的:
+
+- 📄 微信里丢个 PDF 给它,手机上直接收到总结。
+- 🗣️ 跟它说"扫描这个项目,写份架构报告",它自己拆成三步(扫描 → 分析 → 写),像流水线一样跑完给你。
+- ⏰ 设个定时任务,每天早上 9 点自动查数据、发一份简报到你的企业微信。
+- 🖼️ 贴张截图它能看懂;要 PPT 它现场做;要配图,画图接口(DALL·E / SD / ComfyUI)都接好了。
+- ⌨️ 终端里一句话,它写文件、跑命令、给你看改了哪几行,最后连花了多少 token 都告诉你。
+
+---
+
+## 四、截图
 
 <table>
 <tr>
-<td align="center" width="33%"><b>🏗️ DAG editor — AI-flavored Jenkins</b><br><img src="docs/screenshots/03_dag_editor.jpg" width="100%"></td>
-<td align="center" width="33%"><b>⌨️ CLI — prompt → tools → diff → done</b><br><img src="docs/screenshots/02_cli.jpg" width="100%"></td>
-<td align="center" width="33%"><b>📱 WeChat integration + vision fallback</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
+<td align="center" width="33%"><b>🏗️ DAG 编辑器,像 Jenkins 一样跑 AI 流水线</b><br><img src="docs/screenshots/03_dag_editor.jpg" width="100%"></td>
+<td align="center" width="33%"><b>⌨️ 命令行:一句话,写码跑码全搞定</b><br><img src="docs/screenshots/02_cli.jpg" width="100%"></td>
+<td align="center" width="33%"><b>📱 微信接入,扫码就能用</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>🤖 WeCom (Enterprise) smart bot</b><br><img src="docs/screenshots/05_wecom.jpg" width="100%"></td>
-<td align="center"><b>🧠 Four-tier memory</b><br><img src="docs/screenshots/06_memory.jpg" width="100%"></td>
-<td align="center"><b>🔌 Model management — hot switch</b><br><img src="docs/screenshots/07_models.jpg" width="100%"></td>
+<td align="center"><b>🤖 企业微信机器人,真流式回复</b><br><img src="docs/screenshots/05_wecom.jpg" width="100%"></td>
+<td align="center"><b>🧠 记忆面板,聊过的它都记得</b><br><img src="docs/screenshots/06_memory.jpg" width="100%"></td>
+<td align="center"><b>🔌 模型管理,随时热切换</b><br><img src="docs/screenshots/07_models.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>⏰ Scheduled tasks (cron / once)</b><br><img src="docs/screenshots/08_timer.jpg" width="100%"></td>
-<td align="center"><b>📦 Artifacts store</b><br><img src="docs/screenshots/09_artifacts.jpg" width="100%"></td>
-<td align="center"><b>📊 Usage & cost dashboard</b><br><img src="docs/screenshots/10_stats.jpg" width="100%"></td>
+<td align="center"><b>⏰ 定时任务</b><br><img src="docs/screenshots/08_timer.jpg" width="100%"></td>
+<td align="center"><b>📦 产出物仓库</b><br><img src="docs/screenshots/09_artifacts.jpg" width="100%"></td>
+<td align="center"><b>📊 用量和成本,花了多少一目了然</b><br><img src="docs/screenshots/10_stats.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>🐳 Docker control from chat</b><br><img src="docs/screenshots/11_docker.jpg" width="100%"></td>
-<td align="center"><b>🗂️ Projects — shared context</b><br><img src="docs/screenshots/12_projects.jpg" width="100%"></td>
-<td align="center"><b>⌨️ Full CLI command surface</b><br><img src="docs/screenshots/14_cli_cmds.jpg" width="100%"></td>
+<td align="center"><b>🐳 聊天里就能管 Docker</b><br><img src="docs/screenshots/11_docker.jpg" width="100%"></td>
+<td align="center"><b>🗂️ 项目管理</b><br><img src="docs/screenshots/12_projects.jpg" width="100%"></td>
+<td align="center"><b>⌨️ CLI 全部命令</b><br><img src="docs/screenshots/14_cli_cmds.jpg" width="100%"></td>
 </tr>
 </table>
 
 ---
 
-## Why LiteCode wins
+## 五、好,下面开始吹
 
-- 🏠 **100% private, zero cloud.** Gateway (OpenAI-compatible SSE) + Web + CLI + bots in **one** Docker container. Point it at your own vLLM or any OpenAI-compatible endpoint. Keys, sessions, memory, artifacts — all on your disk.
-- 🧩 **A chassis, not a monolith.** Drop in one `plugin.py` → new capability. Pull an env var → gone. `pptx` and `cad` mount in from outside with **zero copied code**.
-- 🧠 **Dynamic memory compression — it actually remembers you.** Four tiers + truth-calibrated budget + auto-compress + crash recovery: long chats don't snap, new sessions start informed. Elephant-grade recall that makes this a **general-agent substrate**, not just a toolbox.
-- 🏗️ **AI-flavored Jenkins.** Pipeline / Job / Build History / Artifact / breakpoint / resume — a mental model you already trust. AI adds exactly three things: **speak a pipeline into existence, thread the parameters, summarize the result.**
-- 📱 **The only self-hosted agent with real WeChat + WeCom bots.** Scan a QR and your personal WeChat becomes an AI terminal; WeCom gets true streaming replies. Same brain as Web and CLI.
-- ⚡ **A brute-efficiency machine for one person.** No meetings with your infrastructure. `./start.sh`, then work.
+### 先甩数字
+
+| 72 | 92 | 9 | 14 | 5 | 4 | 3 | 1 |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| 个工具 | 项技能 | 种 agent | 个搜索引擎 | 种模型后端 | 级记忆 | 个入口 | 个容器 |
+
+不用集群,没有月费,数据一个字节都不出你的机器。
+
+### 🧠 记性是真的好
+
+一般的 AI 聊久了就断片,上下文一满,前面说的全忘。LiteCode 的记忆是分四层的:近期对话、常驻档案、分类笔记、全库检索,聊到快满时它自己在后台压缩,压完接着聊。你说过的偏好(比如"回答用中文")它自动记下来,新开会话它还认识你。就算机器断电重启,聊天记录也丢不了。
+
+说白了:别的 AI 是金鱼,这个是带档案柜的老管家。
+
+### 📱 微信/企业微信是真能用
+
+不是网页套壳。扫码把你的微信接上,发文字、发图、发语音、发文件它都接得住;企业微信那边更爽,回复是真·流式的,一个字一个字往外蹦。背后跟网页、命令行是同一个大脑,微信里聊的,回到网页上还能接着聊。
+
+### 🏗️ 流水线像 Jenkins 一样跑
+
+复杂活别一句话怼给 AI,拆成流水线:拖几个节点(写码的、分析的、看图的、跑命令的),连上线,点 Build。它有断点、能续跑、失败自己反思重试,跑完的记录一条条留着。最爽的是——你可以直接说"帮我建一条 xx 流水线",它自己搭。
+
+### 🧩 想加功能?丢个文件进去
+
+生图已经内置(DALL·E / SD / ComfyUI)。想要视频生成、音乐生成?照着现成的样子写一个 py 文件丢进 `plugins/` 就行,系统自动认,不用改核心代码。外部项目(比如 PPT 生成器)也是挂载进来的,拔掉环境变量就干净卸载。
+
+### 🔍 搜索封不死
+
+免费 API → 本机 SearXNG 聚合 → 14 个引擎并行 → 实在不行开真浏览器去爬。一层被封还有下一层,而且 `deep_search` 会点进搜索结果把正文读了再回答,不是拿标题糊弄你。
+
+### 🎁 还有些别人没有的
+
+- 💞 **陪伴模式**:你说"今天好累",它不会教你早点睡,它就陪着你聊。emo 的时候自动切进来,不说教、不灌鸡汤。
+- 🎭 **权谋推演**:一键开"谁在获利"视角,看新闻、看行情不再被表面叙事带节奏。
+- ✍️ **21 种题材的小说流水线**:玄幻修真武侠都市科幻言情宫斗系统流……每种一个专门技能,还带"去 AI 味"审计,写出来不像机器写的。
+- 🖥️ **对话操控桌面**:让它在远程桌面里开浏览器、点按钮、截图发回来给你看。
+- 📄 **办公全家桶**:Word / Excel / PPT / PDF 读写生成,微信丢文件进去,处理完还你文件。
+
+### 🔗 顺手升级你现在用的 AI 工具
+
+LiteCode 的接口是标准 OpenAI 格式。你现在用的任何 AI 客户端(翻译插件、ChatBox、Dify、LangChain……),把地址改成 `http://你的机器:18789/v1`,它们背后的模型立刻多了工具调用、搜索、记忆和 92 项技能。等于免费开挂。
 
 ---
 
-## How it's different
+## 六、跟同类比一下
 
 | | **LiteCode** | Dify | LangChain | Open WebUI |
 |---|:---:|:---:|:---:|:---:|
-| Single self-hosted container | ✅ | ✅ | library | ✅ |
-| OpenAI-compatible gateway | ✅ | partial | — | chat only |
-| One agent brain across **Web + CLI + chat bots** | ✅ | Web | code | Web |
-| **WeChat / WeCom (Enterprise) bots** built in | ✅ | — | — | — |
-| Visual **DAG multi-agent** (Jenkins-style) | ✅ | flows | code | — |
-| Plugin chassis for **image / video / music gen** | ✅ | tools | tools | — |
-| **Talk-to-control desktop** (noVNC) | ✅ | — | — | — |
-| Four-tier persistent memory | ✅ | partial | — | basic |
+| 单容器自托管 | ✅ | ✅ | 是个库 | ✅ |
+| OpenAI 兼容网关 | ✅ | 部分 | — | 仅对话 |
+| 网页 + 命令行 + 聊天机器人同一个大脑 | ✅ | 仅网页 | 写代码 | 仅网页 |
+| 内置微信 / 企业微信机器人 | ✅ | — | — | — |
+| 可视化 DAG 流水线 | ✅ | flow | 写代码 | — |
+| 生图 / 视频 / 音乐插件位 | ✅ | 工具 | 工具 | — |
+| 对话操控桌面 | ✅ | — | — | — |
+| 四级持久记忆 | ✅ | 部分 | — | 基础 |
 
-_Rough positioning, not a scorecard — every tool above is great at what it's for. LiteCode's bet is "one private box that does all of it."_
-
----
-
-## Built lean, on purpose
-
-Agent frameworks love to sprawl — a mesh of services to babysit, a maze of permissions to fight, behavior you can't see. LiteCode goes the other way:
-
-- **One container, not a service mesh.** Host-network, `./start.sh`, done.
-- **Permissions that stay out of your way.** Bearer token + cookie + per-IP rate limits + owner-scoped artifacts + lightweight guard rails. Legible and minimal — not a week-long RBAC fight.
-- **No black boxes.** Tracing, guard-injection stats, execution-record timeline — you can always see what the agent did and why.
+_不是打分表,人家各有各的强项。LiteCode 赌的是:一台自己的机器,全都要。_
 
 ---
 
-## Feature tour
-
-### 🔌 Any model, any modality
-OpenAI-compatible SSE gateway (LangChain / OpenAI SDK / Dify / Open WebUI connect out of the box) · five backend stacks (`vllm / openai / anthropic / ollama / deepseek`) · hot model switch · per-message model & thinking-effort override · vision routing with configurable fallback.
-
-### 🎨 Generative plugins — the chassis stays open
-Image generation **built in** (DALL·E 3 · SD-WebUI · ComfyUI · mock). Video / music / any-modality: **one drop-in file** mirroring the image-gen skeleton — registry auto-discovers it, and it instantly becomes a tool the agent can call **and** a DAG step you can orchestrate. Core untouched.
-
-### 🔍 Multi-layer search — never blocked
-Free search APIs → **local SearXNG sidecar** (private JSON gateway, no CAPTCHAs) → 14 engines of parallel HTML → a **real Playwright browser** as last resort → `deep_search` clicks into results and reads the actual text. One blocked engine never stops you.
-
-### 🏗️ DAG multi-agent orchestration
-Topological scheduling · same-layer parallelism · Critic re-runs · checkpoint restore · failure self-reflection. Node types: agent / native tool / **sub-DAG** / **decision (2 outlets)**; `when` conditions + `${step:id:json:path}` value passing. **Natural-language pipeline ops**: generate / edit / delete / schedule by talking.
-
-### ⌨️ CLI — three ends, one brain
-Interactive REPL straight on the gateway: streaming, foldable thinking, two-stage `Ctrl-C` interrupt, live tool-call & diff rendering. Full command surface: `chat · dag · model · sessions · memory · timer · wechat · wecom · docker · plugins · projects · stats · ws · config · repl` + slash commands (`/think /interrupt /dag /memory /checkpoints …`). `--output-format stream-json` for CI.
-
-### 🧠 Dynamic memory compression — an elephant among goldfish
-Most agents get dumber as the chat gets longer; context fills, memory snaps. LiteCode's memory is a **live compression engine**:
-- **Four tiers (L0–L3)**: sliding window → always-on `MEMORY.md` → typed memory files → SQLite FTS5 cross-session recall. Every new session starts already knowing who you are.
-- **Truth-calibrated budget**: the context budget is anchored to the **real token usage reported upstream** — compress exactly when needed, lose nothing when not.
-- **Auto-compress + auto-capture**: background compression at threshold; preferences written **by rule** (secrets auto-redacted) — no praying the model remembers to save.
-- **Crash-proof**: session WAL recovery + task-boundary snapshots & rollback. Power cuts, restarts, fat-fingers — there's an undo.
-
-This is why LiteCode dares to call itself a **general-agent substrate**: memory, tools, skills and orchestration are a pluggable foundation you can grow *any* agent on.
-
-### 🖥️ Talk-to-control desktop & more
-Drive a real browser/GUI on a noVNC desktop from chat (`desktop_exec / screenshot / key / type / click`) · scheduled tasks with history & notifications · artifacts store · Docker control · usage & cost accounting.
-
----
-
-## Quick start — 60 seconds
-
-```bash
-git clone https://github.com/wfcz10086/litecode && cd litecode
-cp config.example.json config.json     # point it at your model endpoint + key
-./start.sh                             # builds if needed, then runs
-```
-
-| Port | What | Auth |
-|---|---|---|
-| `:18789` | Gateway API (OpenAI-compatible) | Bearer token |
-| `:18790` | Web UI + CLI backend | Cookie password |
-| `:18800` | noVNC remote desktop | — |
-
-### Login & passwords (30 seconds)
-
-- **Web UI**: open `http://<your-box>:18790`, type one password (`config.json → web_ui.auth.password` — change it before you start).
-- **API / third-party calls**: send `Authorization: Bearer <token>` (`config.json → server.token`).
-- **CLI**: `litecli login` once, cookie saved locally; `litecli repl` for the interactive shell.
-- That's all three. **No signup, no multi-tenant RBAC maze** — it's your machine.
-
-### Third-party hookup — buff every AI client you already use
-
-The gateway speaks standard OpenAI protocol, so **any client with a custom base_url** (LangChain / OpenAI SDK / Dify / Open WebUI / translation plugins / any ChatBox) instantly upgrades:
-
-> Same model, routed through LiteCode, now carries **tool calling + layered search + persistent memory + 92 skills + vision routing**. Your translator suddenly does research; your chat client suddenly remembers you.
+## 七、架构(一张图)
 
 ```
-base_url = http://<your-box>:18789/v1     api_key = <server.token>
-pass a fixed `user` field = session id → memory persists across requests
+   微信 / 企微机器人 ┐
+   命令行 CLI        ├──▶  网关 :18789  (OpenAI 兼容, AI 大脑在这)
+   浏览器 ──────────┘            ▲
+                               │
+                   Web UI :18790  (流水线 · 定时 · 记忆 · 各种管理面板)
 ```
 
-```python
-from openai import OpenAI
-client = OpenAI(base_url="http://127.0.0.1:18789/v1", api_key="YOUR_TOKEN")
-r = client.chat.completions.create(
-    model="your-model", stream=True, user="my_session",
-    messages=[{"role": "user", "content": "Scan this repo and write a report"}],
-)
-for c in r:
-    print(c.choices[0].delta.content or "", end="", flush=True)
-```
-
----
-
-## Architecture
-
-```
-   WeChat / WeCom bots ┐
-   CLI (REPL)          ├──▶  Gateway :18789  (OpenAI-compatible SSE — the agent loop)
-   Browser ────────────┘            ▲
-                                    │ same-origin proxy
-                        Web UI :18790  (DAG · timers · memory · model/plugin/container admin)
-```
-
-Web is the full hub; CLI is the fighting knife; WeChat/WeCom are your pocket terminals. One brain underneath. Deep dive: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+想深入了解看 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)。
 
 ---
 
 <div align="center">
 
-## ⭐ Star it. Seriously.
+## ⭐ 最后
 
-LiteCode is hammered out in the open by a tiny team. Every star is oxygen: it's how the next person finds a private, all-in-one alternative to renting their AI life from a cloud.
+这项目是小团队一锤一锤敲出来的。要是它帮你省了事,点个 star 呗——你花 3 秒,我们能高兴一天。
 
-**[⭐ Star this repo](https://github.com/wfcz10086/litecode)** · Watch for releases · Open an issue with what you'd build
+**[⭐ 点这里](https://github.com/wfcz10086/litecode)** · 有想法就提 issue,我们真的看
 
 </div>
 
-## License
+## 许可证
 
 MIT
