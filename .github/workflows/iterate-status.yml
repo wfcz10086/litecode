@@ -1,0 +1,28 @@
+name: iterate-status
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "TODO.md"
+      - "reports/iter_*.md"
+
+jobs:
+  status-summary:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Compute progress
+        run: |
+          done=$(grep -c "^- \[x\] \*\*" TODO.md || echo 0)
+          total=$(grep -c "^- \[" TODO.md || echo 0)
+          echo "PROGRESS: $done/$total"
+      - name: Recent iterations
+        run: |
+          ls -t reports/iter_*.md 2>/dev/null | head -10
+      - name: Show last commit
+        run: |
+          git log -1 --oneline

@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 120" width="600" height="120">
+  <style>
+    .title{font:bold 36px monospace;fill:#67e8f9}
+    .sub{font:14px monospace;fill:#94a3b8}
+    .accent{fill:#fbbf24}
+  </style>
+  <rect width="600" height="120" fill="#0f172a"/>
+  <text x="20" y="50" class="title">⚡ LiteCode</text>
+  <text x="20" y="80" class="sub">Local-first AI agent · Qwen3 · WeChat · noVNC · DAG</text>
+  <text x="20" y="105" class="sub" font-size="11">github.com/your/repo</text>
+  <text x="540" y="40" class="accent" font-size="20">⚙</text>
+  <text x="565" y="50" class="accent" font-size="14">v1.7</text>
+</svg>

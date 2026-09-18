@@ -1,0 +1,19 @@
+s/
+*.tar.gz.bak
+__pycache__/
+.git/
+
+# v1.9 - 不要把测试用临时文件 / sessions / workspace 打入镜像
+tests/web/snapshots/
+.pytest_cache/
+.mypy_cache/
+*.pyc
+*.log
+nohup.out
+
+# 本地 dev 文件
+.env
+.envrc
+ITERATION_TICKET.md
+
+# 注意：vendor/ 目录要保留进镜像（noVNC + 可选 playwright-cache）

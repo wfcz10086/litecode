@@ -1,0 +1,84 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.venv/
+venv/
+
+# 运行时生成的技能使用记录
+litecodeext/skills/_usage.json
+
+# 运行时 log (不入 git)
+*.log
+nohup.out
+/test
+/test_full.log
+
+# 用户会话 / 工作区 / 历史 — 全部由容器挂载, 不入 git
+/sessions/
+/workspace/
+/web_sessions/
+/wechat_media/
+
+# 但是 wechat_creds 保留 (登录凭证, 用户要求不清理)
+!/wechat_creds/
+
+# 个人本地 Claude Code 设定（每台机器独立, 不入 git）
+.claude/settings.local.json
+
+# v1.9 P39 - Web E2E 截图基线（CI 重新生成，不入库）
+tests/web/snapshots/
+
+# v1.9 - playwright 浏览器缓存（开发者本地预拉, 二进制不入库）
+vendor/playwright-cache/*
+!vendor/playwright-cache/.gitkeep
+!vendor/playwright-cache/README.md
+
+# 本地 secrets — 决不入 git
+.env
+.env.*
+!.env.example
+
+# [migrate-2026-05] 容器内 stateful 数据 bind-mount 源 — 运行时数据，不入 git
+litecode_state/timers.json
+litecode_state/web_auth_tokens.json
+litecode_state/dag_jobs/*
+!litecode_state/dag_jobs/.gitkeep
+# 微信 bot 运行时态, 不入 git
+/wechat_creds/bots_state.json
+
+# 运行时 db (workspace/ 已 ignore 但历史 track 过, 需 git rm --cached 一次)
+workspace/.bg_procs.json
+workspace/.memory_index.db*
+workspace/user_questions.json
+workspace/users.db
+workspace/ltc_daily/
+workspace/skills/
+workspace/skills_drafts/
+workspace/crypto_monitor/
+/.claude/
+
+# [2026-05-25] timers / dag_jobs 清空时的本地备份, 不提交
+litecode_state/timers.backup.*.json
+litecode_state/dag_jobs.backup.*/
+
+# [2026-05-25] Node browser_server node_modules — npm install 装的, 不入 git
+browser_node/node_modules/
+browser_node/package-lock.json
+
+# 公开发布导出目录 (由 scripts/make_public_release.sh 生成)
+dist/
+
+# [2026-09-05] 一次性测试/审计过程产物 — 不入版本库 (审计发现 reports/ 78MB+, _archive/ 13MB)
+# 保留在磁盘, 只是不再跟踪; 需要留档的具体报告请单独 git add -f。
+reports/
+_archive/
+
+# [2026-09-05] 运行时凭据 / 状态 — 绝不入 git (凭据入历史不可逆), 留磁盘即可
+wechat_creds/
+wecom_state/
+litecode_state/skill_flags.json
