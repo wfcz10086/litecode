@@ -1,5 +1,7 @@
 ---
 name: novel-zhongtian
+parent: novel-common
+label: 种田
 description: >
   种田 / 经营 / 基建 / 农家小院题材. 节奏慢 / 生活气 / 细节丰富.
   核心: 白手起家 / 经营致富 / 家长里短. 不是"打打杀杀".

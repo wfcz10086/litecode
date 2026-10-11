@@ -1,5 +1,7 @@
 ---
 name: novel-scifi
+parent: novel-common
+label: 科幻
 description: >
   科幻题材 (硬科幻 / 软科幻 / 太空歌剧 / 赛博朋克).
   核心: 科学内核 / 世界观自洽 / 人文思考. 不是"披着科技皮的玄幻".

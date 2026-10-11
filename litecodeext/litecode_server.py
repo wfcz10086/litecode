@@ -47,6 +47,11 @@ from lib.guard_stats import GuardStats as _GuardStats
 from lib.stats import questions_load as _questions_load, questions_append as _questions_append
 from lib.transport import vllm_stream as _vllm_stream, parse_text_tool_calls as _parse_text_tool_calls
 from lib.tool_args import parse_tool_args as _parse_tool_args
+from lib.turn_context import (KEY as _TURN_CTX_KEY, attach as _turn_attach,
+                              materialize as _turn_materialize, strip as _turn_strip)
+from lib.turn_sources import prepare as _turn_prepare, enabled as _turn_ctx_enabled
+from lib.tool_prefetch import Prefetcher as _ToolPrefetcher
+from lib.tool_result_eviction import strip_old_reasoning as _strip_old_reasoning
 from lib.reasoning_limits import stall_limits as _reasoning_stall_limits, RepeatLineDetector as _RepeatLineDetector, salvage_note as _reasoning_salvage
 from lib.session import (
     get_history as _get_history, save_history as _save_history,
@@ -372,6 +377,10 @@ def _turn_setup_context(
         (_sess_dir / "memory").mkdir(exist_ok=True)
 
     _ctx.base_history = _get_history(_ctx.session_id) if _ctx.session_id else []
+    # 随消息变化的委派指令/匹配技能/记忆召回挂到本轮 user 消息前, system prompt 逐轮字节不变
+    # (lib/turn_context.py + lib/turn_sources.py); 历史里存过的上下文按原样拼回
+    _hist_anchor, _ctx.turn_context, _ctx.base_history = _turn_prepare(
+        user_message, _ctx.session_id, _ctx.base_history)
     # P0-1: 清理历史中的旧 tool result，减少发给 vLLM 的 token 量
     # [FIX] 长对话入口裁剪: keep_recent 从 6 降到 4, 防止 session 重进上下文还是 300+ 条
     _ctx.base_history = _clear_old_tool_results(list(_ctx.base_history), keep_recent=4)
@@ -383,21 +392,19 @@ def _turn_setup_context(
     # (估 107,104 + 漏掉的 86,409 = 193,513, 与 vLLM 实报差 0.5%)。
     # 上一轮的思考过程对下一轮没有价值, 只留最近 1 条;
     # 置空而非删键 —— DeepSeek 要求该字段存在 (见下方 reasoning_content 400 兼容分支)。
-    _rc_kept = 0
-    for _m in reversed(_ctx.base_history):
-        if _m.get("role") == "assistant" and _m.get("reasoning_content"):
-            if _rc_kept < 1:
-                _rc_kept += 1
-            else:
-                _m["reasoning_content"] = ""
+    # 返回副本, 不改会话缓存里共享的消息 dict (见 lib/tool_result_eviction.py)
+    _ctx.base_history = _strip_old_reasoning(_ctx.base_history, keep=1)
     _ctx.base_history = _sanitize_history(_ctx.base_history)
-    sys_prompt   = build_request_system_prompt(user_message, session_id=_ctx.session_id, strategist=strategist)
+    sys_prompt   = build_request_system_prompt(user_message, session_id=_ctx.session_id, strategist=strategist,
+                                               history_anchor=_hist_anchor,
+                                               include_dynamic=not _turn_ctx_enabled())
+    _effective_user_content = _turn_attach(_effective_user_content, _ctx.turn_context)
     _mlc_done_this_turn = False   # [FIX 2026-08-31] 每回合最多压缩一次
     # [guard-stats] 守卫注入计数 —— 让'某条守卫在空转'可见 (见 lib/guard_stats.py)
     _guard_stats = _GuardStats(workspace=WORKSPACE, session_id=_ctx.session_id or '')
 
     # ── v1.0: memory_index 历史经验注入 ──
-    if HAS_MEMORY_INDEX:
+    if HAS_MEMORY_INDEX and not _turn_ctx_enabled():   # 开启时由 turn_sources.memory_index 提供
         try:
             _midx = memory_index_get(WORKSPACE)
             _hist_ctx = _midx.search_as_context(user_message, limit=3, max_chars=1500)
@@ -446,7 +453,7 @@ async def _turn_setup_autorotate(
         _ctx.session_id = _new_sid
         _ctx.sid_tag = _new_sid[:8]
         # 重新读 base_history (fresh fork 后的)
-        _ctx.base_history = _get_history(_ctx.session_id) if _ctx.session_id else []
+        _ctx.base_history = _turn_materialize(_get_history(_ctx.session_id) if _ctx.session_id else [])
         _ctx.base_history = _clear_old_tool_results(list(_ctx.base_history), keep_recent=4)
         _ctx.base_history = _sanitize_history(_ctx.base_history)
         # 通知前端切换 — 通过 SSE status event (key="session_rotated")
@@ -1762,6 +1769,8 @@ async def agent_stream(
         # [display-fix 2026-07] new_msgs 用原始 user_message (不含 FORCE-ACTION prefix),
         # 否则持久化后用户在聊天界面看到系统提示文本污染用户消息.
         _ctx.new_msgs = [{"role": "user", "content": user_message}]
+        if _ctx.turn_context:   # 原话不变 (界面显示用), 上下文另存一个字段, 下一轮拼回保缓存
+            _ctx.new_msgs[0][_TURN_CTX_KEY] = _ctx.turn_context
         _wal_flushed = 0  # [WAL 2026-09-04] new_msgs 已增量落盘到的下标, 每轮迭代顶部 flush 增量
 
         # 错误连续计数器
@@ -2106,6 +2115,13 @@ async def agent_stream(
                     async def _sse_emit_to_buffer(chunk_str: str):
                         await _subagent_sse_queue.put(chunk_str)
 
+                    # 批次开头连续的只读调用提前并发跑 (lib/tool_prefetch.py), 下面照旧逐个过守卫
+                    _prefetch = _ToolPrefetcher.start(
+                        tool_call_list, _parse_tool_args,
+                        lambda _n, _a: execute_tool(_n, _a, sid=_ctx.session_id),
+                        enabled=(CFG.get("agent") or {}).get("parallel_readonly_tools", True))
+                    if len(_prefetch):
+                        log.info(f"  [PREFETCH] {len(_prefetch)} 个只读工具并发执行")
                     for tc in tool_call_list:
                         fn_name = tc["function"]["name"]
                         fn_args, _args_err = _parse_tool_args(tc["function"]["arguments"], fn_name)
@@ -2179,7 +2195,7 @@ async def agent_stream(
                         else:
                             try:
                                 # ── 心跳保活：长时间工具执行期间发送 SSE 注释防止连接超时 ──
-                                _tool_task = asyncio.ensure_future(
+                                _tool_task = _prefetch.take(tc["id"], fn_args) or asyncio.ensure_future(
                                     execute_tool(fn_name, fn_args, sid=_ctx.session_id)
                                 )
                                 _hb_interval = 15  # 每 15 秒一次心跳
@@ -2310,6 +2326,7 @@ async def agent_stream(
                         if fn_name == "task_done":
                             _task_done_result_indices.append(len(tool_results) - 1)
 
+                    _prefetch.cancel_rest()   # 被守卫拦下没取走的预取任务
                     # ── [EXEC-GATE] task_done 证据提示: 本批(含同批写工具)执行完后统一判定 ──
                     if (_task_done_result_indices
                             and _batch_state.exec_gate_task_done_needs_warning(_iter_write_success)):
@@ -3212,7 +3229,7 @@ async def agent_stream(
         try:
             if _ctx.session_id and _ctx.new_msgs:
                 _save_history(_ctx.session_id, _ctx.base_history, _ctx.new_msgs)
-                all_msgs = _ctx.base_history + _ctx.new_msgs
+                all_msgs = _turn_strip(_ctx.base_history) + _ctx.new_msgs   # 记忆提取只看用户原话
                 if HAS_MEMORY:
                     # [v1.0] 所有 memory 压缩/更新都放后台线程
                     # 之前: check_and_compact 同步调 httpx.post(timeout=180) 压缩

@@ -155,6 +155,7 @@ class TurnContext:
     base_history: list = field(default_factory=list)
     messages: list = field(default_factory=list)      # SETUP L340 才真正赋值, 构造时给不了
     session_id: Optional[str] = None                  # 形参型字段, 构造时显式传入 (非默认值起手)
+    turn_context: str = ""      # 本轮挂在 user 消息前的动态上下文 (lib/turn_context.py), 随 new_msgs 持久化
 
 
 @dataclass

@@ -14,6 +14,10 @@ description: >
 
 ---
 
+> **先用原生工具**: 普通的打开/点击/填写/选择, 直接 `browser_snapshot(url)` 拿到带编号的元素列表,
+> 再 `browser_act(ref=编号, action=click|fill|select|press|...)`, 每步自动返回新快照, 用完 `browser_act(action="close")`。
+> 只有拦截网络请求、上传下载、批量抓表格等下面的高级场景才需要写脚本。
+
 ## 核心工作流（必须遵守）
 
 **每次浏览器操作都遵循这个 5 步循环：**

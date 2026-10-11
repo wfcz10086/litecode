@@ -24,6 +24,6 @@ def register(name: str):
 
 # side-effect: populate REGISTRY
 from . import (  # noqa: E402,F401
-    agent, bg_ops, browser, code_search, dag, error_search,
+    agent, bg_ops, browser, browser_ref, code_search, dag, error_search,
     file_io, git_ops, media, memory_ops, meta, remote, skills, snapshot_ops, ssh_hosts, symbol_edit, task_ops, timer,
 )

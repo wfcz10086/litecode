@@ -1,5 +1,7 @@
 ---
 name: novel-xuanyi
+parent: novel-common
+label: 悬疑推理
 description: >
   悬疑 / 推理 / 犯罪小说. 核心是逻辑严密 / 线索公平 / 读者智斗作者.
   黄金圈: 诡计真相 + 伏笔对称 + 没有超自然欺骗.

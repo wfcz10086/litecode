@@ -1,5 +1,7 @@
 ---
 name: novel-wuxianliu
+parent: novel-common
+label: 无限流
 description: >
   无限流 (主角被迫 / 主动进入多个"恐怖电影/游戏世界"闯关). 由《无限恐怖》开创.
   核心: 世界观穿越 / 每个副本独立 / 带出来的道具可跨副本用.

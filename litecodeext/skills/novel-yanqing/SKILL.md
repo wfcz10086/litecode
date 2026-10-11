@@ -1,5 +1,7 @@
 ---
 name: novel-yanqing
+parent: novel-common
+label: 言情
 description: >
   言情题材 (现代 / 古代 / 豪门 / 校园 / 总裁 / 破镜重圆 / 先婚后爱).
   核心: 情感弧线 / 氛围感 / 心动瞬间 / 情感冲突. 节奏比男频慢, 细节比男频密.

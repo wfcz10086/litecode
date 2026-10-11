@@ -1,5 +1,7 @@
 ---
 name: novel-moshi
+parent: novel-common
+label: 末世
 description: >
   末世 / 灾难题材 (病毒 / 丧尸 / 核战 / 自然灾害 / 异次元入侵).
   核心: 生存资源斗争 / 人性考验 / 体系崩塌.

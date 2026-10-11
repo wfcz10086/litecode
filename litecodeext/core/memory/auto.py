@@ -189,6 +189,8 @@ def rule_based_memory_update(manager: "MemoryManager", messages: list) -> bool:
     for m in reversed(messages):
         if m.get("role") == "user":
             content = m.get("content") or ""
+            if isinstance(content, str) and _re.match(r'\[SYSTEM[-:\]]', content):
+                continue   # 系统注入的伪 user 消息不是用户意图
             if isinstance(content, str) and len(content) > 15:
                 intent = _re.sub(r'```[\s\S]*?```', '[代码]', content)
                 intent = _re.sub(r'\n\s*\n', '\n', intent).strip()
@@ -340,6 +342,7 @@ _RE_VAULT_IPPORT = _re.compile(
 _RE_VAULT_TOKEN = _re.compile(
     r"\b(?:sk-|pk-|ghp_|gho_|github_pat_|Bearer\s+)[A-Za-z0-9_\-]{16,80}\b",
 )
+_QUESTION_MARKS = ("什么", "多少", "哪", "吗", "?", "？")
 _NOISE_PREFER_TAIL = ("吗？", "吗?", "怎么", "如何", "什么", "为什么", "?", "？")
 
 
@@ -385,6 +388,8 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
             v = mm.group(2).strip()
             if len(k) < 1 or len(v) < 2:
                 continue
+            if any(q in v for q in _QUESTION_MARKS):
+                continue   # "我的 X 是什么?" 是提问, 不是陈述
             v_redact = _redact_secret(k, v)
             captured.append(("user_fact", f"用户事实: 我的 {k} = {v_redact}"))
 

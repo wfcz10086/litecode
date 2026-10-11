@@ -1,5 +1,7 @@
 ---
 name: novel-xitongliu
+parent: novel-common
+label: 系统流
 description: >
   系统流 (主角绑定"系统"获得任务 / 奖励 / 技能). 可叠加所有题材 (玄幻系统/都市系统/末世系统).
   核心: 系统机制要自洽 / 任务奖励要有梯度 / 系统人格要明确.

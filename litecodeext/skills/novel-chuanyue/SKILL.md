@@ -1,5 +1,7 @@
 ---
 name: novel-chuanyue
+parent: novel-common
+label: 穿越
 description: >
   穿越题材 (现代人穿古代 / 穿异界 / 穿游戏 / 穿动漫). 金手指通常 = "穿越者知识 + 现代思维".
   核心: 文化冲突 / 现代知识改变历史 / 身份适应. 可与其他题材叠加.

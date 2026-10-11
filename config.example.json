@@ -19,7 +19,7 @@
         "supports_vision": true,
         "_note": "ollama 27.3B Q4_K_M, 原生 262k ctx, tools+vision+thinking; 冷 prefill ~236 tok/s (51k=216s), prefix cache 命中后秒回"
     },
-    "default_model_id": "Qwen3.6-35B",
+    "default_model_id": "huihui_ai/Qwen3.8-abliterated:latest",
     "models": [
         {
             "id": "deepseek-v4-pro",

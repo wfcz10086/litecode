@@ -1,5 +1,7 @@
 ---
 name: novel-dianjing
+parent: novel-common
+label: 电竞
 description: >
   电竞 / 网游题材 (LOL / 王者 / DOTA / 绝地求生 等). 核心是竞技场景 + 操作描写 + 青春热血.
   强制搜索: 游戏术语 / 英雄技能 / 版本信息.

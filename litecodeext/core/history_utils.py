@@ -15,58 +15,9 @@ from lib.config import WORKSPACE
 
 def _clear_old_tool_results(messages: list, keep_recent: int = 6,
                              max_total_chars: int = 15000) -> list:
-    """
-    [v1.0] Tool Result 激进淘汰 -- 灵感来自 Claude Code 的滑动窗口策略。
-
-    v6 问题: keep_recent=4, max_total_chars=8000, 旧 result 累积导致 token 膨胀。
-    v7 改进:
-    - keep_recent 降到 2: 只保留最近 2 个 tool result 完整内容
-    - max_total_chars 降到 3000: 硬预算, 超出后旧 result 截到 50c
-    - 旧 result 只保留工具名+字符数, 不保留内容
-    """
-    tool_indices = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
-    if len(tool_indices) <= keep_recent:
-        return messages
-
-    # 第一轮: 条目淘汰 — 超出 keep_recent 的旧 result 截短
-    to_clear = tool_indices[:-keep_recent]
-    for idx in to_clear:
-        content = messages[idx].get("content") or ""
-        if not isinstance(content, str) or len(content) <= 200:
-            continue
-        # 回溯找对应的 tool_call name
-        tool_name = ""
-        call_id = messages[idx].get("tool_call_id", "")
-        if call_id:
-            for j in range(idx - 1, max(idx - 5, -1), -1):
-                for tc in messages[j].get("tool_calls", []):
-                    if tc.get("id") == call_id:
-                        tool_name = tc.get("function", {}).get("name", "")
-                        break
-                if tool_name:
-                    break
-        # [v1.0] 旧 result 只保留 50c 摘要
-        messages[idx]["content"] = (
-            f"[cleared:{tool_name or '?'} {len(content)}c] {content[:50]}..."
-        )
-
-    # [v1.0] 第二轮: 总量预算 — 超预算时截到 50c
-    total_chars = sum(
-        len(messages[i].get("content") or "")
-        for i in tool_indices if i < len(messages)
-    )
-    if total_chars > max_total_chars:
-        for idx in tool_indices:
-            if idx >= len(messages):
-                continue
-            content = messages[idx].get("content") or ""
-            if len(content) > 100:
-                messages[idx]["content"] = content[:50] + "..."
-                total_chars -= (len(content) - 53)
-                if total_chars <= max_total_chars:
-                    break
-
-    return messages
+    """旧工具结果截短, 按批次推进保住前缀缓存; 实现见 lib/tool_result_eviction.py。"""
+    from lib.tool_result_eviction import clear_old_tool_results
+    return clear_old_tool_results(messages, keep_recent=keep_recent, max_total_chars=max_total_chars)
 
 
 def _count_orphan_user_tail(history: list) -> int:

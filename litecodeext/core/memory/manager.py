@@ -23,6 +23,7 @@ from .consts import (
     L1_MAX_LINES, MSG_HARD_COUNT, MSG_SOFT_COUNT,
 )
 from .iohelp import _atomic_write, _validate_compressed, estimate_tokens
+from .upsert import upsert_entry, upsert_topic_section
 
 
 # [wire-name 2026-08-28] config 的 `id` 是显示名, 上游认的可能是别的名字
@@ -393,11 +394,16 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
         dst.write_text(self.l1_file.read_text(errors="replace"))
 
     # ── Agent tool: save_memory ───────────────────────────────
-    def save(self, section: str, content: str, topic: Optional[str] = None):
+    def save(self, section: str, content: str, topic: Optional[str] = None,
+             key: Optional[str] = None) -> str:
+        """写入并返回动作 added / updated / unchanged (同 key 覆盖规则见 upsert.py)。"""
         if topic:
             p = self.l2_dir / f"{topic}.md"
             existing = p.read_text(errors="replace") if p.exists() else f"# {topic}\n"
-            p.write_text(existing + f"\n## {section}\n{content.strip()}\n")
+            text, action = upsert_topic_section(existing, section, content)
+            if action != "unchanged":
+                _atomic_write(p, text)
+            return action
         else:
             text = self.l1_file.read_text(errors="replace") if self.l1_file.exists() else ""
             heading = f"## {section}"
@@ -410,16 +416,16 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                     text, flags=_re2.DOTALL,
                 )
             else:
-                if _section_has_entry(text, heading, entry):
-                    return
-                text = text.replace(heading, f"{heading}\n{entry}", 1) if heading in text \
-                       else text + f"\n{heading}\n{entry}\n"
+                text, action = upsert_entry(text, heading, content, key=key)
+                if action == "unchanged":
+                    return action
             lines = text.splitlines()
             if len(lines) > L1_MAX_LINES:
                 self._archive_l1()
                 text = "# Session Memory — L1\n_[older content archived]_\n\n" + \
                        "\n".join(lines[L1_MAX_LINES // 2:])
             self._atomic_write_if_changed(self.l1_file, text)
+            return "updated" if section == "Question Log" else action
 
     # ── Structure for web UI ──────────────────────────────────
     def get_structure(self, messages: Optional[list] = None) -> dict:

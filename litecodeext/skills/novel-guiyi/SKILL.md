@@ -1,5 +1,7 @@
 ---
 name: novel-guiyi
+parent: novel-common
+label: 诡异
 description: >
   诡异 / 灵异 / 克苏鲁风. 气氛第一, 解释第二. 以恐惧 / 未知 / 压抑为核心情绪.
   核心: 异常规则 / 脏东西 / 不可名状 / 理智值. 禁"用战斗力解决诡异".

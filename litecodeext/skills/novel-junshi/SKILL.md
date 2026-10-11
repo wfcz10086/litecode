@@ -1,5 +1,7 @@
 ---
 name: novel-junshi
+parent: novel-common
+label: 军事
 description: >
   军事 / 战争题材 (古代战争 / 现代军旅 / 未来科幻战争). 核心是战术真 + 兵种详 + 不避战争残酷.
   可叠加: 历史军事 / 穿越军事 / 兵王退伍 / 科幻星战.

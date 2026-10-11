@@ -67,7 +67,7 @@ async def h_save_memory(sid: str, args: dict) -> tuple[str, Any]:
             vllm_url=td.BACKEND_URL, model_id=td.MODEL_ID, api_key=td.API_KEY,
             context_window=td.CONTEXT_WINDOW,
         )
-        mgr.save(section, content, topic=topic)
+        action = mgr.save(section, content, topic=topic, key=args.get("key") or None)
         if td.HAS_MEMORY_INDEX:
             try:
                 _midx = td.memory_index_get(td.WORKSPACE)
@@ -77,6 +77,7 @@ async def h_save_memory(sid: str, args: dict) -> tuple[str, Any]:
                                    solution=topic or "", tags=section.lower().replace(" ", "-"))
             except Exception:
                 pass
-        return f"已保存到 MEMORY.md [section={section}]" + (f" [topic={topic}]" if topic else ""), None
+        verb = {"updated": "已更新", "unchanged": "已存在, 未重复写入"}.get(action, "已保存")
+        return f"{verb} MEMORY.md [section={section}]" + (f" [topic={topic}]" if topic else ""), None
     except Exception as e:
         return f"ERROR saving memory: {e}", None

@@ -1,5 +1,7 @@
 ---
 name: novel-zhongsheng
+parent: novel-common
+label: 重生
 description: >
   重生题材 (主角重生回过去 / 带前世记忆). 常见回 1998 / 2008 / 2015 等起点年份.
   核心: 前世遗憾 → 重生弥补 / 前世知识 → 吃时代红利. 强制时代准确.

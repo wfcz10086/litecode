@@ -1,5 +1,7 @@
 ---
 name: novel-wuxia
+parent: novel-common
+label: 武侠
 description: >
   武侠题材 (内力/真气/招式, 江湖恩怨, 无神怪). 金庸/古龙/梁羽生风格.
   核心: 人情世故 / 快意恩仇 / 江湖道义 / 家国情怀.

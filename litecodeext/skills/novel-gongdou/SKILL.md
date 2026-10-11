@@ -1,5 +1,7 @@
 ---
 name: novel-gongdou
+parent: novel-common
+label: 宫斗宅斗
 description: >
   宫斗 / 宅斗 / 权谋. 古代后宫 / 大家族 / 朝堂. 核心是智斗 / 人心 / 伏笔.
   情感与权力交织. 多女频倾向.

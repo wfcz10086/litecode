@@ -1,5 +1,7 @@
 ---
 name: novel-lishi-jiakong
+parent: novel-common
+label: 历史架空
 description: >
   历史架空题材 (参考真实朝代风貌但非史实 / 虚构皇帝 / 虚构战役). 与 novel-lishi 区别: 可以改变历史.
   核心: 朝代气质真 + 具体人物事件可虚 + 设定自洽.

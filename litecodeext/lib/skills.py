@@ -22,6 +22,7 @@ _STOP = {
 
 # Skill keyword index: [(name, keyword_set, full_text, one_liner)]
 _SKILL_INDEX: list = []
+_SKILL_GROUP: dict = {}   # 子技能名 → (父技能名, 短标签), 来自 frontmatter parent/label
 
 
 def _frontmatter(txt: str) -> dict:
@@ -53,6 +54,7 @@ def _one_liner(desc: str, limit: int = 120) -> str:
 
 def _build_skill_index():
     _SKILL_INDEX.clear()  # 就地清空，保持引用不变（import 安全）
+    _SKILL_GROUP.clear()
     if not SKILLS_DIR.exists():
         return
     for md in sorted(SKILLS_DIR.glob("*/SKILL.md")):
@@ -60,7 +62,10 @@ def _build_skill_index():
             txt  = md.read_text(errors="replace")
             name = md.parent.name
 
-            desc = str(_frontmatter(txt).get("description") or "")
+            fm   = _frontmatter(txt)
+            desc = str(fm.get("description") or "")
+            if fm.get("parent"):
+                _SKILL_GROUP[name] = (str(fm["parent"]), str(fm.get("label") or ""))
             one_liner = _one_liner(desc)
 
             km   = re.search(r"##\s*[Kk]eyword.+?\n(.+?)(?:\n##|\Z)", txt, re.S | re.I)
@@ -90,10 +95,27 @@ def _build_skill_index():
             pass
 
 def load_skills_index() -> str:
-    """One-liner index of all skills for system prompt."""
+    """One-liner index of all skills for system prompt.
+    frontmatter 声明了 `parent` 的子技能不单独占行, 收进父技能那一行 (见 render_grouped_index)。"""
+    return render_grouped_index([(name, one_liner) for name, _, _, one_liner in _SKILL_INDEX], _SKILL_GROUP)
+
+
+def render_grouped_index(entries: list, group: dict) -> str:
+    """entries: [(name, one_liner)]; group: {子技能名: (父技能名, 短标签)}。
+    父技能不存在时子技能照常单独列出, 不会丢。"""
+    names = {n for n, _ in entries}
+    kids: dict = {}
+    for child, (parent, label) in group.items():
+        if parent in names and child in names:
+            kids.setdefault(parent, []).append((child, label))
     lines = []
-    for name, _, _, one_liner in _SKILL_INDEX:
-        lines.append(f"- {name}: {one_liner}")
+    for name, one_liner in entries:
+        if name in group and group[name][0] in kids:
+            continue
+        line = f"- {name}: {one_liner}"
+        if name in kids:
+            line += " 子技能: " + " / ".join(f"{c}({lb})" if lb else c for c, lb in sorted(kids[name]))
+        lines.append(line)
     return "\n".join(lines)
 
 

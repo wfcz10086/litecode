@@ -1,5 +1,7 @@
 ---
 name: novel-qingxiao
+parent: novel-common
+label: 轻小说
 description: >
   二次元轻小说 (日系风格: 异世界转生 / 日常校园 / 萌系). 特征: 人设突出 / 节奏快 / 视觉化描写 / 高频对话.
   偏短卷 (单卷 80-150 页, 长篇少).

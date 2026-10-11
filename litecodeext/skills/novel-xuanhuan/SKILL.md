@@ -1,5 +1,7 @@
 ---
 name: novel-xuanhuan
+parent: novel-common
+label: 玄幻
 description: >
   玄幻题材小说写作 (斗气/魔法/异界大陆, 非修真东方体系).
   核心: 境界划分清晰 / 家族势力斗争 / 异兽与魔法结合.

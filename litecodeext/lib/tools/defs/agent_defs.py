@@ -170,7 +170,9 @@ AGENT_DEFS = [
                 "Use when the user provides key info worth remembering across sessions: "
                 "project decisions, architecture choices, resolved bugs, user corrections. "
                 "section: which memory section (e.g. 'Key References', 'Completed Work'). "
-                "topic: optional, saves to a separate L2 file for that topic."
+                "topic: optional, saves to a separate L2 file for that topic. "
+                "key: optional short name for a single-valued fact (e.g. 'deploy port'); "
+                "saving the same key again replaces the old value instead of adding a duplicate."
             ),
             "parameters": {
                 "type": "object",
@@ -178,6 +180,7 @@ AGENT_DEFS = [
                     "section": {"type": "string", "description": "Memory section heading"},
                     "content": {"type": "string", "description": "What to remember"},
                     "topic":   {"type": "string", "description": "Optional topic file name for L2 memory"},
+                    "key":     {"type": "string", "description": "Optional fact name; same key overwrites the old value"},
                 },
                 "required": ["section", "content"]
             }

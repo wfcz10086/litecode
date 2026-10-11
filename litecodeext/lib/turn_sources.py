@@ -1,0 +1,84 @@
+"""turn_sources.py — 注册到 lib/turn_context.py 的默认动态上下文来源。
+
+每个来源一个小函数, 互不依赖; 想关掉某个来源 → turn_context.unregister(name),
+想加新来源 → turn_context.register(name, fn, order)。
+"""
+from __future__ import annotations
+
+import re
+
+from . import turn_context as tc
+from .config import CFG, WORKSPACE, HAS_MEMORY_INDEX, memory_index_get
+from .prompt import _detect_auto_delegation, matched_skills_block, PROMPT_FILE
+
+try:
+    from memory import recall as _recall          # 容器 / 服务进程: core 在 sys.path
+except ImportError:                                 # 宿主机测试
+    from core.memory import recall as _recall
+
+
+def _agent_cfg() -> dict:
+    return CFG.get("agent") or {}
+
+
+def delegation(inp: tc.TurnInput) -> str:
+    return _detect_auto_delegation(inp.user_message).strip()
+
+
+_SKILL_MARK = re.compile(r"(?=\[Active Skill: )")
+
+
+def skills(inp: tc.TurnInput) -> str:
+    """匹配到的技能全文随本条消息进历史; 本会话历史里已给过的技能不再重复给。"""
+    block = matched_skills_block(inp.user_message, external=PROMPT_FILE.exists())
+    if not block:
+        return ""
+    seen = tc.seen_in(inp.history)
+    head, *chunks = _SKILL_MARK.split(block)
+    fresh = [c for c in chunks if c[:c.find("]") + 1] not in seen]
+    return head + "".join(fresh) if fresh else ""
+
+
+def memory_index(inp: tc.TurnInput) -> str:
+    if not HAS_MEMORY_INDEX:
+        return ""
+    return memory_index_get(WORKSPACE).search_as_context(inp.user_message, limit=3, max_chars=1500) or ""
+
+
+def memory_recall(inp: tc.TurnInput) -> str:
+    cfg = _agent_cfg()
+    if not cfg.get("memory_recall", True) or not inp.session_id:
+        return ""
+    entries = _recall.load_entries(WORKSPACE / "sessions" / inp.session_id)   # 同 MemoryManager.root
+    if not entries:
+        return ""
+    seen = "\n".join(str(m.get("content") or "") for m in inp.history if isinstance(m, dict))
+    seen += "\n" + tc.seen_in(inp.history)
+    picked = _recall.select(
+        inp.user_message, entries,
+        k=int(cfg.get("memory_recall_k", 5)),
+        pinned=tuple(cfg.get("memory_pinned_sections", ("Vault", "User Preferences"))),
+        seen=seen,
+        max_chars=int(cfg.get("memory_recall_max_chars", 1200)),
+    )
+    return _recall.render(picked)
+
+
+def enabled() -> bool:
+    """config.json agent.turn_context=false → 回到旧行为 (动态块都进 system prompt)。"""
+    return bool(_agent_cfg().get("turn_context", True))
+
+
+def prepare(user_message: str, session_id: str, raw_history: list) -> tuple[str, str, list]:
+    """服务端每轮入口: 返回 (history_anchor, 本轮上下文文本, 拼回发送形态的历史)。
+    raw_history 必须是会话里原样存的历史 (带 KEY 字段), 去重与锚点都按它算。"""
+    from .prompt_snapshot import history_anchor
+    anchor = history_anchor(raw_history, user_message)
+    ctx = tc.build(tc.TurnInput(user_message, session_id or "", raw_history)) if enabled() else ""
+    return anchor, ctx, tc.materialize(raw_history)
+
+
+tc.register("delegation", delegation, order=10)
+tc.register("skills", skills, order=30)
+tc.register("memory_index", memory_index, order=40)
+tc.register("memory_recall", memory_recall, order=50)

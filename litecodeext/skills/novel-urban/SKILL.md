@@ -1,5 +1,7 @@
 ---
 name: novel-urban
+parent: novel-common
+label: 都市
 description: >
   都市题材 (现代 / 当代 / 近未来, 真实城市生活). 主线可叠加: 重生 / 商战 / 豪门 / 兵王 / 医仙.
   核心: 当代生活质感 + 金手指解决现实痛点 + 真实时代感.

@@ -369,24 +369,46 @@ def _load_session_context(session_id: str) -> str:
 
     return "\n\n---\n\n".join(parts) if parts else ""
 
+def _session_context_for(session_id: str, history_anchor: str | None) -> str:
+    """history_anchor 给了就走会话级冻结快照 (lib/prompt_snapshot.py), 否则每次现读。"""
+    if not session_id:
+        return ""
+    if history_anchor is None or not (CFG.get("agent") or {}).get("freeze_session_context", True):
+        return _load_session_context(session_id)
+    from .prompt_snapshot import frozen
+    return frozen(session_id, history_anchor, lambda: _load_session_context(session_id),
+                  session_dir=SESSIONS_DISK / session_id)
+
+
+def matched_skills_block(user_message: str, external: bool = True) -> str:
+    """按用户消息自动匹配的技能 (随消息变化)。"""
+    matched = auto_load_skills(user_message)
+    if not matched:
+        return ""
+    label = "## 已自动加载的匹配 Skills（完整内容）\n" if external else "## 已自动加载的匹配 Skills\n"
+    return label + matched
+
+
 def build_request_system_prompt(user_message: str, session_id: str = None,
-                                strategist: bool = False) -> str:
+                                strategist: bool = False, history_anchor: str | None = None,
+                                include_dynamic: bool = True) -> str:
     """
     Per-request prompt builder。
     优先加载 AGENT_PROMPT.md（热更新），不存在时回退到内置 prompt。
     [v7] 增加任务分发检测: 长文/多步任务自动注入 spawn_agent 强制指令。
     [2026-09-03] strategist=True 时注入权谋/多方博弈推演模式 (prompts/STRATEGIST.md)。
+    include_dynamic=False: 随消息变化的委派指令/匹配技能不放这里, 由调用方经
+    lib/turn_context.py 挂到 user 消息前 (保 KV 前缀缓存)。
     """
-    session_context = _load_session_context(session_id) if session_id else ""
+    session_context = _session_context_for(session_id, history_anchor)
 
     # 热更新：每次请求重新读取外部文件
     ext  = _load_external_prompt(session_context=session_context)
     base = ext if ext is not None else _BASE_PROMPT
-    matched = auto_load_skills(user_message)
     parts   = [base]
 
     # [v7] 任务自动分发检测 -- 强制注入到 prompt 最前面
-    delegation = _detect_auto_delegation(user_message)
+    delegation = _detect_auto_delegation(user_message) if include_dynamic else ""
     if delegation:
         parts.insert(0, delegation)
 
@@ -415,11 +437,10 @@ def build_request_system_prompt(user_message: str, session_id: str = None,
     if _sp_core:
         parts.append("\n\n## Skills 使用元规则（superpowers）\n" + _sp_core)
 
-    # [OPT] P1-A: 技能注入改为摘要 — 只注入名称+一行描述，不注入全文
-    # 旧: 完整 SKILL.md（3K~15K chars）; 新: 摘要 (<500 chars) + load_skill 提示
-    if matched:
-        label = "\n\n## 已自动加载的匹配 Skills（完整内容）\n" if ext is not None else "\n\n## 已自动加载的匹配 Skills\n"
-        parts.append(label + matched)
+    if include_dynamic:
+        skills = matched_skills_block(user_message, external=ext is not None)
+        if skills:
+            parts.append("\n\n" + skills)
     return "".join(parts)
 
 

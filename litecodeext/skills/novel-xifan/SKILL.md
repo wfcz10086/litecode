@@ -1,5 +1,7 @@
 ---
 name: novel-xifan
+parent: novel-common
+label: 西幻
 description: >
   西方奇幻 / DND 风格 (精灵 / 矮人 / 龙 / 骑士 / 法师). 参考《魔戒》《冰火》《魔兽》.
   与玄幻(东方)的区别: 职业制 / 种族多样 / 神系复杂 / 中世纪美学.

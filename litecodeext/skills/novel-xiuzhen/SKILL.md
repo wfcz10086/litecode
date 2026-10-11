@@ -1,5 +1,7 @@
 ---
 name: novel-xiuzhen
+parent: novel-common
+label: 修真仙侠
 description: >
   修真/仙侠题材 (东方道教体系, 炼气筑基金丹元婴化神合体大乘渡劫).
   核心: 长生追求 / 师门传承 / 渡劫飞升.

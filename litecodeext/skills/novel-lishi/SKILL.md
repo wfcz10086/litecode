@@ -1,5 +1,7 @@
 ---
 name: novel-lishi
+parent: novel-common
+label: 历史
 description: >
   历史 / 穿越历史题材 (秦汉 / 唐 / 宋 / 明 / 清 / 民国).
   核心: 史实 60% + 虚构 40%, 不扭曲重大历史节点.
