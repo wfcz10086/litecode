@@ -27,5 +27,15 @@
   "status.checking": "检查中…",
   "status.select_session": "选择一个会话",
   "welcome.subtitle": "具备工具调用、记忆和多代理流水线的 AI 助手。",
-  "i18n.toggle": "🌐 中/EN"
+  "i18n.toggle": "🌐 中/EN",
+  "nav.group.daily": "日常",
+  "nav.group.connect": "接入",
+  "nav.group.ops": "运维",
+  "sug.pdf.label": "总结 PDF",
+  "sug.timer.label": "每日简报",
+  "sug.search.label": "深度搜索",
+  "sug.dag.label": "搭一条流水线",
+  "sug.image.label": "看懂截图",
+  "sug.code.label": "分析项目",
+  "sug.chat.label": "陪我聊聊"
 }

@@ -856,4 +856,5 @@ async def health():
 
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
+    # /act 无鉴权, 默认只监听本机; 确需远程访问再显式设置 BROWSER_AGENT_HOST
+    uvicorn.run(app, host=os.environ.get("BROWSER_AGENT_HOST", "127.0.0.1"), port=PORT, log_level="warning")

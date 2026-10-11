@@ -494,6 +494,12 @@ def _enhance_tool_error(tool_name: str, result: str, args: dict) -> str:
                                      "Connection refused", "No route")):
         hints.append("该域名不可达，请改用 web_search 工具或已配置的搜索源")
 
+    # 端口被占: 本机临时端口范围可能覆盖到目标端口, 出站连接会短暂占用它作源端口
+    if "Address already in use" in result or "EADDRINUSE" in result:
+        hints.append("端口被占用: 先 `ss -ltnp | grep :<端口>` 看有没有进程在监听; 有就复用或换端口。"
+                     "没有监听者时多半是出站连接临时占用了该端口作源端口 (`ss -tan | grep :<端口>` 可见), "
+                     "等 3-5 秒重试即可, 不需要改代码")
+
     # ImportError / ModuleNotFoundError
     if "ModuleNotFoundError" in result or "ImportError" in result:
         mod = re.search(r"No module named '(\S+?)'", result)

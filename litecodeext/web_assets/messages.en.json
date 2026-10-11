@@ -27,5 +27,15 @@
   "status.checking": "Checking...",
   "status.select_session": "Select a session",
   "welcome.subtitle": "AI assistant with tools, memory, and multi-agent pipelines.",
-  "i18n.toggle": "🌐 中/EN"
+  "i18n.toggle": "🌐 中/EN",
+  "nav.group.daily": "Daily",
+  "nav.group.connect": "Connect",
+  "nav.group.ops": "Ops",
+  "sug.pdf.label": "Summarize a PDF",
+  "sug.timer.label": "Daily briefing",
+  "sug.search.label": "Deep search",
+  "sug.dag.label": "Build a pipeline",
+  "sug.image.label": "Read a screenshot",
+  "sug.code.label": "Analyze a project",
+  "sug.chat.label": "Just chat"
 }

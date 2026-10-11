@@ -1,3 +1,8 @@
+---
+name: browser-control
+description: 通过 CDP 控制容器内常驻 Chrome(DISPLAY :99, VNC 18800, CDP 9222):打开网页、点击、填表、截图、需要登录态的页面操作。触发:浏览器操作、网页自动化、点击、填表、截图、CDP。
+---
+
 # Browser Control Skill
 
 > 通过 CDP (Chrome DevTools Protocol) 控制容器内持久 Chrome 浏览器。

@@ -78,6 +78,12 @@ def smart_auto_memory(
     conversation = "\n".join(snippet_parts)
     prompt = SMART_MEMORY_PROMPT.format(conversation=conversation[:4000])
 
+    try:
+        from lib.side_model import resolve as _resolve_side
+        vllm_url, model_id, api_key = _resolve_side("memory", vllm_url, model_id, api_key)
+    except ImportError:
+        pass
+
     _LLM_MAX_ATTEMPTS = int(_CFG_MEM.get("smart_memory_attempts", 3))
     _LLM_MAX_TOKENS   = int(_CFG_MEM.get("smart_memory_max_tokens", 20000))
     _LLM_TIMEOUT_S    = int(_CFG_MEM.get("smart_memory_timeout", 120))

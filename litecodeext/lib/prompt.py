@@ -86,6 +86,14 @@ def _build_search_sources_text() -> tuple:
         intl_lines.append(f"{i+1}. {src['name']}: `{src['url_template']}`")
     return "\n".join(domestic_lines) or "(未配置)", "\n".join(intl_lines) or "(未配置)"
 
+def _render_datetime(tpl: str) -> str:
+    """{{DATETIME}} 只精确到日期。
+    system prompt 及模板排在其后的 tools 定义 (~5 万字) 是 KV 前缀缓存的主体,
+    任何按分钟变化的内容都会让它整段失效、每轮重新 prefill; 精确时刻由模型调工具取。"""
+    from datetime import datetime as _dt
+    return tpl.replace("{{DATETIME}}", _dt.now().strftime("%Y-%m-%d (%A)") + " (精确时刻请用工具查询)")
+
+
 def _load_external_prompt(session_context: str = "") -> str | None:
     """
     热更新加载 AGENT_PROMPT.md。
@@ -104,9 +112,7 @@ def _load_external_prompt(session_context: str = "") -> str | None:
         return None
     try:
         tpl = PROMPT_FILE.read_text(errors="replace")
-        #  注入当前日期时间，让模型知道"今天是哪天"
-        from datetime import datetime as _dt
-        tpl = tpl.replace("{{DATETIME}}", _dt.now().strftime("%Y-%m-%d %H:%M (%A)"))
+        tpl = _render_datetime(tpl)
         tpl = tpl.replace("{{ENV}}", _get_env_probe())
         tpl = tpl.replace("{{SKILLS}}", load_skills_index() or "(暂无 Skills)")
 

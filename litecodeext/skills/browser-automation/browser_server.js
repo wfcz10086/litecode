@@ -28,6 +28,8 @@ const os = require('os');
 
 // ── 配置 ────────────────────────────────────────────────────────
 const PORT       = parseInt(process.env.BROWSER_AGENT_PORT || '19000', 10);
+// /act 支持 eval 且无鉴权, 默认只监听本机; 确需远程访问再显式设置 BROWSER_AGENT_HOST
+const HOST       = process.env.BROWSER_AGENT_HOST || '127.0.0.1';
 const CHROME_BIN = process.env.CHROME_BIN || '/usr/bin/google-chrome';
 const DISPLAY    = process.env.DISPLAY || ':99';
 const STATE_DIR  = process.env.SESSIONS_DIR || '/data/sessions';
@@ -543,7 +545,7 @@ async function _shutdown() {
 process.on('SIGTERM', _shutdown);
 process.on('SIGINT', _shutdown);
 
-app.listen(PORT, '0.0.0.0', () => {
+app.listen(PORT, HOST, () => {
   console.log(`[BAS-Node] listening on http://0.0.0.0:${PORT}`);
   console.log(`[BAS-Node] chrome=${CHROME_BIN}  idle_timeout=${IDLE_MS}ms (${IDLE_MS / 60000}min)`);
 });

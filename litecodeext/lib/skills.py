@@ -23,6 +23,34 @@ _STOP = {
 # Skill keyword index: [(name, keyword_set, full_text, one_liner)]
 _SKILL_INDEX: list = []
 
+
+def _frontmatter(txt: str) -> dict:
+    """解析 SKILL.md 头部 `---` 包裹的 YAML。支持 `>`/`|` 多行与引号值; 无 PyYAML 时退回逐行解析。"""
+    m = re.match(r"\s*---\s*\n(.*?)\n---", txt, re.S)
+    if not m:
+        return {}
+    block = m.group(1)
+    try:
+        import yaml
+        data = yaml.safe_load(block)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        pass
+    out, key = {}, None
+    for line in block.splitlines():
+        km = re.match(r"([A-Za-z_][\w-]*):\s*(.*)$", line)
+        if km and not line.startswith((" ", "\t")):
+            key, val = km.group(1), km.group(2).strip()
+            out[key] = "" if val in (">", "|", ">-", "|-") else val.strip("\"'")
+        elif key and line.strip():
+            out[key] = (out[key] + " " + line.strip()).strip()
+    return out
+
+
+def _one_liner(desc: str, limit: int = 120) -> str:
+    flat = " ".join(str(desc).split())
+    return flat if len(flat) <= limit else flat[:limit].rstrip() + "…"
+
 def _build_skill_index():
     _SKILL_INDEX.clear()  # 就地清空，保持引用不变（import 安全）
     if not SKILLS_DIR.exists():
@@ -32,9 +60,8 @@ def _build_skill_index():
             txt  = md.read_text(errors="replace")
             name = md.parent.name
 
-            m    = re.search(r"description:\s*(.+?)(?:\n---|$)", txt, re.S)
-            desc = m.group(1).strip() if m else ""
-            one_liner = desc.split("\n")[0][:120]
+            desc = str(_frontmatter(txt).get("description") or "")
+            one_liner = _one_liner(desc)
 
             km   = re.search(r"##\s*[Kk]eyword.+?\n(.+?)(?:\n##|\Z)", txt, re.S | re.I)
             kw_s = km.group(1) if km else ""
@@ -66,7 +93,7 @@ def load_skills_index() -> str:
     """One-liner index of all skills for system prompt."""
     lines = []
     for name, _, _, one_liner in _SKILL_INDEX:
-        lines.append(f"- {name}: {one_liner}  [path: skills/{name}/SKILL.md]")
+        lines.append(f"- {name}: {one_liner}")
     return "\n".join(lines)
 
 

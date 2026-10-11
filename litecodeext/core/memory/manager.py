@@ -37,6 +37,17 @@ def _wire(mid: str) -> str:
         return mid
 
 
+def _section_has_entry(text: str, heading: str, entry: str) -> bool:
+    """heading 段落 (到下一个 `## ` 为止) 里是否已有完全相同的条目行。"""
+    start = text.find(heading + "\n")
+    if start < 0:
+        return False
+    body_start = start + len(heading) + 1
+    end = text.find("\n## ", body_start)
+    body = text[body_start:] if end < 0 else text[body_start:end]
+    return entry.strip() in (line.strip() for line in body.splitlines())
+
+
 class MemoryManager:
     """Per-session 记忆管理器.
     - 压缩用本地 vLLM backend (直连, 不经过 litecode_server 自身)
@@ -399,6 +410,8 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                     text, flags=_re2.DOTALL,
                 )
             else:
+                if _section_has_entry(text, heading, entry):
+                    return
                 text = text.replace(heading, f"{heading}\n{entry}", 1) if heading in text \
                        else text + f"\n{heading}\n{entry}\n"
             lines = text.splitlines()

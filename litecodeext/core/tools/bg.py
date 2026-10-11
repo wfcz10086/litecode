@@ -15,6 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
+import shlex
 import threading
 import time
 import uuid
@@ -31,6 +34,17 @@ from lib.config import WORKSPACE, log
 _bg_procs: dict = {}
 _bg_lock  = threading.Lock()
 
+
+
+def _as_bash(cmd: str) -> str:
+    """把模型给的整条命令交给 bash -c 执行。
+    nohup/timeout 只能 exec 可执行文件: `nohup cd x && y` 里 nohup 去执行 cd 必然失败,
+    `&&` 后面的服务永远起不来。末尾的 `&` 和开头的 nohup 由调用方负责, 这里剥掉。"""
+    c = cmd.strip()
+    while c.endswith("&") and not c.endswith("&&"):
+        c = c[:-1].rstrip()
+    c = re.sub(r"^nohup\s+", "", c)
+    return f"bash -c {shlex.quote(c)}"
 
 def _bg_state_path() -> Path:
     """BG registry 持久化文件，server 重启后可恢复"""
@@ -93,7 +107,17 @@ def list_bg_for_session(sid: str) -> dict:
 
 
 async def kill_bg_pid(pid: str, signal: int = 15) -> bool:
-    """kill 单个 pid（SIGTERM=15, SIGKILL=9）"""
+    """结束后台进程（SIGTERM=15, SIGKILL=9）。
+    每次 _exec_bg 都以 start_new_session 启动, 自成一个进程组; 按组发信号,
+    npm/uvicorn --reload 这类再 fork 子进程的命令才不会留下占端口的孤儿。"""
+    try:
+        pgid = os.getpgid(int(pid))
+        if pgid != os.getpgid(0):
+            os.killpg(pgid, signal)
+            _unregister_bg(pid)
+            return True
+    except (ProcessLookupError, PermissionError, ValueError):
+        pass
     try:
         proc = await asyncio.create_subprocess_exec(
             "kill", f"-{signal}", pid,
@@ -168,7 +192,7 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
     # 子进程会持有原 shell 的 stdout fd 不让关 → 10s 超时. 改用 readline 只取 PID 行,
     # 拿到 PID 就走, 不等 shell 完整结束.
     # </dev/null 关闭 stdin 防止 chrome 等 stdin.
-    bg_cmd = f"nohup {cmd} </dev/null >{log_file} 2>&1 & echo $!"
+    bg_cmd = f"nohup {_as_bash(cmd)} </dev/null >{log_file} 2>&1 & echo $!"
     try:
         proc = await asyncio.create_subprocess_shell(
             bg_cmd,
@@ -228,7 +252,7 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
                     _cmd_diag = _re_d.sub(r"\s*>\s*\S+\s*2>&1\s*$", "", _cmd_diag)
                     _cmd_diag = _re_d.sub(r"\s*>\s*\S+\s*2>\s*\S+\s*$", "", _cmd_diag)
                     _dp = await asyncio.create_subprocess_shell(
-                        f"timeout 5 {_cmd_diag} 2>&1",
+                        f"timeout 5 {_as_bash(_cmd_diag)} 2>&1",
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.STDOUT,
                         cwd=str(WORKSPACE),

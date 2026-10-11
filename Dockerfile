@@ -147,7 +147,7 @@ RUN pip3 install --break-system-packages psycopg2-binary pymysql || \
 # 4c: 浏览器
 RUN pip3 install --break-system-packages selenium || true
 # 4d: MCP + 加密 + qrcode
-RUN pip3 install --break-system-packages mcp cryptography pycryptodome qrcode || true
+RUN pip3 install --break-system-packages mcp cryptography pycryptodome qrcode paramiko || true
 
 # Group 5: 微信桥（pip 包名 wechatbot-sdk, import 名 wechatbot）
 RUN pip3 install --break-system-packages wechatbot-sdk==0.2.0 || \

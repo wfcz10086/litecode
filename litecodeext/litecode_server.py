@@ -46,6 +46,8 @@ from lib.stats import stats_load as _stats_load, stats_save as _stats_save, stat
 from lib.guard_stats import GuardStats as _GuardStats
 from lib.stats import questions_load as _questions_load, questions_append as _questions_append
 from lib.transport import vllm_stream as _vllm_stream, parse_text_tool_calls as _parse_text_tool_calls
+from lib.tool_args import parse_tool_args as _parse_tool_args
+from lib.reasoning_limits import stall_limits as _reasoning_stall_limits, RepeatLineDetector as _RepeatLineDetector, salvage_note as _reasoning_salvage
 from lib.session import (
     get_history as _get_history, save_history as _save_history,
     wal_append as _wal_append,
@@ -850,7 +852,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
         #   1) 短句 (≤50字) 在最近 8 行里重复 ≥4 次 → 立即中断
         #   2) reasoning 累积 > 3000 字但仍无 content/tool_call → 中断
         _loop_reasoning_chars = 0      # reasoning 累积字数
-        _loop_reasoning_lines: list = []  # 最近 8 行 reasoning (清洗后)
+        _loop_detector = _RepeatLineDetector()  # 最近 8 个完整推理行的复读检测
         loop_broken = False
         _reasoning_nudge_sent = False  # [v4 2026-07] 5000c nudge, 7000c 断 (原 12000/13500)
         # [FIX] 累加本轮 reasoning 原文，用于 "只推理不干活" 的回落持久化。
@@ -960,18 +962,10 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         full_reasoning += _rc_clean
                         # [v1.4] 死循环检测
                         _loop_reasoning_chars += len(_reasoning_chunk)
-                        # 按换行切, 清洗后只留非空短行 (长句很少重复, 不检测)
-                        for _ln in _reasoning_chunk.split("\n"):
-                            _ln_strip = _ln.strip()
-                            if _ln_strip and len(_ln_strip) <= 50:
-                                _loop_reasoning_lines.append(_ln_strip)
-                                _loop_reasoning_lines = _loop_reasoning_lines[-8:]
-                        # 8 行里不同内容 ≤2 → 循环
-                        if (len(_loop_reasoning_lines) >= 6
-                                and len(set(_loop_reasoning_lines)) <= 2):
+                        if _loop_detector.feed(_reasoning_chunk):
                             log.warning(
                                 f"  [REASONING-LOOP] detected, breaking stream. "
-                                f"recent={list(set(_loop_reasoning_lines))[:2]}"
+                                f"recent={_loop_detector.recent()}"
                             )
                             _loop_msg = ("\n（思考绕进了同一个圈子里，已经先停下来了，"
                                          "换个问法或补充点细节再试一次吧。）\n")
@@ -979,12 +973,9 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             yield sse_content(_loop_msg, model)
                             loop_broken = True
                             break
-                        # [v4 2026-07] 阈值收紧: nudge 5000c / 中断 7000c
-                        # 之前 12000/13500 → 模型每轮浪费 13500c, 多轮累计"几万字".
-                        # 现在 5000c nudge → 7000c 断, 每轮最多浪费 7000c.
-                        # 叠加 reasoning_stall_count 跨迭代升级约束.
-                        _nudge_thresh = 5000
-                        _break_thresh = 7000
+                        # 字数阈值随当前模型 thinking_budget 变化 (见 lib/reasoning_limits.py),
+                        # 下限 7000c; 叠加 reasoning_stall_count 跨迭代升级约束.
+                        _nudge_thresh, _break_thresh = _reasoning_stall_limits()
                         if (_loop_reasoning_chars > _nudge_thresh
                                 and _loop_reasoning_chars <= _nudge_thresh + 200
                                 and not full_text and not acc_tools
@@ -1074,7 +1065,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         last_yield_ts = time.time()
                         # [v1.4] 有实质内容 → 重置死循环计数
                         _loop_reasoning_chars = 0
-                        _loop_reasoning_lines.clear()
+                        _loop_detector.reset()
 
                     for tc in delta.get("tool_calls", []):
                         idx = tc.get("index", 0)
@@ -1092,7 +1083,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         acc_tools[idx]["arguments"] += fn.get("arguments") or ""
                         # [v1.4] 有 tool_call 进来 → 重置死循环计数
                         _loop_reasoning_chars = 0
-                        _loop_reasoning_lines.clear()
+                        _loop_detector.reset()
                         _reasoning_nudge_sent = False  # [v2 2026-05] 一并重置 nudge 状态
 
                     # [OPT] P0-C: 工具参数累积期间发送心跳，防止客户端 read timeout
@@ -1959,11 +1950,12 @@ async def agent_stream(
                         )
                     else:
                         _constraint = (
-                            "[SYSTEM] 上一轮你陷入了推理复述循环 (没有 emit 任何 tool_call / content). "
-                            "现在要求: 1) 直接调用一个合适的 tool 或用 2-3 句话回答用户; "
-                            "2) 不要在 reasoning 里反复说'我先搜索X'或'我先查Y'; "
-                            "3) 如果搜索确实需要, 调用 web_search 工具就对了, 不要反复思考."
+                            "[SYSTEM] 上一轮思考过长被中断, 没有产出工具调用或正文. "
+                            "现在要求: 1) 直接调用一个合适的工具动手, 或用 2-3 句话回答用户; "
+                            "2) 大段产出 (代码 / 页面 / 文档) 直接写进工具参数, 不要先在思考里打完整草稿; "
+                            "3) 不要在思考里反复评估同一个方案."
                         )
+                    _constraint += _reasoning_salvage(_full_reasoning)
                     _ctx.messages.append({"role": "user", "content": _constraint})
                     _ctx.tracer.iteration_end("LOOP-BREAK", f"reasoning loop cut (stall #{_reasoning_stall_count})")
                     # 不 break agent 主循环 — 让下一轮带约束重试, 但计数继续防止无限
@@ -2116,10 +2108,12 @@ async def agent_stream(
 
                     for tc in tool_call_list:
                         fn_name = tc["function"]["name"]
-                        try:
-                            fn_args = json.loads(tc["function"]["arguments"] or "{}")
-                        except Exception:
-                            fn_args = {}
+                        fn_args, _args_err = _parse_tool_args(tc["function"]["arguments"], fn_name)
+                        if _args_err:
+                            tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _args_err})
+                            _ctx.tracer.tool_call(name=fn_name, args={}, result=_args_err, elapsed=0, is_error=True)
+                            log.warning(f"  [TOOL-ARGS] {fn_name} 参数非法 JSON, 已回给模型重发")
+                            continue
 
                         # ── [TOOL-LOOP] 主循环工具重复死循环检测 (S1-D → plugins/tools/guard.py) ──
                         _tl_blocked, _tl_warn, _tl_sig = _tool_loop_guard.check(fn_name, fn_args)
@@ -2651,8 +2645,10 @@ async def agent_stream(
                             # 追加到最后一个 tool result（agent 紧接着就能看到）
                             if tool_results:
                                 tool_results[-1]["content"] += "\n\n" + _test_inject
-                                if _ctx.messages and _ctx.messages[-1].get("role") == "tool":
-                                    _ctx.messages[-1]["content"] += "\n\n" + _test_inject
+                                _last = _ctx.messages[-1] if _ctx.messages else None
+                                # tool_results 里的 dict 往往就是 messages 末尾那个对象, 别追加两遍
+                                if _last is not None and _last is not tool_results[-1] and _last.get("role") == "tool":
+                                    _last["content"] += "\n\n" + _test_inject
                             # 同时作为独立 user 消息（双重保险）
                             _ctx.messages.append({"role": "user", "content": _test_inject})
                             _ctx.new_msgs.append({"role": "user", "content": _test_inject})

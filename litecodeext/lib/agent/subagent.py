@@ -24,6 +24,7 @@ from ..config import (
 )
 from ..tools.defs import TOOL_DEFS
 from ..transport import vllm_stream as _vllm_stream
+from ..tool_args import parse_tool_args as _parse_tool_args
 from ..sse import sse_status, sse_content
 
 SUBAGENT_TELEMETRY_DIR = WORKSPACE / "telemetry"
@@ -671,12 +672,11 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
         _loop_break_count = 0
         for i in sorted(acc_tools):
             tc = acc_tools[i]
-            try:
-                fn_args = json.loads(tc["arguments"] or "{}")
-            except Exception:
-                fn_args = {}
-
             fn_name = tc["name"]
+            fn_args, _args_err = _parse_tool_args(tc["arguments"], fn_name)
+            if _args_err:
+                tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _args_err})
+                continue
 
             # [loop-detect-2026-05] 循环检测: 同一签名 (tool, path/args) 在最近 8 次调用里
             # 已出现 ≥ 3 次 → 这次是第 4 次, 强制 break. 给 LLM 3 次机会 (写/改/重写),

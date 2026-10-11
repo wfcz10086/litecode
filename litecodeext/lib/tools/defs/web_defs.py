@@ -65,9 +65,9 @@ WEB_DEFS = [
         "function": {
             "name": "browser_login",
             "description": (
-                "[P34-d-1] 真浏览器自动登录: goto → extract_form → 智能匹配 user/pwd selector → "
+                "真浏览器自动登录: goto → extract_form → 智能匹配 user/pwd selector → "
                 "fill → click 登录按钮 → 检查跳转 + 截图. 适合需要登录后才能拿数据的场景 "
-                "(SaaS / 内部后台 / LiteCode WebUI 自检). 只密码型 (LiteCode CHANGE_ME_PASSWORD) 和"
+                "(SaaS / 内部后台 / LiteCode WebUI 自检). 只密码型 (如 LiteCode WebUI) 和"
                 "用户名+密码型 (大多数 SaaS) 都覆盖. 返回: {ok, msg, url, fields_filled, selectors, screenshot}."
             ),
             "parameters": {

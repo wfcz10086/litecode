@@ -16,7 +16,7 @@ _USER_INFO_PATTERNS = [
 _TOOLS_PATTERNS = [
     _re.compile(r'(?:port|端口)\s*[:=]?\s*(\d{4,5})'),
     _re.compile(r'(?:Written|created|saved|写入)\s+.*?->\s+(/\S+)'),
-    _re.compile(r'http://(?:localhost|0\.0\.0\.0|127\.0\.0\.1):(\d+)(/\S*)?\s'),
+    _re.compile(r'http://(?:localhost|0\.0\.0\.0|127\.0\.0\.1):(\d+)(/[A-Za-z0-9\-._~/?#=&%+]*)?'),
 ]
 
 
@@ -49,7 +49,7 @@ def extract_services(messages: list) -> list:
         for pattern in _TOOLS_PATTERNS:
             for match in pattern.finditer(content):
                 services.append(match.group(0).strip())
-    return services
+    return list(dict.fromkeys(services))
 
 
 def auto_update_user_md(
