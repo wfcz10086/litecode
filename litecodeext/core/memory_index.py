@@ -122,6 +122,13 @@ class MemoryIndex:
         返回: 记录 ID
         """
         conn = self._get_conn()
+        # 同类同内容已存在 → 只刷新时间, 不再插重复行 (自动捕获每轮都会重抓同一句)
+        dup = conn.execute("SELECT id FROM memories WHERE category = ? AND content = ? LIMIT 1",
+                           (category, content[:2000])).fetchone()
+        if dup:
+            conn.execute("UPDATE memories SET created_at = ? WHERE id = ?", (time.time(), dup[0]))
+            conn.commit()
+            return dup[0]
         cur = conn.execute(
             "INSERT INTO memories (session_id, category, content, solution, tags, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",

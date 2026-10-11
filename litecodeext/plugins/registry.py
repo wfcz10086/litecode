@@ -41,16 +41,40 @@ class Registry:
     def __init__(self) -> None:
         self._plugins: dict[str, PluginSpec] = {}
         self._load_errors: list[tuple[str, str]] = []   # (path, err)
+        self._bridge: Optional[dict[str, PluginSpec]] = None
 
     # ── 查询 ─────────────────────────────────────────
     def get(self, name: str) -> Optional[PluginSpec]:
-        return self._plugins.get(name)
+        return self._plugins.get(name) or self.bridged().get(name)
+
+    def bridged(self) -> dict[str, PluginSpec]:
+        """主 agent 的 handler 工具 (插件里没有的), 包成插件契约给 DAG 工具步用。
+        汇总规则见 lib/tool_registry.py; 主 agent 侧不受影响。list() 仍只列真插件。"""
+        if self._bridge is None:
+            if not self._plugins:
+                self.scan()          # 先扫真插件, 汇总时才知道哪些名字插件已有
+            bridge: dict[str, PluginSpec] = {}
+            try:
+                from lib.tool_registry import unified, agent_runner
+                idx = unified(refresh=True)
+                for n in idx.dag_bridge_names():
+                    e = idx.entries[n]
+                    bridge[n] = PluginSpec(
+                        name=n, description=e.description,
+                        schema=e.parameters or {"type": "object", "properties": {}},
+                        capabilities=dict(e.capabilities), run=agent_runner(n),
+                        source_path="core/tools/handlers", origin="agent",
+                    )
+            except Exception as e:   # 主 agent 模块不在 (如独立跑插件) → 只用真插件
+                log.warning("agent tool bridge unavailable: %r", e)
+            self._bridge = bridge
+        return self._bridge
 
     def list(self) -> list[PluginSpec]:
         return list(self._plugins.values())
 
     def names(self) -> set[str]:
-        return set(self._plugins.keys())
+        return set(self._plugins.keys()) | set(self.bridged().keys())
 
     def openai_tools(self) -> list[dict]:
         return [s.to_openai_tool() for s in self._plugins.values() if not s.load_error]
@@ -63,6 +87,7 @@ class Registry:
         """全量重扫. 返回加载成功的插件数量."""
         self._plugins.clear()
         self._load_errors.clear()
+        self._bridge = None
 
         for p in self._internal_candidates():
             self._try_load(p, origin="internal")
@@ -171,5 +196,5 @@ registry = Registry()
 
 def scan_once_if_empty() -> None:
     """启动路径的懒扫描 — 不重复扫."""
-    if not registry.names():
+    if not registry.list():
         registry.scan()

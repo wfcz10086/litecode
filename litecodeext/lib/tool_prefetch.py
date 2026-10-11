@@ -12,12 +12,10 @@ from __future__ import annotations
 import asyncio
 from typing import Awaitable, Callable
 
-READ_ONLY = frozenset({
-    "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",
-    "web_fetch", "web_search", "github_search_issues", "stackoverflow_search", "search_code_error",
-    "tail_log", "list_skills", "git_status", "git_diff", "git_log",
-    "list_bg", "list_timers", "snapshot_list", "task_list", "ssh_list_hosts",
-})
+from .tool_registry import read_only_names
+
+# 只读白名单来自 lib/tool_capabilities.py 的 read_only 标注 (统一注册表的能力字段)
+READ_ONLY = read_only_names()
 
 
 def plan(tool_calls: list, parse: Callable) -> list[tuple[str, str, dict]]:

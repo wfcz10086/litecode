@@ -1,5 +1,6 @@
 """lib/skills.py — Skill 索引构建 + 关键词自动匹配 + CN 别名映射"""
 import re
+from .skill_match import score as _match_score, boilerplate as _boilerplate, alias_hit as _alias_hit
 import time
 import json
 from pathlib import Path
@@ -23,6 +24,7 @@ _STOP = {
 # Skill keyword index: [(name, keyword_set, full_text, one_liner)]
 _SKILL_INDEX: list = []
 _SKILL_GROUP: dict = {}   # 子技能名 → (父技能名, 短标签), 来自 frontmatter parent/label
+_SKILL_DROP: list = [frozenset()]   # 高频套话词, 建索引时算 (lib/skill_match.py)
 
 
 def _frontmatter(txt: str) -> dict:
@@ -93,6 +95,7 @@ def _build_skill_index():
             _SKILL_INDEX.append((name, keywords, txt[:10000], one_liner))
         except Exception:
             pass
+    _SKILL_DROP[0] = _boilerplate([kw for _, kw, _, _ in _SKILL_INDEX])
 
 def load_skills_index() -> str:
     """One-liner index of all skills for system prompt.
@@ -395,7 +398,7 @@ def auto_load_skills(user_message: str) -> str:
         '.py', '.js', '.ts', '.go', '.md', '.csv', '.xlsx', '.pdf',
     }
     # [2026-07-26] 短消息直接命中别名时豁免门控 (companion/mao-zedong 靠短消息触发)
-    _has_alias_hit = any(alias in msg_lower for alias in _CN_SKILL_MAP)
+    _has_alias_hit = any(_alias_hit(alias, msg_lower) for alias in _CN_SKILL_MAP)
     if (len(user_message) < 50
             and not any(k in msg_lower for k in _TOOL_INTENT_KEYWORDS)
             and not _has_alias_hit):
@@ -419,19 +422,20 @@ def auto_load_skills(user_message: str) -> str:
 
     # 1. Direct alias lookup
     for alias, skill_name in _CN_SKILL_MAP.items():
-        if alias in msg_lower:
+        if _alias_hit(alias, msg_lower):
             for name, _, content, _ in _SKILL_INDEX:
                 if name == skill_name and name not in matched:
                     matched[name] = (content, 10)  # high score for direct match
 
     # 2. Keyword overlap
+    # 打分规则见 lib/skill_match.py: 互相包含的片段折叠、功能词与高频套话不计分
     msg_all = (msg_words - _STOP) | msg_exts | msg_cn
     for name, keywords, content, _ in _SKILL_INDEX:
         if name in matched:
             continue
-        overlap = keywords & msg_all
-        if len(overlap) >= 2:
-            matched[name] = (content, len(overlap))
+        n_hit, _ = _match_score(keywords, msg_all, _SKILL_DROP[0])
+        if n_hit >= 2:
+            matched[name] = (content, n_hit)
 
     if not matched:
         _emit_skill_telemetry(user_message, {}, gated=False)
