@@ -15,6 +15,12 @@ try:
     from memory import recall as _recall          # 容器 / 服务进程: core 在 sys.path
 except ImportError:                                 # 宿主机测试
     from core.memory import recall as _recall
+try:
+    import project_sessions as _proj
+    from projects import ProjectStore as _ProjectStore
+except ImportError:
+    from core import project_sessions as _proj
+    from core.projects import ProjectStore as _ProjectStore
 
 
 def _agent_cfg() -> dict:
@@ -64,6 +70,21 @@ def memory_recall(inp: tc.TurnInput) -> str:
     return _recall.render(picked)
 
 
+def project(inp: tc.TurnInput) -> str:
+    """会话属于某个项目时附上项目指令 / 工作目录 / 项目文档。
+    内容不变就只给一次 (首行带指纹, 历史里有同一行即跳过); 用户改了指令, 下一条消息重新给。"""
+    if not inp.session_id:
+        return ""
+    store = _ProjectStore(WORKSPACE)
+    meta = _proj.project_of(store, inp.session_id)
+    if not meta:
+        return ""
+    block = _proj.context_block(store, meta)
+    if not block or block.split("\n", 1)[0] in tc.seen_in(inp.history):
+        return ""
+    return block
+
+
 def enabled() -> bool:
     """config.json agent.turn_context=false → 回到旧行为 (动态块都进 system prompt)。"""
     return bool(_agent_cfg().get("turn_context", True))
@@ -78,6 +99,7 @@ def prepare(user_message: str, session_id: str, raw_history: list) -> tuple[str,
     return anchor, ctx, tc.materialize(raw_history)
 
 
+tc.register("project", project, order=5)
 tc.register("delegation", delegation, order=10)
 tc.register("skills", skills, order=30)
 tc.register("memory_index", memory_index, order=40)

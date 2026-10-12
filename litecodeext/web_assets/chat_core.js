@@ -38,8 +38,9 @@ function renderSL(){
     const isPinned=pinned.has(s.id);
     const star=isPinned?'★':'☆';
     const ago=_fmtAgo(s.last_used||s.created);
-    return`<div class="si${s.id===cur?' act':''}" onclick="swS('${s.id}')"><div style="flex:1;min-width:0"><div class="sn">${isPinned?'<span style="color:var(--ac);margin-right:2px">★</span>':''}${icon}${esc(s.name)}</div><div class="sm">${s.count}条 · ${ago}</div></div><button class="sdl" onclick="event.stopPropagation();pinSess('${s.id}')" title="标星" style="margin-right:2px;color:${isPinned?'var(--ac)':'var(--tx3)'}">${star}</button><button class="sdl" onclick="event.stopPropagation();delS('${s.id}')">✕</button></div>`;
+    return`<div class="si${s.id===cur?' act':''}" data-sid="${esc(s.id)}" onclick="swS('${s.id}')"><div style="flex:1;min-width:0"><div class="sn">${isPinned?'<span style="color:var(--ac);margin-right:2px">★</span>':''}${icon}${esc(s.name)}</div><div class="sm">${s.count}条 · ${ago}</div></div><button class="sdl" onclick="event.stopPropagation();pinSess('${s.id}')" title="标星" style="margin-right:2px;color:${isPinned?'var(--ac)':'var(--tx3)'}">${star}</button><button class="sdl" onclick="event.stopPropagation();delS('${s.id}')">✕</button></div>`;
   }).join('');
+  if (window.LCProjects) try { LCProjects.decorate(el); } catch (e) {}
   // 滚动到当前 active item
   const act = el.querySelector('.si.act');
   if (act && act.scrollIntoView) try { act.scrollIntoView({block:'nearest',behavior:'instant'}); } catch(e){}

@@ -12,6 +12,11 @@ from routers.state import S
 router = APIRouter()
 
 
+def _sessions_mod():
+    from core import project_sessions
+    return project_sessions
+
+
 def _project_store():
     """Lazy import + workspace 路径解析."""
     from core.projects import ProjectStore
@@ -64,8 +69,13 @@ async def api_projects_get(pid: str, request: Request):
 async def api_projects_update(pid: str, request: Request):
     require_auth(request)
     body = await request.json()
-    allowed = {"name", "description", "status", "tags", "project_type"}
+    allowed = {"name", "description", "status", "tags", "project_type", "workspace"}
     fields = {k: v for k, v in body.items() if k in allowed}
+    if "workspace" in fields:
+        ws = str(fields["workspace"] or "").strip()
+        if ws and not Path(ws).is_dir():
+            return JSONResponse({"error": f"目录不存在: {ws}"}, status_code=400)
+        fields["workspace"] = ws
     m = _project_store().update(pid, **fields)
     if not m:
         return JSONResponse({"error": "not found"}, status_code=404)
@@ -192,19 +202,55 @@ async def api_projects_decisions_clear(pid: str, request: Request):
 
 @router.post("/api/projects/{pid}/sessions")
 async def api_projects_bind_session(pid: str, request: Request):
+    """把会话挪进项目 (一个会话只属于一个项目, 会先从原项目摘掉)。"""
     require_auth(request)
     body = await request.json()
     sid = (body.get("session_id") or "").strip()
-    if not sid:
+    if not sid or "/" in sid:
         return JSONResponse({"error": "session_id required"}, status_code=400)
     ps = _project_store()
-    m = ps.get(pid)
-    if not m:
+    try:
+        n = _sessions_mod().bind(ps, pid, sid)
+    except KeyError:
         return JSONResponse({"error": "project not found"}, status_code=404)
-    sf = ps.project_dir(pid) / "sessions.txt"
-    existing = sf.read_text(errors="replace").splitlines() if sf.exists() else []
-    if sid not in existing:
-        existing.append(sid)
-        sf.write_text("\n".join(existing) + "\n")
     ps.update(pid, last_active=time.time())
-    return {"ok": True, "project_id": pid, "session_id": sid, "session_count": len(existing)}
+    return {"ok": True, "project_id": pid, "session_id": sid, "session_count": n}
+
+
+@router.delete("/api/project-sessions/{sid}")
+async def api_project_session_unbind(sid: str, request: Request):
+    """把会话移出所属项目。"""
+    require_auth(request)
+    return {"ok": _sessions_mod().unbind(_project_store(), sid), "session_id": sid}
+
+
+@router.get("/api/project-sessions")
+async def api_project_session_map(request: Request):
+    """{session_id: project_id}, 侧栏按项目分组用。"""
+    require_auth(request)
+    return {"map": _sessions_mod().session_map(_project_store())}
+
+
+@router.get("/api/projects/{pid}/instructions")
+async def api_projects_instructions_get(pid: str, request: Request):
+    require_auth(request)
+    ps = _project_store()
+    if not ps.get(pid):
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    return {"project_id": pid, "content": _sessions_mod().read_instructions(ps, pid)}
+
+
+@router.put("/api/projects/{pid}/instructions")
+async def api_projects_instructions_put(pid: str, request: Request):
+    require_auth(request)
+    ps = _project_store()
+    if not ps.get(pid):
+        return JSONResponse({"error": "project not found"}, status_code=404)
+    body = await request.json()
+    content = str(body.get("content") or "")
+    mod = _sessions_mod()
+    if len(content) > mod.INSTRUCTIONS_MAX:
+        return JSONResponse({"error": f"项目指令最多 {mod.INSTRUCTIONS_MAX} 字"}, status_code=400)
+    mod.write_instructions(ps, pid, content)
+    ps.update(pid, last_active=time.time())
+    return {"ok": True, "size": len(content)}

@@ -83,6 +83,7 @@ class ProjectMeta:
     last_active: float = 0.0
     status: str = "active"  # active|paused|archived|completed
     tags: List[str] = field(default_factory=list)
+    workspace: str = ""   # 绑定的工作目录, 进项目上下文告诉模型
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,6 +99,7 @@ class ProjectMeta:
             last_active=float(d.get("last_active", 0.0)),
             status=d.get("status", "active"),
             tags=list(d.get("tags") or []),
+            workspace=str(d.get("workspace") or ""),
         )
 
 
@@ -240,6 +242,11 @@ def find_or_create_for_path(store, path, name: str = "", project_type: str = "co
         return meta
     return store.create(name=name or "auto", project_type=project_type)
 
+def _untouched_template(fname: str, txt: str) -> bool:
+    """建项目时写进去的空模板, 没人填过就不该当项目资料塞给模型。"""
+    return any(tpl.get(fname, "").strip() == txt for tpl in _TEMPLATES.values())
+
+
 def load_project_memory(store, project_id: str, max_chars: int = 4000) -> str:
     """P19: 加载项目级共享记忆 (PROJECT_MAP / DECISIONS / CONVENTIONS / TERMS).
     供 lib/prompt.py 在构建 system prompt 时注入.
@@ -252,7 +259,8 @@ def load_project_memory(store, project_id: str, max_chars: int = 4000) -> str:
         return ""
     parts = []
     total = 0
-    for fname in ("PROJECT_MAP.md", "DECISIONS.md", "CONVENTIONS.md", "TERMS.md"):
+    # PROJECT_DECISIONS.md 是 /api/projects/{pid}/decisions 写的; DECISIONS.md 是模板自带的
+    for fname in ("PROJECT_MAP.md", "PROJECT_DECISIONS.md", "DECISIONS.md", "CONVENTIONS.md", "TERMS.md"):
         fp = pdir / fname
         if not fp.exists():
             continue
@@ -260,7 +268,7 @@ def load_project_memory(store, project_id: str, max_chars: int = 4000) -> str:
             txt = fp.read_text(errors="replace").strip()
         except Exception:
             continue
-        if not txt:
+        if not txt or _untouched_template(fname, txt):
             continue
         block = f"## [Project {fname}]\n{txt}"
         if total + len(block) > max_chars:

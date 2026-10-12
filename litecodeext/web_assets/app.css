@@ -110,7 +110,10 @@ select option{background:#fff;color:#000;font-weight:500}
 .sn{flex:1;font-size:13px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;line-height:1.3}
 .sm{font-size:10px;color:var(--tx3);flex-shrink:0;margin-top:2px;font-family:var(--mono)}
 .si > div:first-child{display:flex;flex-direction:column;flex:1;min-width:0}
-.sdl{display:none;position:absolute;right:6px;top:50%;transform:translateY(-50%);background:var(--dg);color:#fff;border:none;border-radius:4px;font-size:10px;padding:2px 5px;cursor:pointer}
+/* 悬停按钮排成一行 (以前都 absolute 叠在同一位置, 标星按钮被 ✕ 盖住, 点星实际点到删除) */
+.sdl{display:none;flex:none;background:transparent;color:var(--tx3);border:none;border-radius:4px;font-size:11px;padding:2px 5px;cursor:pointer}
+.sdl:hover{background:var(--sf)}
+.si .sdl:last-child:hover{background:var(--dg);color:#fff}
 .si:hover .sdl{display:block}
 #sbf{padding:8px 6px;border-top:1px solid var(--bd)}
 .sbt{width:100%;padding:7px 9px;border-radius:var(--rs);background:transparent;border:none;color:var(--tx2);font-size:12px;font-family:var(--sans);cursor:pointer;display:flex;align-items:center;gap:7px;transition:all .12s}

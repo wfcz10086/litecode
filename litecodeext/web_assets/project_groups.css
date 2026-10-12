@@ -1,0 +1,48 @@
+/* 会话按项目归组 (project_groups.js) + 项目设置卡片 (project_card.js) */
+.pg-top{padding:4px 6px 2px}
+.pg-new{width:100%;padding:5px 8px;font-size:11px;text-align:left;background:transparent;border:1px dashed var(--bd2);border-radius:6px;color:var(--tx2);cursor:pointer}
+.pg-new:hover{border-color:var(--ac);color:var(--ac)}
+.pg{margin:2px 0}
+.pg-hd{display:flex;align-items:center;gap:5px;padding:6px 8px 4px;font-size:11px;font-weight:600;color:var(--tx2);cursor:pointer;user-select:none}
+.pg-hd:hover{color:var(--tx)}
+.pg-arr{font-size:9px;width:9px;transition:transform .12s}
+.pg-closed .pg-arr{transform:rotate(-90deg)}
+.pg-closed .pg-bd{display:none}
+.pg-name{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-n{font-weight:400;color:var(--tx3);font-family:var(--mono)}
+.pg-btn{padding:0 5px;font-size:12px;line-height:18px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--tx3);cursor:pointer;opacity:0;transition:opacity .12s}
+.pg-hd:hover .pg-btn,.pg-btn:focus{opacity:1}
+.pg-btn:hover{color:var(--ac);border-color:var(--bd2)}
+.pg-bd{padding-left:8px}
+.pg-empty{padding:4px 10px 6px;font-size:11px;color:var(--tx3)}
+.si .pg-mv{opacity:0}
+.si:hover .pg-mv{opacity:.7}
+.pg-mv:hover{opacity:1 !important}
+.pg-menu{position:fixed;z-index:1000;min-width:180px;max-width:260px;max-height:60vh;overflow:auto;padding:4px;background:var(--sf);border:1px solid var(--bd2);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+.pg-mh{padding:5px 8px;font-size:10px;color:var(--tx3)}
+.pg-mi{display:block;width:100%;padding:6px 8px;text-align:left;font-size:12px;background:transparent;border:none;border-radius:5px;color:var(--tx);cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pg-mi:hover{background:var(--sf2)}
+.pg-mi-out{color:var(--dg)}
+.pg-mi-new{color:var(--ac);border-top:1px solid var(--bd);border-radius:0 0 5px 5px}
+.pj-chip{margin-right:8px;padding:2px 8px;font-size:11px;background:var(--sf2);border:1px solid var(--bd2);border-radius:10px;color:var(--tx2);cursor:pointer;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis}
+.pj-chip:hover{border-color:var(--ac);color:var(--ac)}
+
+.pc-ov{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;background:rgba(0,0,0,.45);padding:16px}
+.pc-card{width:min(520px,100%);max-height:90vh;overflow:auto;padding:18px 20px;background:var(--sf);border:1px solid var(--bd2);border-radius:14px;box-shadow:0 12px 40px rgba(0,0,0,.4)}
+.pc-t{font-size:15px;font-weight:600;color:var(--tx);margin-bottom:12px}
+.pc-f{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.pc-l{font-size:12px;color:var(--tx2)}
+.pc-h{font-size:11px;color:var(--tx3)}
+.pc-in{width:100%;padding:7px 9px;font-size:13px;background:var(--bg);border:1px solid var(--bd2);border-radius:7px;color:var(--tx);font-family:var(--sans);box-sizing:border-box}
+.pc-in:focus{outline:none;border-color:var(--ac)}
+.pc-ta{min-height:110px;resize:vertical;line-height:1.5}
+.pc-err{min-height:16px;font-size:12px;color:var(--dg);margin-bottom:6px}
+.pc-row{display:flex;align-items:center;gap:8px}
+.pc-sp{flex:1}
+.pc-b{padding:6px 14px;font-size:12px;border-radius:7px;background:transparent;border:1px solid var(--bd2);color:var(--tx2);cursor:pointer}
+.pc-b:hover{color:var(--tx)}
+.pc-ok{background:var(--ac);border-color:var(--ac);color:#000}
+.pc-ok:hover{color:#000;filter:brightness(1.08)}
+.pc-ok:disabled{opacity:.6;cursor:default}
+.pc-del{color:var(--dg);border-color:transparent}
+.pc-del:hover{border-color:var(--dg);color:var(--dg)}
