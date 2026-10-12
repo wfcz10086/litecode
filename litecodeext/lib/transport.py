@@ -9,12 +9,36 @@ import httpx
 from .config import BACKEND_URL, API_KEY, MODEL_ID, MAX_TOKENS, ENABLE_THINKING, THINKING_BUDGET, log, _LIVE, find_vision_fallback, wire_model_name
 from .thinking_adapter import inject_params as _thinking_inject
 from .retry import sleep_backoff, LLM_POLICY
+from . import llm_watchdog as _wd
 
 # ── 重试配置 ──────────────────────────────────────────────────
 MAX_RETRIES       = 3
 RETRYABLE_CODES   = {429, 500, 502, 503, 504}   # 可重试的 HTTP 状态码
 CONNECT_TIMEOUT   = 15
 STREAM_TIMEOUT    = 600
+
+
+# [llm-watchdog 2026-10-12] 排队满 / 读超时报给 lib/llm_watchdog, 攒够次数自动探活+重启上游。
+# 自愈已在进行时直接抛错, 不再空转重试 (重启要一分钟, 退避重试等不到)。
+# 配了 fallback_model_id 时, 降级期间的请求临时改走那个模型, 用户无感。
+WD_RESTARTING_MSG = "模型服务卡住了, 已自动重启, 约 1 分钟后恢复"
+
+
+def _busy_check(status: int, body, url: str, timeout: bool = False) -> bool:
+    """记一次异常; 返回 True = 主模型已判定不可用 (调用方切 fallback 或停止重试)。"""
+    if timeout or (status == 503 and _wd.is_busy_body(body)):
+        _wd.note_busy(url)
+        return _wd.get().degraded(url)
+    return False
+
+
+def _failover(model: str, url: str, key: str):
+    """主模型降级中 → 换成 fallback 的 (model, url, key); 否则原样返回。"""
+    fb = _wd.fallback_for(url)
+    if not fb:
+        return model, url, key, False
+    log.warning(f"[llm-watchdog] {model} 不可用, 本次改走 {fb['id']}")
+    return fb["id"], fb["backend_url"].rstrip("/"), fb.get("api_key") or key, True
 
 
 # [vision-strip 2026-05-25] 非视觉模型 (deepseek-v4-pro / glm-4 等 supports_vision=false)
@@ -274,6 +298,10 @@ async def vllm_stream(
     last_err = None
 
     for attempt in range(max_retries + 1):
+        _model, _url, _key, _switched = _failover(_model, _url, _key)
+        if _switched:
+            body["model"] = wire_model_name(_model)
+            headers["Authorization"] = f"Bearer {_key}"
         try:
             timeout = httpx.Timeout(STREAM_TIMEOUT, connect=CONNECT_TIMEOUT)
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -281,6 +309,10 @@ async def vllm_stream(
                                          headers=headers, json=body) as resp:
                     if resp.status_code in RETRYABLE_CODES and attempt < max_retries:
                         body_text = await resp.aread()
+                        if _busy_check(resp.status_code, body_text, _url):
+                            if _wd.fallback_for(_url):
+                                continue                  # 下一轮循环切 fallback, 不等退避
+                            raise RuntimeError(WD_RESTARTING_MSG)
                         # [#68] 统一走 lib.retry: exp backoff + jitter, cap 20s
                         log.warning(f"[transport] {resp.status_code} on attempt {attempt+1}, "
                                     f"retrying (exp backoff): {body_text[:200]}")
@@ -290,8 +322,10 @@ async def vllm_stream(
                     if resp.status_code != 200:
                         text = await resp.aread()
                         log.error(f"[transport] vLLM {resp.status_code}: {text[:300]}")
+                        _busy_check(resp.status_code, text, _url)
                         raise RuntimeError(f"vLLM returned {resp.status_code}: {text[:200]}")
 
+                    _wd.note_ok(_url)
                     async for raw_line in resp.aiter_lines():
                         line = raw_line.strip()
                         if not line or not line.startswith("data: "):
@@ -315,6 +349,8 @@ async def vllm_stream(
 
         except httpx.ReadTimeout as e:
             last_err = e
+            if _busy_check(0, b"", _url, timeout=True) and not _wd.fallback_for(_url):
+                raise RuntimeError(WD_RESTARTING_MSG)
             if attempt < max_retries:
                 log.warning(f"[transport] read timeout (attempt {attempt+1}), retrying (exp backoff): {e}")
                 await sleep_backoff(attempt, LLM_POLICY)
@@ -379,17 +415,29 @@ async def vllm_call(
     headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
 
     for attempt in range(max_retries + 1):
+        _model, _url, _key, _switched = _failover(_model, _url, _key)
+        if _switched:
+            body["model"] = wire_model_name(_model)
+            headers["Authorization"] = f"Bearer {_key}"
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(f"{_url}/chat/completions", headers=headers, json=body)
+                if r.status_code in RETRYABLE_CODES and _busy_check(r.status_code, r.content, _url):
+                    if _wd.fallback_for(_url):
+                        continue
+                    raise RuntimeError(WD_RESTARTING_MSG)
                 if r.status_code in RETRYABLE_CODES and attempt < max_retries:
                     log.warning(f"[transport] {r.status_code} on non-stream attempt {attempt+1}, retrying (exp backoff)")
                     await sleep_backoff(attempt, LLM_POLICY)
                     continue
                 if r.status_code != 200:
                     raise RuntimeError(f"vLLM {r.status_code}: {r.text[:200]}")
+                _wd.note_ok(_url)
                 return r.json()
         except (httpx.ConnectError, httpx.ReadTimeout) as e:
+            if isinstance(e, httpx.ReadTimeout) and _busy_check(0, b"", _url, timeout=True) \
+                    and not _wd.fallback_for(_url):
+                raise RuntimeError(WD_RESTARTING_MSG)
             if attempt < max_retries:
                 await sleep_backoff(attempt, LLM_POLICY)
             else:

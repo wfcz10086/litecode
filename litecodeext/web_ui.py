@@ -720,57 +720,64 @@ async def api_chat(sid:str,request:Request):
                     aiter = resp.aiter_lines()
                     _pending = None
                     _SSE_IDLE_PING = 15.0
-                    while True:
-                        if _pending is None:
-                            _pending = asyncio.ensure_future(aiter.__anext__())
-                        done, _pen = await asyncio.wait([_pending], timeout=_SSE_IDLE_PING)
-                        if not done:
-                            # 上游 15s 无字节: 发心跳; 顺带查前端是否断了
+                    try:
+                        while True:
+                            if _pending is None:
+                                _pending = asyncio.ensure_future(aiter.__anext__())
+                            done, _pen = await asyncio.wait([_pending], timeout=_SSE_IDLE_PING)
+                            if not done:
+                                # 上游 15s 无字节: 发心跳; 顺带查前端是否断了
+                                if await request.is_disconnected():
+                                    _disconnected = True
+                                    _aborted_reason = "client_disconnected"
+                                    _pending.cancel()
+                                    break
+                                yield ": keep-alive\n\n"
+                                continue
+                            task = _pending
+                            _pending = None
+                            try:
+                                raw = task.result()
+                            except StopAsyncIteration:
+                                break
+                            if not raw: continue
                             if await request.is_disconnected():
                                 _disconnected = True
                                 _aborted_reason = "client_disconnected"
-                                _pending.cancel()
                                 break
-                            yield ": keep-alive\n\n"
-                            continue
-                        task = _pending
-                        _pending = None
-                        try:
-                            raw = task.result()
-                        except StopAsyncIteration:
-                            break
-                        if not raw: continue
-                        if await request.is_disconnected():
-                            _disconnected = True
-                            _aborted_reason = "client_disconnected"
-                            break
-                        if _chunk_count >= SSE_HARD_LIMIT:
-                            _aborted_reason = f"hard_limit_{SSE_HARD_LIMIT}"
-                            yield f'data: {{"error":"SSE chunk limit {SSE_HARD_LIMIT} reached, aborted"}}\n\n'
-                            break
-                        line = raw
-                        yield line+"\n\n"
-                        _chunk_count += 1
-                        if line.startswith("data: ") and line[6:] not in ("[DONE]",""):
-                            try:
-                                chunk=json.loads(line[6:])
-                                delta=chunk["choices"][0]["delta"]
-                                ct=delta.get("content","")
-                                if ct: collected["text"]+=ct
-                                # [v1.0] 收集推理流, 用于持久化展示 (方案 B: 不回流到 LLM 上下文)
-                                rz=delta.get("reasoning","")
-                                if rz: collected["reasoning"]+=rz
-                                if "usage" in delta:
-                                    collected["usage"]=delta["usage"]
-                                for key in("task_exec","data_collect","task_analysis"):
-                                    # "推理中…" 占位 (key=preparing) 只是等首包的反馈, 不算工具调用, 不落库
-                                    if key in delta and delta[key].get("status")=="executing" and delta[key].get("key")!="preparing":
-                                        det=delta[key].get("detail","")
-                                        if det: collected["tools"].append(det)
-                                if "diff_view" in delta:
-                                    dv=delta["diff_view"]
-                                    if dv.get("diff"): collected["diffs"].append({"filepath":dv.get("filepath",""),"diff":dv["diff"]})
-                            except: pass
+                            if _chunk_count >= SSE_HARD_LIMIT:
+                                _aborted_reason = f"hard_limit_{SSE_HARD_LIMIT}"
+                                yield f'data: {{"error":"SSE chunk limit {SSE_HARD_LIMIT} reached, aborted"}}\n\n'
+                                break
+                            line = raw
+                            yield line+"\n\n"
+                            _chunk_count += 1
+                            if line.startswith("data: ") and line[6:] not in ("[DONE]",""):
+                                try:
+                                    chunk=json.loads(line[6:])
+                                    delta=chunk["choices"][0]["delta"]
+                                    ct=delta.get("content","")
+                                    if ct: collected["text"]+=ct
+                                    # [v1.0] 收集推理流, 用于持久化展示 (方案 B: 不回流到 LLM 上下文)
+                                    rz=delta.get("reasoning","")
+                                    if rz: collected["reasoning"]+=rz
+                                    if "usage" in delta:
+                                        collected["usage"]=delta["usage"]
+                                    for key in("task_exec","data_collect","task_analysis"):
+                                        # "推理中…" 占位 (key=preparing) 只是等首包的反馈, 不算工具调用, 不落库
+                                        if key in delta and delta[key].get("status")=="executing" and delta[key].get("key")!="preparing":
+                                            det=delta[key].get("detail","")
+                                            if det: collected["tools"].append(det)
+                                    if "diff_view" in delta:
+                                        dv=delta["diff_view"]
+                                        if dv.get("diff"): collected["diffs"].append({"filepath":dv.get("filepath",""),"diff":dv["diff"]})
+                                except: pass
+                    finally:
+                        # 前端断开时 Starlette 在 yield 处关掉本生成器, 读上游的 pending 任务会留下,
+                        # 随后连接关闭让它抛 ReadError → "Task exception was never retrieved"。取消并吞掉结果。
+                        if _pending is not None and not _pending.done():
+                            _pending.cancel()
+                            _pending.add_done_callback(lambda t: t.cancelled() or t.exception())
         except Exception as e:
             yield f"data: {json.dumps({'error':str(e)})}\n\n"
         finally:

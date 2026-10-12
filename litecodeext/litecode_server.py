@@ -24,6 +24,7 @@ import logging
 # ── Config (from lib/) ────────────────────────────────────────
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "core"))  # core 模块扁平导入
+from lib import overhead_calib as _oc
 from lib.config import (
     CFG, BASE, log, load_cfg,
     TOKEN, PORT, HOST, MODEL_ID, BACKEND_URL, API_KEY, BACKEND_TYPE,
@@ -720,6 +721,8 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
         _fixed_overhead = est_tokens(sys_prompt) + est_tokens(json.dumps(TOOL_DEFS, ensure_ascii=False))
     except Exception:
         _fixed_overhead = 0
+    # [2026-10-12] 上面的估算对工具 schema 高估约 3 倍, 改用上游 usage 学到的实测值 (lib/overhead_calib.py)
+    _fixed_overhead = _oc.adjust(_live_model(), _fixed_overhead, int(CONTEXT_WINDOW * _tb_pct))
     # 两个口径分开, 不混:
     #   锚点真值 = 整个输入 (含 system+工具+对话) → 直接和 窗口*pct 比
     #   纯估算   = 只有对话历史 → 和 窗口*pct - 固定开销 比
@@ -761,6 +764,26 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
                 log.warning(f"  [TOKEN-BUDGET] removed {_removed} msgs, {_cur_tokens}t/{_tb_budget}t")
 
     return _fixed_overhead
+
+
+def _live_model() -> str:
+    from lib.config import _LIVE as _lv
+    return _lv.get("model_id", "")
+
+
+def _log_anchor(ctx, usage, real: int, est_msgs: int) -> None:
+    """[USAGE-ANCHOR] 打一行真实/估算比值。估算口径 = 对话历史 + 固定开销 (系统提示词+工具定义),
+    和上游 prompt_tokens 同口径; 以前只比对话历史, 固定开销 ~1.4 万 t 让比值常年显示 1.5 倍误报。"""
+    est = est_msgs + int(getattr(usage, "fixed_overhead", 0) or 0)
+    _oc.learn(_live_model(), real, est_msgs)
+    if est <= 0:
+        return
+    r = real / est
+    off = r < 0.7 or r > 1.3
+    if off or usage.usage_reports == 0:
+        log.info(f"  \033[2m[USAGE-ANCHOR]\033[0m [{ctx.sid_tag}] 真实={real} 估算={est} "
+                 f"(历史 {est_msgs} + 固定 {est - est_msgs}) 比值={r:.2f}"
+                 + ("  \033[33m← 估算偏离\033[0m" if off else ""))
 
 
 # ── [M7d] 上下文治理家族之二: MID-LOOP-COMPRESS 记忆压缩触发。
@@ -895,9 +918,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             if isinstance(_tpt, int) and _tpt > 0:
                                 _cur_est_t = sum(est_tokens(_m.get("content",""))+est_tokens(_m.get("tool_calls",""))+est_tokens(_m.get("reasoning_content",""))
                                                  for _m in ctx.messages)
-                                if _cur_est_t > 0 and (_tpt/_cur_est_t < 0.7 or _tpt/_cur_est_t > 1.5 or usage.usage_reports == 0):
-                                    log.info(f"  \033[2m[USAGE-ANCHOR]\033[0m [{ctx.sid_tag}] 真实={_tpt} 估算={_cur_est_t} 比值={_tpt/_cur_est_t:.2f}"
-                                             + ("  \033[33m← 估算偏离\033[0m" if (_tpt/_cur_est_t<0.7 or _tpt/_cur_est_t>1.5) else ""))
+                                _log_anchor(ctx, usage, _tpt, _cur_est_t)
                                 usage.last_real_prompt_tokens = _tpt
                                 usage.last_est_at_anchor = _cur_est_t
                                 usage.usage_reports += 1
@@ -931,12 +952,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             # [USAGE-ANCHOR] 每次锚定打一行比值 —— 隐形漂移在这里现形。
                             # 比值稳定偏离 1.0 就说明有东西没被估算计入 (今天的 reasoning
                             # 漏算、系统提示词盲区都会在第一次锚定就暴露)。
-                            if _cur_est > 0:
-                                _ratio = _pt / _cur_est
-                                if _ratio < 0.7 or _ratio > 1.5 or usage.usage_reports == 0:
-                                    log.info(f"  \033[2m[USAGE-ANCHOR]\033[0m [{ctx.sid_tag}] "
-                                             f"真实={_pt} 估算={_cur_est} 比值={_ratio:.2f}"
-                                             + ("  \033[33m← 估算偏离, 有开销没计入\033[0m" if (_ratio<0.7 or _ratio>1.5) else ""))
+                            _log_anchor(ctx, usage, _pt, _cur_est)
                             usage.last_real_prompt_tokens = _pt
                             usage.last_est_at_anchor = _cur_est
                             usage.usage_reports += 1
@@ -1868,6 +1884,7 @@ async def agent_stream(
 
                 # ── [SLIDING-WINDOW] 窗口缩紧: 每 5 轮触发, msgs>20 就 trim ──
                 _fixed_overhead = _loop_context_window(_ctx, _usage, _iteration, sys_prompt)
+                _usage.fixed_overhead = _fixed_overhead   # USAGE-ANCHOR 比值要把固定开销算进去
                 # ── [MID-LOOP-COMPRESS] 按 token 水位 + 每15轮 触发 memory 压缩 ──
                 _mlc_done_this_turn = _loop_mid_compress(_ctx, _iteration, locals().get("_mlc_done_this_turn"))
                 # ── 超时保护 ──
@@ -3207,6 +3224,8 @@ async def agent_stream(
                 _err_msg = "\n连不上模型服务，这轮中断了。稍后再试。"
             elif "rate limit" in _el or "429" in _el:
                 _err_msg = "\n上游限流了，稍等一下再发。"
+            elif "已自动重启" in _el:
+                _err_msg = "\n模型服务卡住了，已经自动重启，大约 1 分钟后恢复，到时再发一次。"
             elif "server busy" in _el or "maximum pending" in _el or "returned 503" in _el:
                 _err_msg = "\n模型服务排队已满，这轮没能发出去。稍等再发；一直这样就是模型服务卡住了，需要重启。"
             else:

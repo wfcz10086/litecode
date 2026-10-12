@@ -378,5 +378,23 @@
     },
     "side_models": {
         "memory": "Qwen3.6-35B"
+    },
+    "llm_watchdog": {
+        "enabled": true,
+        "match": "your-host-a.example:11434",
+        "probe_url": "http://your-host-a.example:11434",
+        "probe_model": "",
+        "ssh": {
+            "host": "your-domain.example",
+            "port": 35000,
+            "user": "CHANGE_ME",
+            "password": "CHANGE_ME"
+        },
+        "restart_cmd": "echo CHANGE_ME | sudo -S systemctl restart ollama",
+        "fallback_model_id": "Qwen3.6-35B",
+        "threshold": 3,
+        "window_s": 180,
+        "cooldown_s": 900,
+        "degrade_s": 120
     }
 }

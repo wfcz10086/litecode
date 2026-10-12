@@ -11,6 +11,14 @@ async def h_update_profile(sid: str, args: dict) -> tuple[str, Any]:
     import tool_dispatch as td
     fname = args.get("file", "USER.md")
     action = args.get("action", "read")
+    if fname == "MEMORY.md":
+        # 模型常拿这个工具读会话记忆: 读放行, 写引导去 save_memory (MEMORY.md 由记忆系统维护)
+        if action != "read":
+            return "ERROR: MEMORY.md 由记忆系统维护, 不能直接改; 要记新东西用 save_memory", None
+        p = td.SESSIONS_DISK / sid / "MEMORY.md" if sid else None
+        if p and p.exists():
+            return f"[MEMORY.md @ {p}]\n{p.read_text(errors='replace')}", None
+        return "[MEMORY.md] 本会话还没有记忆 (相关记忆已自动放在上下文里)", None
     if fname not in ("USER.md", "TOOLS.md", "SOUL.md", "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md"):
         return f"ERROR: only USER.md / TOOLS.md / SOUL.md / IDENTITY.md / HEARTBEAT.md / BOOTSTRAP.md can be updated, got '{fname}'", None
     sess_dir = td.SESSIONS_DISK / sid if sid else None

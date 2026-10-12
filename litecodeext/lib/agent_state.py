@@ -139,6 +139,7 @@ class UsageCounters:
     last_real_prompt_tokens: int = 0   # 上游最近一次回报的真实 prompt_tokens (0=还没有)
     last_est_at_anchor: int = 0        # 锚定那一刻我方估算的 prompt tokens
     usage_reports: int = 0             # 收到过几次真实 usage (0 时退回纯估算)
+    fixed_overhead: int = 0            # 本轮系统提示词+工具定义的估算 t (只用于 USAGE-ANCHOR 比值日志)
 
 
 @dataclass
