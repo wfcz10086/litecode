@@ -763,7 +763,8 @@ async def api_chat(sid:str,request:Request):
                                 if "usage" in delta:
                                     collected["usage"]=delta["usage"]
                                 for key in("task_exec","data_collect","task_analysis"):
-                                    if key in delta and delta[key].get("status")=="executing":
+                                    # "推理中…" 占位 (key=preparing) 只是等首包的反馈, 不算工具调用, 不落库
+                                    if key in delta and delta[key].get("status")=="executing" and delta[key].get("key")!="preparing":
                                         det=delta[key].get("detail","")
                                         if det: collected["tools"].append(det)
                                 if "diff_view" in delta:

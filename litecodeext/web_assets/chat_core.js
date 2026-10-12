@@ -155,6 +155,7 @@ function _buildAttachNode(att){
   return a;
 }
 function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[]){
+  tools=(tools||[]).filter(t=>t!=='推理中…'); /* 老会话里落库的等首包占位, 不是工具调用 */
   document.getElementById('empty')?.remove();const el=document.getElementById('msgs');
   const wrap=document.createElement('div');wrap.className=`msg ${role==='user'?'user':'ai'}`;
   const rl=document.createElement('div');rl.className='mr';
@@ -729,7 +730,7 @@ async function send(){
           sbot();
         }
         for(const key of['task_exec','data_collect','task_analysis']){if(!delta[key])continue;const st=delta[key].status||'',det=delta[key].detail||'',al=delta[key].agent_label||delta[key].agent||'';
-          if(st==='executing'&&det){let tg=bodyEl.querySelector('.tg');if(!tg){bodyEl.querySelector('.dots')?.remove();tg=document.createElement('div');tg.className='tg';bodyEl.insertBefore(tg,bodyEl.firstChild);}const ti=document.createElement('div');ti.className='ti';const c=det.indexOf(': ');ti.innerHTML=(al?`<span style="color:var(--ac3);font-weight:600;font-size:11px">[${esc(al)}]</span>`:'')+(c>0?`<span class="tn" data-tool="${esc(det.slice(0,c))}">${esc(det.slice(0,c))}</span><span class="ta">${esc(det.slice(c+2).slice(0,90))}</span>`:`${esc(det.slice(0,90))}`);tg.appendChild(ti);const allTi=tg.querySelectorAll('.ti:not(.hid)');if(allTi.length>4){const h=allTi.length-4;for(let i=0;i<h;i++)allTi[i].classList.add('hid');let fb=tg.querySelector('.tfl');if(!fb){fb=document.createElement('div');fb.className='tfl';tg.insertBefore(fb,tg.firstChild);fb.onclick=()=>{tg.querySelectorAll('.hid').forEach(x=>x.classList.remove('hid'));fb.remove();};}fb.textContent=`... 展开 ${tg.querySelectorAll('.ti.hid').length} 条`;}sbot();}
+          if(st==='executing'&&det){_dropPrep(bodyEl);let tg=bodyEl.querySelector('.tg');if(!tg){bodyEl.querySelector('.dots')?.remove();tg=document.createElement('div');tg.className='tg';bodyEl.insertBefore(tg,bodyEl.firstChild);}const ti=document.createElement('div');ti.className='ti'+(delta[key].key==='preparing'?' ti-prep':'');const c=det.indexOf(': ');ti.innerHTML=(al?`<span style="color:var(--ac3);font-weight:600;font-size:11px">[${esc(al)}]</span>`:'')+(c>0?`<span class="tn" data-tool="${esc(det.slice(0,c))}">${esc(det.slice(0,c))}</span><span class="ta">${esc(det.slice(c+2).slice(0,90))}</span>`:`${esc(det.slice(0,90))}`);tg.appendChild(ti);const allTi=tg.querySelectorAll('.ti:not(.hid)');if(allTi.length>4){const h=allTi.length-4;for(let i=0;i<h;i++)allTi[i].classList.add('hid');let fb=tg.querySelector('.tfl');if(!fb){fb=document.createElement('div');fb.className='tfl';tg.insertBefore(fb,tg.firstChild);fb.onclick=()=>{tg.querySelectorAll('.hid').forEach(x=>x.classList.remove('hid'));fb.remove();};}fb.textContent=`... 展开 ${tg.querySelectorAll('.ti.hid').length} 条`;}sbot();}
           else if(st==='done'&&det){const tg=bodyEl.querySelector('.tg');if(tg){const tr=document.createElement('div');tr.className='tr_'+(det.startsWith('[warn]')||det.includes('[STDERR')?' wn':'');tr.textContent='↳ '+det.replace(/\[warn\]\s*/,'').slice(0,80);tg.appendChild(tr);}}}
         if(delta.agent_status){const av=delta.agent_status,al=av.label||'?',ast_=av.status||'',adet=av.detail||'';const icons={pending:'⏳',running:'▶',done:'✅',error:'❌'};const cols={pending:'var(--tx3)',running:'var(--wn)',done:'var(--ac3)',error:'var(--dg)'};let tg=bodyEl.querySelector('.tg');if(!tg){bodyEl.querySelector('.dots')?.remove();tg=document.createElement('div');tg.className='tg';bodyEl.insertBefore(tg,bodyEl.firstChild);}let ar3=tg.querySelector('[data-agent="'+CSS.escape(al)+'"]');if(!ar3){ar3=document.createElement('div');ar3.className='arow';ar3.dataset.agent=al;tg.appendChild(ar3);}ar3.innerHTML=`<span>${icons[ast_]||'●'}</span><span style="color:${cols[ast_]||'var(--tx2)'};font-weight:600;font-family:var(--mono);font-size:12px">${esc(al)}</span><span style="color:var(--tx3);font-size:11px;font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${esc(adet.slice(0,80))}</span>`;sbot();}
         /* [v1.10 B1 fix] orchestrator_step 帧渲染 — DAG/spawn_agent 模式后端发这种帧, 复用 .arow 样式 */
@@ -804,7 +805,7 @@ async function send(){
           /* content 开始流 = 推理结束：把折叠块收起来，去掉脉冲动画 */
           const lrs=bodyEl.querySelector('.rsb.live');
           if(lrs){lrs.classList.remove('live','open');lrs.querySelector('.rsc')?.classList.remove('tk');}
-          if(fc){bodyEl.querySelector('.dots')?.remove();fc=false;sr_=document.createElement('div');sr_.className='sraw';bodyEl.appendChild(sr_);}ft+=ct;if(!_renderTimer){_renderTimer=setTimeout(()=>{try{if(sr_){sr_.innerHTML=marked.parse(ft);sr_.querySelectorAll('pre code').forEach(c=>{if(!c.classList.contains('hljs'))try{hljs.highlightElement(c)}catch(e){}});}}catch(e){}sbot();_renderTimer=null;},200);}
+          if(fc){bodyEl.querySelector('.dots')?.remove();_dropPrep(bodyEl);fc=false;sr_=document.createElement('div');sr_.className='sraw';bodyEl.appendChild(sr_);}ft+=ct;if(!_renderTimer){_renderTimer=setTimeout(()=>{try{if(sr_){sr_.innerHTML=marked.parse(ft);sr_.querySelectorAll('pre code').forEach(c=>{if(!c.classList.contains('hljs'))try{hljs.highlightElement(c)}catch(e){}});}}catch(e){}sbot();_renderTimer=null;},200);}
         }
         if(delta.usage)_lu=delta.usage;
         if(delta.panel_refresh){const pr=delta.panel_refresh,ev=pr.event||'',op=pr.op||'',nm=pr.name||'';if(ev==='dag_changed'){if(typeof loadDAGList==='function')loadDAGList();const opLbl={create:'已创建',update:'已更新',delete:'已删除',run:'已启动'}[op]||op;toast(`DAG ${nm} ${opLbl}`);}else if(ev==='timer_changed'){if(typeof loadTimers==='function')loadTimers();const opLbl={create:'已创建',update:'已更新',delete:'已删除',run:'已触发'}[op]||op;toast(`定时器 ${nm} ${opLbl}`);}}
@@ -824,7 +825,7 @@ async function send(){
   bodyEl.querySelector('.dots')?.remove();if(sr_)sr_.remove();ft=ft.replace(/\n{3,}/g,'\n\n').trim();
   /* [v12.5] 保留推理折叠块（最终 HTML 重建时要带上） */
   const rsbEl=bodyEl.querySelector('.rsb');const rsbHtml=rsbEl?rsbEl.outerHTML:'';
-  const tgEl=bodyEl.querySelector('.tg');
+  _dropPrep(bodyEl);const tgEl=bodyEl.querySelector('.tg');
   /* [P46 修] 保留错误块, 流末重建时不抹掉 ❌ + 重试按钮 */
   const errEls=bodyEl.querySelectorAll('.msg-error');
   let errHtml='';errEls.forEach(e=>errHtml+=e.outerHTML);
@@ -845,6 +846,8 @@ async function send(){
   if(window._scanAndPreview){try{_scanAndPreview(bodyEl, bodyEl.textContent||'');}catch(e){}}
   streaming=false;window.streaming=false;_sending=false;_curReader=null;document.getElementById('sdb').disabled=false;document.getElementById('ib').classList.remove('vis');sbot();
 }
+/* "推理中…" 占位状态只在等首个真实事件时有用, 之后移除; 移完 .tg 空了也一并删 */
+function _dropPrep(body){body.querySelectorAll('.tg .ti-prep').forEach(x=>x.remove());const tg=body.querySelector('.tg');if(tg&&!tg.children.length)tg.remove();}
 function sug(t){document.getElementById('mi').value=t;arx(document.getElementById('mi'));document.getElementById('mi').focus();}
 function onK(ev){if(ev.key==='Enter'&&!ev.shiftKey&&!ev.isComposing){ev.preventDefault();send();}}
 let _interruptInFlight=false;

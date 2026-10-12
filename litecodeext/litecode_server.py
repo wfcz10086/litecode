@@ -3207,6 +3207,8 @@ async def agent_stream(
                 _err_msg = "\n连不上模型服务，这轮中断了。稍后再试。"
             elif "rate limit" in _el or "429" in _el:
                 _err_msg = "\n上游限流了，稍等一下再发。"
+            elif "server busy" in _el or "maximum pending" in _el or "returned 503" in _el:
+                _err_msg = "\n模型服务排队已满，这轮没能发出去。稍等再发；一直这样就是模型服务卡住了，需要重启。"
             else:
                 _err_msg = "\n这轮出错中断了。具体原因已记进日志，再发一次试试。"
             try:
