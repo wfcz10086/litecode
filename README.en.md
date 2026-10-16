@@ -18,7 +18,19 @@
 
 ## 🆕 What's new
 
-### v1.10.16.88 "Hanbao" (憨包)
+### v1.10.16.89 "Errand" (跑腿)
+
+> *Paotui* means running errands for someone. Say one sentence and it gets the errand done on your own Windows PC: send a WeChat message, drop a comment and a gift in a live stream, scroll back through a chat and copy the original text to you.
+
+- 🪟 **One-command Windows onboarding**: in the web UI, *Connect → Add Windows* gives you one command; paste it into an admin terminal on that PC. The PC only connects outward — no open ports, no SSH — and its device credential is encrypted with Windows' own DPAPI. *Complete uninstall* wipes it clean, verified on a real machine.
+- 🤖 **General desktop control**: WeChat, QQ, Chrome, Douyin live rooms… it reads screenshots and clicks, types, scrolls, right-clicks to copy and reads the clipboard, so you get the original text instead of a transcription. No app-specific scripts; a new app works the same way.
+- 🔄 **Self-updating, self-healing agent**: when the server updates, the PC catches up while idle (hash-verified before replacing); it restarts after crashes and is re-launched every 5 minutes if it ever stops; it disables itself once revoked. The web UI shows which version each PC runs.
+- 🛡️ **Safer messaging**: if several contacts match, it lists them and asks instead of picking one; it never clears a draft already in the input box; it checks the chat title before sending.
+- 🐛 **Fixed**: mouse wheel ignored by new WeChat (it used to send 1/12 of a notch, now whole notches); personal WeChat opening as WeCom; the last reply duplicated after a page reload; "you didn't change any files" nags on look-only desktop tasks.
+- 🧹 Revoked or uninstalled PCs can be deleted from the list, freeing their name.
+
+<details>
+<summary>Previous: v1.10.16.88 "Hanbao" (憨包)</summary>
 
 > *Hanbao* is southwest-Chinese slang for a lovable simpleton: not flashy, but it never drops the job. Close the tab and it keeps working, it nags less, and one sentence gets you a video ready to post.
 
@@ -33,6 +45,9 @@
 - 🧯 **More accurate, quieter system nudges**: creating many tasks or writing many files in a row is no longer treated as a loop. The "write a test" reminder fires once per file. Re-running the same command after editing a file is no longer blocked.
 - 🛡️ **Disable tools per request**: add `disabled_tools: ["web"]` to a request and the model gets no web tools for that call. Useful for offline mode and fair benchmarks. When a shell command fails, only network commands are retried automatically. Old tool output is trimmed only when the context is actually close to full.
 - 📏 **Benchmarks**: an official SWE-bench Verified runner is included. Web access is off by default, and any instance where the model went online anyway is not scored.
+
+
+</details>
 
 ---
 
@@ -97,6 +112,7 @@ Working on day one:
 - 🗣️ Say *"scan this repo and write an architecture report"* → it splits the job into a 3-step pipeline (scan → analyze → write) and runs it end to end.
 - ⏰ Set a timer: every morning at 9:00 it pulls your data and pushes a briefing to WeCom.
 - 🖼️ Paste a screenshot, it reads it. Ask for slides, it renders them. Need an image — DALL·E / SD / ComfyUI are already wired.
+- 🪟 *"On my Windows PC, WeChat Zhang that I'm working late tonight"* → it opens WeChat on your own PC, finds the contact, checks the chat title, sends, and shows you a screenshot. If several people share the name, it asks which one first.
 - 🎬 *"Make a Douyin video about Jesse Livermore"* → script, voice-over, animation and music done for you: a vertical mp4, a cover and the post copy.
 - ⌨️ One line in the terminal: it writes files, runs commands, shows you the diff, and tells you what it cost in tokens.
 
@@ -150,14 +166,14 @@ And a side no other agent has:
 A tool only exists while you're holding it. An employee is *there*. LiteCode is built to the employee standard:
 
 - **It remembers** — preferences you stated, things you discussed. New sessions don't start with introductions.
-- **It has skills** — 93 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
+- **It has skills** — 94 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
 - **It works unsupervised** — timers fire on schedule, big jobs split themselves into pipelines, failures retry with lessons learned.
 - **It's always reachable** — browser, terminal, WeChat; start a chat in one place, continue in another.
 - **It serves only you** — your machine, your model, data never leaves. It has no other master.
 
 ### Numbers first
 
-| 74 | 93 | 9 | 14 | 5 | 4 | 3 | 1 |
+| 76 | 94 | 9 | 14 | 5 | 4 | 3 | 1 |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | tools | skills | agent types | search engines | model backends | memory tiers | fronts | container |
 
@@ -191,11 +207,12 @@ Free APIs → a local SearXNG aggregator → 14 engines in parallel → a real b
 - 🎭 **Strategist mode** — one click flips on the "who benefits?" lens for news and markets.
 - ✍️ **21-genre novel pipeline** — each genre its own skill, plus an anti-AI-tell audit so the prose doesn't read like a bot.
 - 🖥️ **Talk-to-control desktop** — it opens a browser on a remote desktop, clicks around, and screenshots back to you.
+- 🪟 **Your real Windows PC, outbound-only** — one command to connect, no open ports; WeChat, browsers and live rooms driven from a sentence; the agent updates and heals itself.
 - 📄 **Office suite** — Word / Excel / PPT / PDF in and out; drop a file into WeChat, get a file back.
 
 ### 🔗 Buff every AI tool you already own
 
-The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 93 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
+The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 94 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
 
 ---
 
@@ -209,7 +226,7 @@ The gateway speaks standard OpenAI. Take any client with a custom base_url — t
 | WeChat / WeCom bots built in | ✅ | — | — | — |
 | Visual DAG pipelines | ✅ | flows | code | — |
 | Image / video / music plugin slots | ✅ | tools | tools | — |
-| Talk-to-control desktop | ✅ | — | — | — |
+| Talk-to-control your real Windows desktop (WeChat / browser / live rooms) | ✅ | — | — | — |
 | Four-tier persistent memory | ✅ | partial | — | basic |
 
 _Not a scorecard — they're all great at their thing. LiteCode's bet: one machine of your own, everything on it._

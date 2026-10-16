@@ -3,7 +3,7 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/ubuntu:24.04
 
 LABEL maintainer="LiteCode v12-r1 + WeChat Bridge"
 LABEL description="LiteCode OpenClaw AI Agent - Ubuntu 24.04 (国内源加速版)"
-LABEL version="v1.10.16.88-hanbao"
+LABEL version="v1.10.16.89-errand"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
