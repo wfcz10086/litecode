@@ -38,7 +38,10 @@ _SSH_CONN = {
     "host":     {"type": "string",  "description": "目标主机 IP/域名"},
     "port":     {"type": "integer", "description": "SSH 端口, 默认 22", "default": 22},
     "user":     {"type": "string",  "description": "SSH 用户, 默认 root", "default": "root"},
-    "password": {"type": "string",  "description": "SSH 密码"},
+    "password": {"type": "string",  "description": "SSH 密码 (用 key_file 时可省)"},
+    "key_file": {"type": "string",  "description": "私钥路径 (给了优先用密钥)"},
+    "alias":    {"type": "string",  "description": "已存主机别名 (ssh_save_host), 可省 host/凭据"},
+    "jump":     {"type": "string",  "description": "跳板主机别名 (等价 ssh -J)"},
 }
 
 
@@ -46,7 +49,7 @@ TOOLS = [
     {
         "name": "ssh_exec",
         "description": (
-            "SSH 到远程主机执行命令 (paramiko, 密码认证). "
+            "SSH 到远程主机执行命令 (paramiko, 密码或密钥, 可经跳板). "
             "用于远程排查/修改远程 docker/vllm/服务. 返回 rc + stdout + stderr."
         ),
         "schema": {
@@ -56,7 +59,7 @@ TOOLS = [
                 "cmd":     {"type": "string",  "description": "要执行的 shell 命令 (可 && 串多条)"},
                 "timeout": {"type": "integer", "description": "命令超时秒, 默认 60", "default": 60},
             },
-            "required": ["host", "password", "cmd"],
+            "required": ["cmd"],
         },
         "capabilities": {"safe": False, "long_running": True},
         "run": lambda args, ctx: _delegate("ssh_exec", args, ctx),
@@ -71,7 +74,7 @@ TOOLS = [
                 "path":      {"type": "string",  "description": "远程文件绝对路径"},
                 "max_chars": {"type": "integer", "description": "返回最大字符数, 默认 20000", "default": 20000},
             },
-            "required": ["host", "password", "path"],
+            "required": ["path"],
         },
         "capabilities": {"safe": True},
         "run": lambda args, ctx: _delegate("ssh_read_file", args, ctx),
@@ -90,7 +93,7 @@ TOOLS = [
                 "content": {"type": "string",  "description": "要写入的文件完整内容"},
                 "backup":  {"type": "boolean", "description": "写入前备份 (path.bak), 默认 true", "default": True},
             },
-            "required": ["host", "password", "path", "content"],
+            "required": ["path", "content"],
         },
         "capabilities": {"safe": False},
         "run": lambda args, ctx: _delegate("ssh_write_file", args, ctx),
@@ -108,7 +111,7 @@ TOOLS = [
                 "files":  {"type": "object",  "description": "远程路径 → 文件内容"},
                 "backup": {"type": "boolean", "description": "写入前备份 (.bak), 默认 true", "default": True},
             },
-            "required": ["host", "password", "files"],
+            "required": ["files"],
         },
         "capabilities": {"safe": False},
         "run": lambda args, ctx: _delegate("ssh_sync_files", args, ctx),
@@ -127,7 +130,7 @@ TOOLS = [
                 "old_str": {"type": "string", "description": "要替换的原始片段 (必须唯一)"},
                 "new_str": {"type": "string", "description": "替换后新内容 (空串=删除)"},
             },
-            "required": ["host", "password", "path", "old_str"],
+            "required": ["path", "old_str"],
         },
         "capabilities": {"safe": False},
         "run": lambda args, ctx: _delegate("ssh_str_replace", args, ctx),
@@ -141,7 +144,7 @@ TOOLS = [
                 **_SSH_CONN,
                 "all": {"type": "boolean", "description": "含已停止容器", "default": False},
             },
-            "required": ["host", "password"],
+            "required": [],
         },
         "capabilities": {"safe": True},
         "run": lambda args, ctx: _delegate("docker_remote_ps", args, ctx),
@@ -156,7 +159,7 @@ TOOLS = [
                 "container": {"type": "string", "description": "容器 name 或 id"},
                 "format":    {"type": "string", "description": "可选 go template, 如 '{{.Config.Cmd}}'"},
             },
-            "required": ["host", "password", "container"],
+            "required": ["container"],
         },
         "capabilities": {"safe": True},
         "run": lambda args, ctx: _delegate("docker_remote_inspect", args, ctx),
@@ -177,7 +180,7 @@ TOOLS = [
                 "entrypoint": {"type": "string", "description": "可选 --entrypoint 覆盖"},
                 "cmd":        {"type": "string", "description": "image 后跟的命令行 (Args)"},
             },
-            "required": ["host", "password", "container", "image", "run_flags"],
+            "required": ["container", "image", "run_flags"],
         },
         "capabilities": {"safe": False, "long_running": True},
         "run": lambda args, ctx: _delegate("docker_remote_recreate", args, ctx),

@@ -5,7 +5,7 @@
     { id: 'daily',   i18n: 'nav.group.daily',   label: '日常', open: true,
       keys: ['memory', 'timer', 'artifacts', 'sfiles', 'project', 'dag'] },
     { id: 'connect', i18n: 'nav.group.connect', label: '接入', open: false,
-      keys: ['wechat', 'wecom'] },
+      keys: ['wechat', 'wecom', 'windows_nodes'] },
     { id: 'ops',     i18n: 'nav.group.ops',     label: '运维', open: false,
       keys: ['stats', 'bg', 'docker', 'vnc'] },
   ];

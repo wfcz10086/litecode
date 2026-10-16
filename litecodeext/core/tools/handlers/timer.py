@@ -30,7 +30,7 @@ async def h_create_timer(sid: str, args: dict) -> tuple[str, Any]:
             "type": args.get("type", "cron"),
             "schedule": args.get("schedule", "").strip(),
             "action_type": args.get("action_type", "shell"),
-            "action_target": args.get("action_target", ""),
+            "action_target": (args.get("action_target") or sid) if args.get("action_type") == "agent" else args.get("action_target", ""),
             "action_content": args.get("action_content", ""),
             "enabled": True,
         }

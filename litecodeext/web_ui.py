@@ -384,6 +384,8 @@ async def _lifespan(application):
             print(f"[lifespan] wecom startup failed: {_e}")
     if _TIMER_AVAILABLE:
         tmgr = _timer_manager()
+        from lib.timer_agent import call_timer_agent
+        tmgr.set_agent_caller(call_timer_agent)
         # [v1.3] 让 timer action_type='dag' 能直接拉一个 DAG, 不绕 HTTP/auth
         try:
             tmgr.set_dag_runner(_start_dag_internal)
@@ -510,6 +512,7 @@ from routers.artifacts_v2_router import router as _artifacts_v2_router
 # #44: Docker 管理 (ps/logs/stats/restart/stop/start/inspect)
 from routers.docker_router      import router as _docker_router
 from routers.chat_router        import router as _chat_router
+from routers.windows_nodes_router import router as _windows_nodes_router
 app.include_router(_health_router)
 app.include_router(_model_router)
 app.include_router(_config_router)
@@ -524,6 +527,7 @@ app.include_router(_dag_router)
 app.include_router(_artifacts_v2_router)
 app.include_router(_docker_router)
 app.include_router(_chat_router)
+app.include_router(_windows_nodes_router)
 app.include_router(_static_router)
 
 # 把 web_ui 里的 _aproxy 函数注入给 router 共享 (各 router 通过 S.aproxy 调上游 server)
@@ -556,15 +560,36 @@ _GREETINGS = [
 def _random_greeting() -> str:
     return random.choice(_GREETINGS)
 
+def _turn_already_imported(msgs:list, collected:dict) -> bool:
+    """轮次结束时 server session 往往比 web 缓存新, load_session 会整份重导, 本轮已按
+    server 历史逐条导入 (converter 产物带 _tool_results)。此时再追加整轮拼接文本就重复了。
+    命中则只把 SSE 才有的 desktop_steps / usage 挂到本轮最后一条 assistant 上, 返回 True。"""
+    last_user = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
+    turn = [m for m in msgs[last_user + 1:] if m.get("role") == "assistant" and "_tool_results" in m]
+    final = next((m.get("content", "").strip() for m in reversed(turn) if (m.get("content") or "").strip()), "")
+    text = collected.get("text") or ""
+    if not turn or (text.strip() and not (final and final in text)):
+        return False
+    tail = turn[-1]
+    if collected.get('desktop_steps') and not tail.get('desktop_steps'):
+        tail['desktop_steps'] = collected['desktop_steps']
+    if collected.get("usage") and not tail.get("usage"):
+        tail["usage"] = collected["usage"]
+    return True
+
 def _save_assistant_msg(sid:str, collected:dict):
     """后台保存 assistant 消息，保证客户端断连后依然能写入。"""
-    if not (collected["text"] or collected["tools"] or collected["diffs"] or collected.get("reasoning")):
+    if not (collected["text"] or collected["tools"] or collected["diffs"] or collected.get("reasoning") or collected.get('desktop_steps')):
         return
     try:
         s2 = load_session(sid)
         # 去重：如果最后一条已经是这条 assistant 消息就不重复写
         msgs = s2.get("messages", [])
-        if msgs and msgs[-1].get("role") == "assistant" and msgs[-1].get("content","") == collected["text"]:
+        if (msgs and msgs[-1].get("role") == "assistant" and msgs[-1].get("content", "") == collected["text"]
+                and msgs[-1].get('desktop_steps', []) == collected.get('desktop_steps', [])):
+            return
+        if _turn_already_imported(msgs, collected):
+            save_session(s2)
             return
         s2["messages"].append({
             "role": "assistant",
@@ -572,6 +597,7 @@ def _save_assistant_msg(sid:str, collected:dict):
             "ts": time.time(),
             "tools": collected["tools"],
             "diffs": collected.get("diffs", []),
+            "desktop_steps": collected.get('desktop_steps', []),
             # [v1.0] 持久化推理 (方案 B): 仅前端展示用,
             # web_ui.py 发请求时不读它, litecode_server 自己管历史, 不会回流到 LLM 上下文
             "reasoning": collected.get("reasoning", ""),

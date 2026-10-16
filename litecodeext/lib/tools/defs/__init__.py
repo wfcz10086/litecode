@@ -15,6 +15,8 @@ from .snapshot_defs import SNAPSHOT_DEFS
 from .task_defs import TASK_DEFS
 from .ssh_hosts_defs import SSH_HOSTS_DEFS
 from .browser_ref_defs import BROWSER_REF_DEFS
+from .windows_desktop_defs import WINDOWS_DESKTOP_DEFS
+from .windows_nodes_defs import WINDOWS_NODES_DEFS
 
 TOOL_DEFS = (
     SHELL_DEFS
@@ -30,11 +32,13 @@ TOOL_DEFS = (
     + TASK_DEFS
     + SSH_HOSTS_DEFS
     + BROWSER_REF_DEFS
+    + WINDOWS_DESKTOP_DEFS
+    + WINDOWS_NODES_DEFS
 )
 
 __all__ = [
     "TOOL_DEFS",
     "SHELL_DEFS", "WEB_DEFS", "MEDIA_DEFS", "CODE_DEFS",
     "AGENT_DEFS", "WORKFLOW_DEFS", "PROJECT_DEFS", "REMOTE_DEFS",
-    "GIT_DEFS", "SNAPSHOT_DEFS", "TASK_DEFS", "SSH_HOSTS_DEFS", "BROWSER_REF_DEFS",
+    "GIT_DEFS", "SNAPSHOT_DEFS", "TASK_DEFS", "SSH_HOSTS_DEFS", "BROWSER_REF_DEFS", "WINDOWS_DESKTOP_DEFS",
 ]

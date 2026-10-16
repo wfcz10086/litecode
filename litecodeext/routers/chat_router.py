@@ -54,8 +54,13 @@ def _collect(collected: dict, line: str):
             if det:
                 collected["tools"].append(det)
     dv = delta.get("diff_view")
-    if dv and dv.get("diff"):
+    if isinstance(dv, dict) and isinstance(dv.get("diff"), str) and dv["diff"]:
         collected["diffs"].append({"filepath": dv.get("filepath", ""), "diff": dv["diff"]})
+    step = delta.get('desktop_step')
+    if isinstance(step, dict) and isinstance(step.get('id'), str):
+        steps = collected.setdefault('desktop_steps', [])
+        if not any(s.get('id') == step['id'] for s in steps):
+            steps.append(step)
 
 
 def _emit_stats(sid: str, t0: float, chunks: int, aborted: str):
@@ -75,7 +80,7 @@ def _producer(sid: str, url: str, payload: dict):
     w = _wui()
 
     async def gen():
-        collected = {"text": "", "reasoning": "", "tools": [], "diffs": [], "usage": None}
+        collected = {"text": "", "reasoning": "", "tools": [], "diffs": [], "usage": None, "desktop_steps": []}
         t0, chunks, aborted = time.time(), 0, ""
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
@@ -127,6 +132,16 @@ async def api_chat(sid: str, request: Request):
     message = body.get("message", "").strip()
     if not message:
         raise HTTPException(400, "empty")
+    run = start_chat_turn(sid, message, body)
+    return _follow(request, run, 0)
+
+
+def start_chat_turn(sid: str, message: str, body=None):
+    """Web 与定时任务共用入口；同步检查并登记轮次，保持同会话串行。"""
+    body = body or {}
+    message = message.strip()
+    if not message:
+        raise HTTPException(400, "empty")
     if REGISTRY.running(sid):
         raise HTTPException(409, "该会话正在执行中")
     w = _wui()
@@ -158,7 +173,8 @@ async def api_chat(sid: str, request: Request):
     if "__TRIGGER_EMPTY_RESPONSE__" in message:   # [P46 测试模式] 走 server 空响应路径
         url += "?__test_empty=1"
     run = REGISTRY.start(sid, _producer(sid, url, payload))
-    return _follow(request, run, 0)
+    run.user_ts = ts
+    return run
 
 
 @router.get("/api/chat/{sid}/run")

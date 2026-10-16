@@ -107,7 +107,7 @@ function _mergeConsecutiveAssistants(msgs){
       const joiner=(last.content && m.content)?'\n\n':'';
       last.content=(last.content||'')+joiner+(m.content||'');
       last.tools=[...(last.tools||[]),...(m.tools||[])];
-      last.diffs=[...(last.diffs||[]),...(m.diffs||[])];
+      last.diffs=[...(last.diffs||[]),...(m.diffs||[])];last.desktop_steps=[...(last.desktop_steps||[]),...(m.desktop_steps||[])];
       last._tool_results=[...(last._tool_results||[]),...(m._tool_results||[])];
       const lr=last.reasoning||'', mr=m.reasoning||'';
       last.reasoning=lr+(lr&&mr?'\n\n':'')+mr;
@@ -119,8 +119,8 @@ function _mergeConsecutiveAssistants(msgs){
   }
   return out;
 }
-function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}const merged=_mergeConsecutiveAssistants(msgs);merged.forEach(m=>addMsg(m.role,m.content,m.tools||[],false,m.diffs||[],m.usage,m.source||'',m.wx_user||'',m.reasoning||'',m._tool_results||[]));sbot()}
-function rdiff(df){return df.split('\n').map(l=>{const cl=l.startsWith('+')&&!l.startsWith('+++')?'da':l.startsWith('-')&&!l.startsWith('---')?'dd_':l.startsWith('@@')?'dm':'';return`<span class="${cl}">${esc(l)}</span>`;}).join('\n')}
+function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}const merged=_mergeConsecutiveAssistants(msgs);merged.forEach(m=>addMsg(m.role,m.content,m.tools||[],false,m.diffs||[],m.usage,m.source||'',m.wx_user||'',m.reasoning||'',m._tool_results||[],m.desktop_steps||[]));sbot()}
+function rdiff(df){if(typeof df!=='string')return '';return df.split('\n').map(l=>{const cl=l.startsWith('+')&&!l.startsWith('+++')?'da':l.startsWith('-')&&!l.startsWith('---')?'dd_':l.startsWith('@@')?'dm':'';return`<span class="${cl}">${esc(l)}</span>`;}).join('\n')}
 /* ── 微信附件解析：从消息文本中提取图片/文件路径 ── */
 const _IMG_EXTS=new Set(['jpg','jpeg','png','gif','webp','bmp','svg']);
 const _PDF_EXT='pdf';
@@ -158,7 +158,7 @@ function _buildAttachNode(att){
   a.innerHTML=`<span class="wx-file-icon">${icon}</span><div class="wx-file-info"><div class="wx-file-name">${esc(fname)}</div><div class="wx-file-size">${esc(ext.toUpperCase()||'FILE')}</div></div><span class="wx-file-dl">↓</span>`;
   return a;
 }
-function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[]){
+function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[],desktopSteps=[]){
   tools=(tools||[]).filter(t=>t!=='推理中…'); /* 老会话里落库的等首包占位, 不是工具调用 */
   document.getElementById('empty')?.remove();const el=document.getElementById('msgs');
   const wrap=document.createElement('div');wrap.className=`msg ${role==='user'?'user':'ai'}`;
@@ -247,7 +247,8 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
         bubble.appendChild(tgb);
       }else{bubble.appendChild(tg);}
     }
-    diffs.forEach(dv=>{const df=dv.diff||'';if(!df)return;const fname=(dv.filepath||'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Math.random().toString(36).slice(2,7);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bubble.appendChild(dEl);});
+    desktopSteps.forEach(step=>window.LCDesktopSteps?.render(bubble,step));
+    diffs.forEach(dv=>{const df=dv?.diff;if(typeof df!=='string'||!df)return;const fname=(typeof dv.filepath==='string'?dv.filepath:'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Math.random().toString(36).slice(2,7);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bubble.appendChild(dEl);});
     if(content){
       /* [v1.4] 防御: 多模态 content 可能是 array, 提取 text 部分再 marked */
       let textContent = content;
@@ -701,7 +702,7 @@ async function _streamTurn(bodyEl,open){
   const sid=cur,gen=++_streamGen;
   try{localStorage.setItem('lc.cur',sid);}catch(e){}  /* 刷新后回到这个会话并接上进度 */
   streaming=true;window.streaming=true;_sending=true;document.getElementById('sdb').disabled=true;document.getElementById('ib').classList.add('vis');
-  let ft='',sr_=null,fc=true,sdiffs=[];_lu=null;
+  let ft='',sr_=null,fc=true,sdiffs=[],sdesktop=[];_lu=null;
   try{
     const resp=await open();
     if(resp.status===409){
@@ -801,7 +802,8 @@ async function _streamTurn(bodyEl,open){
           }
           sbot();
         }
-        if(delta.diff_view){const dv=delta.diff_view,df=dv.diff||'';if(df){bodyEl.querySelector('.dots')?.remove();const fname=(dv.filepath||'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Date.now()+Math.random().toString(36).slice(2,4);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bodyEl.appendChild(dEl);sdiffs.push(dEl.outerHTML);sbot();}}
+        if(delta.desktop_step){const card=window.LCDesktopSteps?.render(bodyEl,delta.desktop_step);if(card)sdesktop.push(card.outerHTML);sbot();}
+        if(delta.diff_view){const dv=delta.diff_view,df=dv?.diff;if(typeof df==='string'&&df){bodyEl.querySelector('.dots')?.remove();const fname=(typeof dv.filepath==='string'?dv.filepath:'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Date.now()+Math.random().toString(36).slice(2,4);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bodyEl.appendChild(dEl);sdiffs.push(dEl.outerHTML);sbot();}}
         /* [v12.5] 推理内容折叠显示 — 统一走 delta.reasoning（服务器已归一化所有后端） */
         const _rz=delta.reasoning||'';
         if(_rz){
@@ -853,7 +855,7 @@ async function _streamTurn(bodyEl,open){
   /* [P46 修] 保留错误块, 流末重建时不抹掉 ❌ + 重试按钮 */
   const errEls=bodyEl.querySelectorAll('.msg-error');
   let errHtml='';errEls.forEach(e=>errHtml+=e.outerHTML);
-  let fh=rsbHtml+(tgEl?tgEl.outerHTML:'');sdiffs.forEach(d=>fh+=d);if(ft)fh+=marked.parse(ft);
+  let fh=rsbHtml+(tgEl?tgEl.outerHTML:'')+sdesktop.join('');sdiffs.forEach(d=>fh+=d);if(ft)fh+=marked.parse(ft);
   fh+=errHtml;
   if(fh){bodyEl.innerHTML=fh;bodyEl.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{if(!c.classList.contains('hljs'))hljs.highlightElement(c);const lm=c.className.match(/language-(\w+)/);if(lm&&lm[1]){const lg=document.createElement('span');lg.className='clang';lg.textContent=lm[1];pre.appendChild(lg);}});});}
   else if(!bodyEl.querySelector('.tg')&&!sdiffs.length&&!bodyEl.querySelector('.msg-error')){bodyEl.innerHTML='<span style="color:var(--tx3)">(无响应)</span>';}

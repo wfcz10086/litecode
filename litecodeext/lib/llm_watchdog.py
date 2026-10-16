@@ -139,7 +139,7 @@ def _build() -> Watchdog:
             from tools.handlers.remote import _ssh  # type: ignore  # core/ 在 sys.path 上时
         s = cfg.get("ssh") or {}
         rc, out, err = await _ssh(s.get("host", ""), int(s.get("port") or 22), s.get("user", "root"),
-                                  s.get("password", ""), cfg["restart_cmd"], 60)
+                                  s.get("password", ""), cfg["restart_cmd"], 60, s.get("key_file", ""))
         return f"rc={rc} {(out or '').strip()} {(err or '').strip()}".strip()
 
     return Watchdog(cfg, probe, restart, log=log)

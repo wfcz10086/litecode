@@ -2,14 +2,19 @@
 """step2/3: timeline.json → tl.js → playwright 驱动 video.html 的 seek(t)
   python3 render.py check              版面自检: 每场 4 个时刻量所有可见文字的实际框, 查文字互相压住 / 出屏
   python3 render.py snap [t1 t2 ...]   关键帧预览 → preview/t<t>.png (默认每场中点)
-  python3 render.py all                逐帧 → frames/f00000.png ... (耗时长, 用 background 跑)
+  python3 render.py all                逐帧 → frames/f00000.jpg ... (耗时长, 用 background 跑)
+                                       多进程并行 (RENDER_WORKERS, 默认 CPU 核数/2, 最多 6) + CDP 直出 JPEG;
+                                       FRAME_FMT=png 退回无损 PNG
 有 page error 或 check 发现问题 → 非 0 退出。
 故意叠在别的字上的元素 (印章盖在行情牌上之类) 加 data-qa="overlay" 豁免。"""
-import glob, json, os, re, sys, time
+import base64, glob, json, os, re, sys, time
+from multiprocessing import Pool
 
 from playwright.sync_api import sync_playwright
 
 FPS = int(os.environ.get("FPS", 24))
+FMT = os.environ.get("FRAME_FMT", "jpg")          # jpg: 编码快、体积约 PNG 的 1/5; 成片是 h264 有损, 看不出差别
+WORKERS = int(os.environ.get("RENDER_WORKERS", max(1, min(6, (os.cpu_count() or 2) // 2))))
 
 
 def browser(pw):
@@ -92,6 +97,49 @@ def check(pg, tl):
     return bad
 
 
+def _render_range(job):
+    """一个 worker: 自己的浏览器渲 [a, b) 帧。CDP captureScreenshot 比 page.screenshot 少一层封装, 再开速度优先。"""
+    k, a, b = job
+    with sync_playwright() as pw:
+        br = browser(pw)
+        pg = br.new_page(viewport={"width": 1080, "height": 1920})
+        errs = []
+        pg.on("pageerror", lambda e: errs.append(str(e)))
+        pg.goto("file://" + os.path.abspath("video.html"))
+        pg.wait_for_timeout(400)
+        cdp = pg.context.new_cdp_session(pg)
+        shot = ({"format": "jpeg", "quality": 92, "optimizeForSpeed": True} if FMT == "jpg"
+                else {"format": "png", "optimizeForSpeed": True})
+        t0 = time.time()
+        for i in range(a, b):
+            pg.evaluate(f"seek({i / FPS:.4f})")
+            data = cdp.send("Page.captureScreenshot", shot)["data"]
+            with open(f"frames/f{i:05d}.{FMT}", "wb") as f:
+                f.write(base64.b64decode(data))
+            if (i - a) % 100 == 0:
+                print(f"[w{k}] {i - a}/{b - a} {time.time() - t0:.0f}s", flush=True)
+        br.close()
+        return errs
+
+
+def render_all(tl):
+    os.makedirs("frames", exist_ok=True)
+    for old in glob.glob("frames/f*.*"):               # 换格式时别混着上一轮的帧
+        os.remove(old)
+    n = int(tl["total"] * FPS) + 1
+    w = max(1, min(WORKERS, n // 50 or 1))
+    jobs = [(k, k * n // w, (k + 1) * n // w) for k in range(w)]
+    t0 = time.time()
+    print(f"{n} frames, {w} workers, {FMT}", flush=True)
+    with Pool(w) as pool:
+        errs = [e for r in pool.map(_render_range, jobs) for e in r]
+    got = len(glob.glob(f"frames/f*.{FMT}"))
+    print(f"DONE {got}/{n} frames {time.time() - t0:.0f}s ({got / max(time.time() - t0, 1):.1f} fps)")
+    if errs:
+        print("PAGE ERRORS DURING SEEK:", errs[:5])
+    return got == n and not errs
+
+
 def check_page(pw, tl):
     b = browser(pw)
     pg = b.new_page(viewport={"width": 1080, "height": 1920})
@@ -115,20 +163,16 @@ def main():
         if mode == "check":
             b.close()
             sys.exit(1 if check_page(pw, tl) else 0)
+        if mode == "all":
+            b.close()
+            sys.exit(0 if render_all(tl) else 1)
         if mode == "snap":
             os.makedirs("preview", exist_ok=True)
             ts = [float(x) for x in sys.argv[2:]] or [round(s["start"] + s["dur"] / 2, 1) for s in tl["scenes"]]
             for t in ts:
                 pg.evaluate(f"seek({t})"); pg.screenshot(path=f"preview/t{t:g}.png"); print("snap", f"preview/t{t:g}.png")
         else:
-            os.makedirs("frames", exist_ok=True)
-            n, t0 = int(tl["total"] * FPS) + 1, time.time()
-            for i in range(n):
-                pg.evaluate(f"seek({i / FPS:.4f})")
-                pg.screenshot(path=f"frames/f{i:05d}.png")
-                if i % 100 == 0:
-                    print(f"{i}/{n} {time.time() - t0:.0f}s", flush=True)
-            print(f"DONE {n} frames {time.time() - t0:.0f}s")
+            print(f"未知模式 {mode}, 可选: check / snap / all"); b.close(); sys.exit(2)
         b.close()
         if errs:
             print("PAGE ERRORS DURING SEEK:", errs); sys.exit(1)

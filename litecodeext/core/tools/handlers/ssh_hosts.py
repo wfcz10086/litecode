@@ -14,7 +14,8 @@ from typing import Any
 
 from . import register
 
-_STORE_PATH = Path(__file__).parent.parent.parent / "data" / "ssh_hosts.json"
+# 凭据别放代码目录 (data/ 在 git 里、容器里也没挂载): 放工作区 (宿主机持久化, gitignore + 公开版排除)
+_STORE_PATH = Path(os.environ.get("LITECODE_SSH_HOSTS", "/tmp/litecode_workspace/.secrets/ssh_hosts.json"))
 
 
 def _load() -> dict:
@@ -59,6 +60,8 @@ async def h_ssh_save_host(sid: str, args: dict) -> tuple[str, Any]:
         "port": int(args.get("port") or 22),
         "user": (args.get("user") or "root").strip(),
         "password": args.get("password") or "",
+        "key_file": (args.get("key_file") or "").strip(),
+        "jump": (args.get("jump") or "").strip(),
         "note": args.get("note") or "",
     }
     data[alias] = entry
@@ -74,9 +77,15 @@ async def h_ssh_list_hosts(sid: str, args: dict) -> tuple[str, Any]:
         return "[ssh_list_hosts] 无已存主机", None
     lines = []
     for alias, cfg in data.items():
-        masked = cfg.get("password", "")[:2] + "***" if cfg.get("password") else ""
+        auth = []
+        if cfg.get("key_file"):
+            auth.append("密钥")
+        if cfg.get("password"):
+            auth.append("密码 " + cfg["password"][:2] + "***")
+        via = f" 经跳板 {cfg['jump']}" if cfg.get("jump") else ""
         note = f"  # {cfg['note']}" if cfg.get("note") else ""
-        lines.append(f"  {alias}: {cfg.get('user','root')}@{cfg.get('host','')}:{cfg.get('port',22)} {masked}{note}")
+        lines.append(f"  {alias}: {cfg.get('user','root')}@{cfg.get('host','')}:{cfg.get('port',22)}"
+                     f"{via} [{' + '.join(auth) or '无凭据'}]{note}")
     return "[ssh_list_hosts]\n" + "\n".join(lines), None
 
 

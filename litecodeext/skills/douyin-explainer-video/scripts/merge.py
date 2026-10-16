@@ -38,8 +38,10 @@ def mix():
     print("mix.wav", round(len(out)/SR,1),"s peak", round(float(peak),3))
 
 def final():
+    # render.py 默认出 jpg; 老流程 / FRAME_FMT=png 出 png —— 有哪个用哪个
+    FRAMES = "frames/f%05d.jpg" if os.path.exists("frames/f00000.jpg") else "frames/f%05d.png"
     subprocess.run(["ffmpeg","-y","-v","error","-framerate",str(FPS),
-        "-i","frames/f%05d.png","-i","mix.wav",
+        "-i",FRAMES,"-i","mix.wav",
         "-c:v","libx264","-preset","medium","-crf","18","-pix_fmt","yuv420p",
         "-r",str(FPS),"-c:a","aac","-b:a","160k","-shortest","-movflags","+faststart",
         "final.mp4"], check=True)

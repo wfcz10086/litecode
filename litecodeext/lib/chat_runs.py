@@ -38,8 +38,11 @@ class Run:
             self._cond.notify_all()
 
     def status(self) -> dict:
-        return {"running": not self.done, "frames": len(self.frames),
-                "started": self.started, "ended": self.ended}
+        result = {"running": not self.done, "frames": len(self.frames),
+                  "started": self.started, "ended": self.ended}
+        if hasattr(self, 'user_ts'):
+            result['user_ts'] = self.user_ts
+        return result
 
     async def follow(self, start: int = 0, idle: float = 15.0) -> AsyncIterator[Optional[str]]:
         """回放 start 之后的帧并实时跟随, 直到本轮结束。

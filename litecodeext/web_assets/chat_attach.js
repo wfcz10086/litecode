@@ -8,6 +8,8 @@
 (function () {
   const RETRY_MS = 2000, MAX_OFFLINE_TRIES = 90;   // 断网最多等 3 分钟
   let offlineTries = 0;
+  const observed = new Map();
+  let polling = false;
 
   async function runStatus(sid) {
     try {
@@ -24,6 +26,7 @@
    * 会被导进历史; 不截掉就会和回放重复), 剩下的靠回放补齐 + 实时跟随 */
   async function resumeIfRunning(sid, msgs) {
     const st = await runStatus(sid);
+    if (st) observed.set(sid, st.started);
     if (!st || !st.running) return;
     if (cur !== sid || streaming) return;
     let u = msgs.length - 1;
@@ -49,9 +52,37 @@
       return;
     }
     offlineTries = 0;
+    observed.set(sid, st.started);
     if (!st.running) return;
     setTimeout(() => { if (cur === sid && !streaming) resume(sid); }, RETRY_MS);
   }
 
-  window.LCAttach = { resume, resumeIfRunning, afterTurn };
+  async function pollBackground() {
+    if (polling || typeof cur === 'undefined' || !cur || streaming || document.hidden) return;
+    const sid = cur;
+    polling = true;
+    try {
+      const st = await runStatus(sid);
+      if (!st || !st.started || cur !== sid || streaming) return;
+      if (!observed.has(sid)) { if (!st.running) { observed.set(sid, st.started); return; } }
+      else if (observed.get(sid) === st.started) return;
+      const resp = await fetch(`/api/sessions/${sid}`);
+      if (!resp.ok) return;
+      const msgs = (await resp.json()).messages || [];
+      if (cur !== sid || streaming) return;
+      const first = msgs.findIndex(m => m.role === 'user' && m.ts === st.user_ts);
+      if (first < 0) { await resume(sid); return; }
+      // 只追加新轮次，避免定时巡检反复重绘、语法高亮整段历史。
+      const delta = st.running ? [msgs[first]] : msgs.slice(first);
+      _mergeConsecutiveAssistants(delta).forEach(m => addMsg(m.role, m.content, m.tools || [], false,
+        m.diffs || [], m.usage, m.source || '', m.wx_user || '', m.reasoning || '',
+        m._tool_results || [], m.desktop_steps || []));
+      observed.set(sid, st.started);
+      sbot(true);
+      if (st.running) attach(sid);
+    } catch (e) { /* 网络恢复后由下次轮询重试。 */ }
+    finally { polling = false; }
+  }
+  setInterval(pollBackground, 5000);
+  window.LCAttach = { resume, resumeIfRunning, afterTurn, pollBackground };
 })();

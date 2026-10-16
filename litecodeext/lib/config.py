@@ -114,9 +114,8 @@ def est_tokens(text) -> int:
     # 裸 data URL (未包在 list 里) 同样不能按长度算
     if "base64," in s and len(s) > 4096:
         import re as _re
-        n_img = len(_re.findall(r"data:image/[a-z]+;base64,", s))
+        s, n_img = _re.subn(r"data:image/[a-z]+;base64,[A-Za-z0-9+/=]*", "", s)
         if n_img:
-            s = _re.sub(r"data:image/[a-z]+;base64,[A-Za-z0-9+/=]+", "", s)
             return n_img * IMAGE_TOKEN_COST + est_tokens(s)
     cjk = 0
     for ch in s:

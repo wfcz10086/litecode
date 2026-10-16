@@ -24,6 +24,8 @@
 <script src="/assets/dag_editor_simple.js" defer></script>
 <script>window.openDAGRouter = function(){ if (typeof window.openDAG === 'function') return window.openDAG(); };</script>
 <!-- [P2-4 2026-08-25] noVNC 桌面预览段拆出 app.js -->
+<script src="/assets/desktop_steps.js" defer></script>
+<script src="/assets/windows_nodes.js" defer></script>
 <script src="/assets/chat_core.js" defer></script>
 <script src="/assets/chat_attach.js" defer></script>
 </head>
@@ -46,6 +48,7 @@
     </div>
     <div id="sl"></div>
     <div id="sbf">
+      <button class="sbt" data-panel="windows_nodes" onclick="openWindowsNodes()" title="新 Windows 一条命令主动回连"><span>添加 Windows</span></button>
       <button class="sbt" onclick="openP('stats')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span data-i18n="nav.token_stats">用量统计</span></button>
       <button class="sbt" onclick="openP('memory')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span data-i18n="nav.memory">记忆</span></button>
       <button class="sbt" onclick="openP('wechat')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 2C5.46 2 3 4.46 3 7.5c0 1.63.71 3.1 1.83 4.12L4 14l2.76-1.38c.54.15 1.12.23 1.74.23.17 0 .34-.01.5-.02"/><path d="M15.5 8C12.46 8 10 10.46 10 13.5s2.46 5.5 5.5 5.5c.62 0 1.2-.08 1.74-.23L20 20l-.83-2.38C20.29 16.6 21 15.13 21 13.5 21 10.46 18.54 8 15.5 8z"/></svg><span data-i18n="nav.wechat">微信</span></button>

@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).parent / "core"))  # core 模块扁平导�
 from lib import overhead_calib as _oc
 from lib import context_pressure as _cp
 from lib import tool_filter as _tf
+from lib import project_root as _pr
 from lib.config import (
     CFG, BASE, log, load_cfg,
     TOKEN, PORT, HOST, MODEL_ID, BACKEND_URL, API_KEY, BACKEND_TYPE,
@@ -78,6 +79,13 @@ _PATHS      = CFG.get("paths", {})
 # patch_dag_node/task_create (不改代码文件本身)。
 _WRITE_TOOL_NAMES = ("write_file", "patch_file", "apply_blocks", "edit_symbol")
 _WRITE_TOOL_NAMES_STR = " / ".join(_WRITE_TOOL_NAMES)  # 提醒文案里展示用, 同一份来源
+# 操作类工具: 产出在远端/桌面/网页上而不在本地磁盘, 用过即视为在推进, 豁免写代码那套 PLAN/EXEC/READONLY 闸
+_ACTION_TOOL_PREFIXES = ("windows_desktop", "desktop_", "ssh_", "docker_remote_")
+_ACTION_TOOL_NAMES = ("browser_act", "browser_login")
+
+
+def _is_action_tool(name: str) -> bool:
+    return name in _ACTION_TOOL_NAMES or name.startswith(_ACTION_TOOL_PREFIXES)
 
 # [EXEC-GATE]/[READONLY] 判定"这次写类工具调用是否*确定*成功落盘"。
 # 不用 `not result.startswith("ERROR")` (乐观判据: 空字符串/"Permission denied..."/
@@ -2244,7 +2252,11 @@ async def agent_stream(
                                 result = f"ERROR: tool execution failed: {_tool_exc}"
                                 diff = None
 
-                        if diff:
+                        if fn_name == 'windows_desktop':
+                            from lib.desktop_steps import desktop_step
+                            yield sse_status('desktop_step', desktop_step(result, fn_args, WORKSPACE, f"{tc['id']}-{time.time_ns()}"), model)
+
+                        if isinstance(diff, str) and diff:
                             yield sse_status(
                                 "diff_view",
                                 {"filepath": fn_args.get("filepath", ""), "diff": diff},
@@ -2261,6 +2273,8 @@ async def agent_stream(
                         # 等其余消费者的行为一律不受影响。
                         if fn_name in _WRITE_TOOL_NAMES and _write_call_confirmed_success(fn_name, result):
                             _iter_write_success = True
+                        if _is_action_tool(fn_name):
+                            _batch_state.action_tool_calls += 1
                         log.info(f"  \033[2m  ↳ {preview[:100]}\033[0m")
                         yield sse_status("task_exec", {
                             "status": "done",
@@ -2371,6 +2385,10 @@ async def agent_stream(
 
                     _ctx.messages.extend(tool_results)
                     _ctx.new_msgs.extend(tool_results)
+                    # 先补齐所有 tool 响应，再附最新桌面图，保持 OpenAI 工具消息链完整。
+                    from lib.desktop_observation import append_latest_observation
+                    if append_latest_observation(_ctx.messages, tool_call_list, tool_results, WORKSPACE):
+                        log.info(f'  [DESKTOP-VISION:{_ctx.sid_tag}] 最新截图已回流下一轮模型输入')
 
                     # ── [TOOL-LOOP-BREAK] 累计拦截达阈值 → 终止本轮, 走正常收尾路径 ──
                     # [FIX 2026-08-26] SWE-bench 实测: guard 只拦不导致 iter=108 空转
@@ -2432,6 +2450,8 @@ async def agent_stream(
                                 _ext = "." + _fname.rsplit(".", 1)[-1] if "." in _fname else ""
                                 _is_test = any(p in _fname for p in _TEST_PATTERNS)
                                 _is_skip = any(s in _fname for s in _SKIP_NAMES)
+                                if _pr.is_oneoff(_fname):        # 一次性脚本不算项目文件
+                                    _is_skip = True
 
                                 if _is_test:
                                     _test_state.test_files_written.add(_fp)
@@ -2439,13 +2459,10 @@ async def agent_stream(
                                 elif _ext in _SRC_EXTS and not _is_skip:
                                     _test_state.src_files_written.append(_fp)
                                     _test_state.iter_wrote_src = True
-                                    # 推断项目根目录: WORKSPACE 下第一级目录
-                                    _ws = str(WORKSPACE).rstrip("/")
-                                    if _fp.startswith(_ws + "/"):
-                                        _rel = _fp[len(_ws)+1:]
-                                        _top = _rel.split("/")[0]
-                                        if _top:
-                                            _pm_state.project_root = _ws + "/" + _top
+                                    # 推断项目根目录: WORKSPACE 下第一级子目录; 单文件脚本不算项目 (lib/project_root.py)
+                                    _root = _pr.infer_project_root(str(WORKSPACE), _fp)
+                                    if _root:
+                                        _pm_state.project_root = _root
                                     # py 计数 (PROJECT_MAP 阈值用)
                                     if _ext == ".py":
                                         _pm_state.py_files_written += 1
@@ -3008,7 +3025,7 @@ async def agent_stream(
                     # 次数等既有行为不变。
                     _readonly_threshold = int(_AGT.get("readonly_streak_threshold", 10))
                     _readonly_reminder_max = int(_AGT.get("readonly_reminder_max", 3))
-                    if _batch_state.readonly_tick(_iter_write_success, _readonly_threshold, _readonly_reminder_max):
+                    if _batch_state.readonly_tick(_iter_write_success or _batch_state.action_tool_calls > 0, _readonly_threshold, _readonly_reminder_max):
                         _guard_stats.hit("SYSTEM-READONLY")
                         _readonly_inject = (
                             f"[SYSTEM-READONLY] 你已经连续 {_readonly_threshold} 轮只在查看和验证，没有做出任何实际修改。\n"
@@ -3232,7 +3249,7 @@ async def agent_stream(
             #   context length is 204800 tokens...
             # 这种东西对用户毫无意义, 还暴露内部实现。原文只进日志, 用户看到人话。
             _raw_err = str(e)
-            log.error(f"  [{_ctx.sid_tag}] 回合异常: {_raw_err[:500]}")
+            log.exception(f"  [{_ctx.sid_tag}] 回合异常: {_raw_err[:500]}")
             _el = _raw_err.lower()
             if "maximum context length" in _el or "context_length_exceeded" in _el or "too many tokens" in _el:
                 _err_msg = ("\n对话历史太长了，这轮没能跑完。我已经在压缩上下文，"

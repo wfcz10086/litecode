@@ -57,6 +57,7 @@ class BatchWriteState:
     plan_gate_injected: bool = False    # [PLAN-GATE] 本轮是否已注入过拆解提醒 (注入过永久不再注入)
     exec_gate_write_calls: int = 0      # [EXEC-GATE] 本轮累计*成功*写类工具调用次数 (名单见 litecode_server._WRITE_TOOL_NAMES)
     exec_gate_injected: bool = False    # [EXEC-GATE] 本轮是否已注入过收尾提醒 (最多注入 1 次, 之后永久放行)
+    action_tool_calls: int = 0          # 本轮操作类工具 (桌面/远程/浏览器操作) 调用次数, >0 即非写代码任务, 豁免 PLAN/EXEC 闸
 
     def readonly_tick(self, iter_has_write: bool, threshold: int = 10, max_reminders: int = 3) -> bool:
         """记录本轮是否调用了写类工具, 返回本轮是否应该注入"探索不收敛"推进提醒。
@@ -78,6 +79,8 @@ class BatchWriteState:
         Plan-Gate 拆解提醒。task_created_now=True 一旦发生就永久豁免 (本轮循环内不重置);
         injected 一旦为真也永久不再返回 True (最多注入 1 次, 不重复提醒, 不死锁)。"""
         self.plan_gate_tool_call_iters += 1
+        if self.action_tool_calls:   # 桌面点一下就是一轮, 按写代码的阈值催拆解只会添噪音
+            return False
         if task_created_now:
             self.plan_gate_task_created = True
         if (not self.plan_gate_injected
@@ -96,7 +99,7 @@ class BatchWriteState:
         累加——判不出是否成功一律不计入, 宁可多提醒也不哑火) 仍为 0,
         且此前从未注入过 → 返回 True 并把 injected 永久置位 (最多触发一次, 不重复
         注入、不死锁; 调用方拿到 True 后应该"多给一轮机会"而不是硬阻断结束)。"""
-        if self.exec_gate_injected:
+        if self.exec_gate_injected or self.action_tool_calls:
             return False
         if tool_call_iters >= min_tool_iters and self.exec_gate_write_calls == 0:
             self.exec_gate_injected = True
