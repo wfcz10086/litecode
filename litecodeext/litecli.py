@@ -166,9 +166,18 @@ def _resolve_model_ref(target: str) -> tuple[str, str]:
 
 
 # ── click 根 + 全局选项 ──────────────────────────────────────
+try:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from lib.version import label as _vlabel
+    _VERSION_LABEL = _vlabel()
+except Exception:  # 单独拷走 litecli.py 时没有 lib/
+    _VERSION_LABEL = "unknown"
+
+
 @click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option("--json", "json_out", is_flag=True, help="输出 JSON 格式")
 @click.option("--url", default=None, help=f"Web UI URL (默认 {WEB_URL})")
+@click.version_option(_VERSION_LABEL, prog_name="LiteCode", message="%(prog)s %(version)s")
 def cli(json_out: bool, url: Optional[str]):
     """LiteCode CLI — 跟 web UI 功能对等."""
     if json_out:

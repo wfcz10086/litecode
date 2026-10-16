@@ -12,6 +12,9 @@ from routers.state import S
 router = APIRouter()
 
 
+from lib import version as _version  # noqa: E402
+
+
 @router.get("/api/health")
 async def api_health(request: Request):
     require_auth(request)
@@ -29,9 +32,10 @@ async def api_health(request: Request):
                 "max_upload_mb": int(_ui_cfg.get("max_upload_mb", 20)),
                 "multimodal_max_images": int(_ui_cfg.get("multimodal_max_images", 6)),
                 "supports_vision": bool(S.cfg.get("model", {}).get("supports_vision", False)),
+                **_version.info(),
             }
     except Exception:
-        return {"ok": False, "model": S.model, "ctx": S.ctx_window}
+        return {"ok": False, "model": S.model, "ctx": S.ctx_window, **_version.info()}
 
 
 @router.get("/api/questions")

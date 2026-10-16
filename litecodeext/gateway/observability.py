@@ -91,6 +91,9 @@ async def map_force_update(request: Request):
         return {"ok": False, "error": str(e)}
 
 
+from lib import version as _version  # noqa: E402
+
+
 @router.get("/health")
 async def health():
     srv = _srv()
@@ -100,4 +103,5 @@ async def health():
         "backend_url": srv.BACKEND_URL,
         "backend_type": srv.BACKEND_TYPE,
         "port": srv.PORT,
+        **_version.info(),
     }

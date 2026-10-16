@@ -279,6 +279,7 @@ main() {
 
             echo ""
             echo -e "${G}  ✅ 所有服务已启动${NC}"
+            echo -e "  Version : ${C}$(cd /opt/litecode && python3 -m lib.version 2>/dev/null || echo unknown)${NC}"
             echo -e "  Server  : ${C}http://0.0.0.0:${SERVER_PORT:-18789}${NC}"
             echo -e "  Web UI  : ${C}http://0.0.0.0:${WEB_PORT:-18790}${NC}"
             echo -e "  noVNC   : ${C}http://0.0.0.0:${NOVNC_PORT:-18800}${NC}"

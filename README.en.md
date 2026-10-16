@@ -18,9 +18,9 @@
 
 ## 🆕 What's new
 
-### v2026.10.16 "Night Shift"
+### v1.10.16.88 "Hanbao" (憨包)
 
-> You clock out, it keeps working: close the tab and the task runs on; one sentence gets you a video ready to post.
+> *Hanbao* is southwest-Chinese slang for a lovable simpleton: not flashy, but it never drops the job. Close the tab and it keeps working, it nags less, and one sentence gets you a video ready to post.
 
 - 🎬 **New skill: one sentence → a short video for Douyin**. Say *"make a Douyin explainer about Buffett"*. It writes the voice-over script, records the narration, animates the scenes and adds music. You get three things back: a vertical `final.mp4`, a cover image and a publishing pack (titles, caption, hashtags). Everything uses local tools, so there are no licensing issues. Sample: *The Fall of a Genius Trader*, about 85 s.
 - 🔌 **Closing the page no longer stops the task**: chat turns now run in the background. Refresh, close the browser, lose the network or switch to another chat, and the task keeps running; when you come back it picks up where it is. Other tabs, and other people viewing the same chat, see it live. The stop button always matches what is really happening.

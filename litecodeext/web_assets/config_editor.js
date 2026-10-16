@@ -130,7 +130,7 @@ async function mdlAdd(){
   await fetch('/api/models/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   toast('✅ 已添加');loadSet();}
 async function doLogout(){await fetch('/api/logout',{method:'POST'});location.reload();}
-async function chkHealth(){try{const d=await(await fetch('/api/health')).json();const p=document.getElementById('mpill');if(d.ok){p.textContent=d.model?.split('-')[0]||'ok';p.className='hp';}else{p.textContent='offline';p.className='hp off';}}catch{document.getElementById('mpill').className='hp off';}}
+async function chkHealth(){try{const d=await(await fetch('/api/health')).json();const p=document.getElementById('mpill');if(d.ok){p.textContent=d.model?.split('-')[0]||'ok';p.className='hp';}if(d.version){const v=document.getElementById('verpill');if(v){v.textContent=`${d.version} · ${d.codename}`;v.title=`LiteCode ${d.version}「${d.codename}」`;v.style.display=window.innerWidth<640?'none':'';}}else{p.textContent='offline';p.className='hp off';}}catch{document.getElementById('mpill').className='hp off';}}
 async function checkAuth(){const r=await fetch('/api/auth/status');const d=await r.json();if(d.enabled&&!d.ok)document.getElementById('ls').classList.add('show');else{init();startSbfStatusLoop();_refreshUploadLimit();}}
 async function doLogin(){
   const pwd=document.getElementById('lpwd').value;
