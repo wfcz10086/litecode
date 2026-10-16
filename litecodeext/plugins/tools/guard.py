@@ -33,6 +33,20 @@ EXEMPT_FROM_LOOP_GUARD = frozenset({
     "spawn_agent",                                # 子代理合法多发
 })
 
+WRITE_TOOLS = frozenset({"write_file", "patch_file", "create_file", "apply_blocks"})
+
+# shell 里改文件的写法: 和 write_file 一样算"状态变了"
+_SHELL_WRITE = _re.compile(
+    r"sed\s+-i|(?<![<>0-9&])>{1,2}\s*(?!&|/dev/null)[\w./~-]|\btee\b|\b(mv|cp|rm|patch|truncate)\s"
+    r"|git\s+(apply|checkout|restore|stash|reset)|open\([^)]*['\"][wa]['\"]|write_text\(")
+
+
+def is_shell_write(fn: str, args: dict) -> bool:
+    if fn not in ("execute_shell", "execute_python", "run_python"):
+        return False
+    return bool(_SHELL_WRITE.search(args.get("command") or args.get("cmd") or args.get("code") or ""))
+
+
 DEFAULT_LIMIT = 3
 DEFAULT_HISTORY_MAXLEN = 12
 
@@ -46,16 +60,18 @@ def compute_sig(fn: str, args: dict) -> str:
             q = args.get("query") or args.get("q") or ""
             return f"{fn}::{q[:120]}"
         if fn in ("read_file", "open_file"):
-            return f"{fn}::{args.get('filepath') or args.get('path', '')}"
+            # 带上行号范围: 分段读大文件是正常操作, 只有同一段反复读才算重复
+            rng = args.get("lines") or args.get("start_line") or args.get("offset") or ""
+            return f"{fn}::{args.get('filepath') or args.get('path', '')}::{rng}"
         if fn in ("write_file", "patch_file", "create_file"):
             # 写文件:同一文件多次写不一定是死循环 (可能在补内容),
             # 这里只签 filepath. 实际豁免上面已挡, 保留分支便于测试.
             return f"{fn}::{args.get('filepath') or args.get('path', '')}"
         if fn in ("execute_shell", "execute_python", "run_python"):
             # 模型经常 sed -n '218,225p' → '219,223p' 微调行号疯狂跑,
-            # 把所有连续数字替换 <N>, sig 折叠相同形态命令.
+            # 数字按百分桶折叠: 微调行号仍算同一签名, 但读文件不同区域 (1245 vs 1377) 不算重复.
             cmd = (args.get("command") or args.get("cmd") or args.get("code") or "")[:300]
-            norm = _re.sub(r"\d+", "<N>", cmd)
+            norm = _re.sub(r"\d+", lambda m: f"<{int(m.group()) // 100}>", cmd)
             return f"{fn}::{norm[:160]}"
         # 其他工具用全 args sig
         return f"{fn}::{_json.dumps(args, sort_keys=True, ensure_ascii=False)[:200]}"
@@ -113,11 +129,22 @@ class ToolLoopGuard:
         blocked=False → 上层继续正常派发
         """
         if fn in EXEMPT_FROM_LOOP_GUARD:
+            if fn in WRITE_TOOLS:
+                # 文件改过了, 状态变了: "改 → 跑测试 → 再改 → 再跑测试" 是正常节奏, 不算重复
+                self.history.clear()
+                self.break_sent.clear()
             return False, None, ""
         sig = compute_sig(fn, args)
         self.history.append(sig)
         count = sum(1 for s in self.history if s == sig)
         if count < self.limit:
+            if fn in WRITE_TOOLS or is_shell_write(fn, args):
+                # 改了文件 (apply_blocks 这类不豁免的写工具 / shell 写), 同 write_file: 之后重跑测试不算重复
+                # (同一条改文件命令连打 3 次照样拦)
+                same = [h for h in self.history if h == sig]   # 保留这条命令自己的计数
+                self.history.clear()
+                self.history.extend(same)
+                self.break_sent.clear()
             return False, None, sig
         # 展示给模型的是它实际打的命令 (raw_display), 判重仍用归一化 sig — 两者分开
         key = raw_display(fn, args)[:120]

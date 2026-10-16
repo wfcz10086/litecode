@@ -31,6 +31,7 @@ class TestTrackState:
     iter_wrote_src: bool = False       # 本轮写了源文件
     iter_wrote_test: bool = False      # 本轮写了测试文件
     tests_run_for: set = field(default_factory=set)         # 已执行过测试的文件集合（防止重复注入）
+    test_reminded: set = field(default_factory=set)         # 已提醒过缺测试的源文件 (每个只提醒一次)
 
 
 @dataclass
@@ -157,6 +158,7 @@ class TurnContext:
     messages: list = field(default_factory=list)      # SETUP L340 才真正赋值, 构造时给不了
     session_id: Optional[str] = None                  # 形参型字段, 构造时显式传入 (非默认值起手)
     turn_context: str = ""      # 本轮挂在 user 消息前的动态上下文 (lib/turn_context.py), 随 new_msgs 持久化
+    disabled_tools: frozenset = frozenset()   # 本次请求禁用的工具 (lib/tool_filter.py), 评测断网用
 
 
 @dataclass

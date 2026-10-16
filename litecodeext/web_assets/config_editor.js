@@ -354,7 +354,7 @@ async function _resumeRunningDAG(){
   }catch(e){console.warn('resume running dag:',e);}
 }
 
-async function init(){await loadSess();chkHealth();setInterval(chkHealth,30000);if(sess.length)await swS(sess[0].id);
+async function init(){await loadSess();chkHealth();setInterval(chkHealth,30000);if(sess.length){/* [chat-runs] 刷新后回到刚才看的会话 (进行中的轮次会自动接上) */let _last=null;try{_last=localStorage.getItem('lc.cur');}catch(e){}await swS((_last&&sess.some(x=>x.id===_last))?_last:sess[0].id);}
     _resumeRunningDAG();  /* [2026-09-05] 刷新后自动恢复运行中 DAG 实时视图 */
   document.getElementById('mw').addEventListener('scroll',function(){const w=this;const atBottom=w.scrollHeight-w.scrollTop-w.clientHeight<80;document.getElementById('scroll-btn').classList.toggle('show',!atBottom);});
   _syncThinkChip();

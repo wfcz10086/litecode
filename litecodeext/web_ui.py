@@ -509,6 +509,7 @@ from routers.dag_router       import router as _dag_router
 from routers.artifacts_v2_router import router as _artifacts_v2_router
 # #44: Docker 管理 (ps/logs/stats/restart/stop/start/inspect)
 from routers.docker_router      import router as _docker_router
+from routers.chat_router        import router as _chat_router
 app.include_router(_health_router)
 app.include_router(_model_router)
 app.include_router(_config_router)
@@ -522,6 +523,7 @@ app.include_router(_sessions_router)
 app.include_router(_dag_router)
 app.include_router(_artifacts_v2_router)
 app.include_router(_docker_router)
+app.include_router(_chat_router)
 app.include_router(_static_router)
 
 # 把 web_ui 里的 _aproxy 函数注入给 router 共享 (各 router 通过 S.aproxy 调上游 server)
@@ -656,158 +658,7 @@ def _build_multimodal_content(message: str):
     return parts, imgs_ok
 
 
-@app.post("/api/chat/{sid}")
-async def api_chat(sid:str,request:Request):
-    _require_auth(request)
-    # [P0-#4] chat 节流: 30 次 / 60s / IP
-    from lib.rate_limit import rate_check as _rate_check
-    _rate_check(request, "chat", 30, 60)
-    body=await request.json()
-    message=body.get("message","").strip()
-    if not message: raise HTTPException(400,"empty")
-    session=load_session(sid)
-    ts=time.time()
-    session["messages"].append({"role":"user","content":message,"ts":ts})
-    session["last_used"]=ts
-    is_first = len(session["messages"])==1
-    if is_first:
-        session["name"]=message[:40]+("…" if len(message)>40 else "")
-    save_session(session)
-    # [v1.4] 如果消息里引用了本地图片 + 主模型支持视觉 → 组装多模态 content
-    user_payload_content, mm_imgs = _build_multimodal_content(message)
-    if mm_imgs:
-        print(f"[api_chat:{sid}] 多模态直传 {len(mm_imgs)} 张图")
-    collected={"text":"","reasoning":"","tools":[],"diffs":[],"usage":None}
-    # [v1.9 P38-b] SSE 背压保护
-    SSE_HIGH_VOLUME_WARN = 5000   # chunks 超阈值发警告 telemetry
-    SSE_HARD_LIMIT       = 50000  # chunks 硬上限（防止 LLM 失控刷屏）
-    # [V7.e] 前端 chip 参数: 模型 / 思考强度 / DeepSearch (老 UI 不传 → 走全局 MODEL 兼容)
-    _req_model = (body.get("model") or MODEL)
-    _req_effort = (body.get("thinking_effort") or "").strip().lower()
-    _req_deep = bool(body.get("deep_search"))
-    _req_strategist = bool(body.get("strategist_mode") or body.get("scenario_mode"))
-    async def gen():
-        nonlocal collected
-        _stream_t0 = time.time()
-        _chunk_count = 0
-        _disconnected = False
-        _aborted_reason = ""
-        payload={"model":_req_model,"stream":True,
-                 "messages":[{"role":"user","content":user_payload_content}],
-                 "user":sid}
-        if _req_effort == "off":
-            # 显式关闭推理: 各后端格式不同, 一并注入
-            payload["enable_thinking"] = False
-            payload["thinking_budget"] = 0
-        elif _req_effort:
-            payload["reasoning_effort"] = _req_effort
-        if _req_deep:
-            payload["deep_search"] = True
-        if _req_strategist:
-            payload["strategist_mode"] = True
-        # [P46 测试模式] message 含 __TRIGGER_EMPTY_RESPONSE__ → 走 server 空响应路径
-        _server_url_with_test = f"{SERVER_URL}/v1/chat/completions"
-        if "__TRIGGER_EMPTY_RESPONSE__" in message:
-            _server_url_with_test += "?__test_empty=1"
-        try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
-                async with client.stream("POST", _server_url_with_test,
-                                         headers=HEADERS, json=payload) as resp:
-                    if resp.status_code!=200:
-                        yield f'data: {{"error":"HTTP {resp.status_code}"}}\n\n'; return
-                    # [audit-p0 #10/#18] 用 pending task 包 aiter, 15s 无上游数据即发心跳注释帧;
-                    # 顺便探断连. httpx aiter_lines() 本身对超长空闲不保底.
-                    aiter = resp.aiter_lines()
-                    _pending = None
-                    _SSE_IDLE_PING = 15.0
-                    try:
-                        while True:
-                            if _pending is None:
-                                _pending = asyncio.ensure_future(aiter.__anext__())
-                            done, _pen = await asyncio.wait([_pending], timeout=_SSE_IDLE_PING)
-                            if not done:
-                                # 上游 15s 无字节: 发心跳; 顺带查前端是否断了
-                                if await request.is_disconnected():
-                                    _disconnected = True
-                                    _aborted_reason = "client_disconnected"
-                                    _pending.cancel()
-                                    break
-                                yield ": keep-alive\n\n"
-                                continue
-                            task = _pending
-                            _pending = None
-                            try:
-                                raw = task.result()
-                            except StopAsyncIteration:
-                                break
-                            if not raw: continue
-                            if await request.is_disconnected():
-                                _disconnected = True
-                                _aborted_reason = "client_disconnected"
-                                break
-                            if _chunk_count >= SSE_HARD_LIMIT:
-                                _aborted_reason = f"hard_limit_{SSE_HARD_LIMIT}"
-                                yield f'data: {{"error":"SSE chunk limit {SSE_HARD_LIMIT} reached, aborted"}}\n\n'
-                                break
-                            line = raw
-                            yield line+"\n\n"
-                            _chunk_count += 1
-                            if line.startswith("data: ") and line[6:] not in ("[DONE]",""):
-                                try:
-                                    chunk=json.loads(line[6:])
-                                    delta=chunk["choices"][0]["delta"]
-                                    ct=delta.get("content","")
-                                    if ct: collected["text"]+=ct
-                                    # [v1.0] 收集推理流, 用于持久化展示 (方案 B: 不回流到 LLM 上下文)
-                                    rz=delta.get("reasoning","")
-                                    if rz: collected["reasoning"]+=rz
-                                    if "usage" in delta:
-                                        collected["usage"]=delta["usage"]
-                                    for key in("task_exec","data_collect","task_analysis"):
-                                        # "推理中…" 占位 (key=preparing) 只是等首包的反馈, 不算工具调用, 不落库
-                                        if key in delta and delta[key].get("status")=="executing" and delta[key].get("key")!="preparing":
-                                            det=delta[key].get("detail","")
-                                            if det: collected["tools"].append(det)
-                                    if "diff_view" in delta:
-                                        dv=delta["diff_view"]
-                                        if dv.get("diff"): collected["diffs"].append({"filepath":dv.get("filepath",""),"diff":dv["diff"]})
-                                except: pass
-                    finally:
-                        # 前端断开时 Starlette 在 yield 处关掉本生成器, 读上游的 pending 任务会留下,
-                        # 随后连接关闭让它抛 ReadError → "Task exception was never retrieved"。取消并吞掉结果。
-                        if _pending is not None and not _pending.done():
-                            _pending.cancel()
-                            _pending.add_done_callback(lambda t: t.cancelled() or t.exception())
-        except Exception as e:
-            yield f"data: {json.dumps({'error':str(e)})}\n\n"
-        finally:
-            # [v1.9 P38-b] SSE 流统计埋点
-            try:
-                from core.telemetry import emit as _emit
-                _stream_elapsed_ms = int((time.time() - _stream_t0) * 1000)
-                _event = "sse_stream_high_volume" if _chunk_count >= SSE_HIGH_VOLUME_WARN \
-                         else ("sse_stream_aborted" if _aborted_reason else "sse_stream_done")
-                _emit(event=_event,
-                      fields={
-                          "sid": sid[:32],
-                          "chunk_count": _chunk_count,
-                          "disconnected": _disconnected,
-                          "aborted_reason": _aborted_reason,
-                          "high_volume": _chunk_count >= SSE_HIGH_VOLUME_WARN,
-                      },
-                      jsonl="sse.jsonl",
-                      sid=sid,
-                      latency_ms=_stream_elapsed_ms)
-            except Exception:
-                pass
-            # [BUG-FIX 2026-05-21] 原版 run_in_executor 不 await → cache 写 assistant 滞后 5+s
-            # 用户在这 5 秒点重试就 "未在 session 定位" (cache 还没 assistant).
-            # 改 await 同步等完才结束 SSE 流, 前端拿到 done 时 cache 已就绪.
-            try:
-                await asyncio.get_event_loop().run_in_executor(None, _save_assistant_msg, sid, dict(collected))
-            except Exception:
-                pass
-    return StreamingResponse(gen(),media_type="text/event-stream",headers={"Cache-Control":"no-cache","X-Accel-Buffering":"no"})
+# [chat-runs 2026-10-16] /api/chat 已搬到 routers/chat_router.py: 轮次后台跑, 浏览器断开不停, 可重连跟随
 
 # ── 文件上传 ─────────────────────────────────────────────────
 _WORKSPACE = Path(CFG.get("paths",{}).get("workspace_base","/tmp/litecode_workspace"))

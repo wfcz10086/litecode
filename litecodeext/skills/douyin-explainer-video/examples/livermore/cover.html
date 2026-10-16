@@ -1,0 +1,32 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1080px;height:1440px;overflow:hidden;font-family:"Noto Sans CJK SC",sans-serif;
+ background:radial-gradient(130% 90% at 50% 0%,#15294f 0%,#0a1226 55%,#04060d 100%);color:#f2e8d5}
+.top{position:absolute;top:70px;left:70px;font-weight:900;font-size:46px;color:#f5c451;letter-spacing:.2em}
+.top small{display:block;font-size:30px;color:#8fa3c8;letter-spacing:.5em;margin-top:14px}
+.big{position:absolute;top:235px;left:60px;width:1000px;font-weight:900;font-size:128px;line-height:1.22;white-space:nowrap;
+ color:#fff;text-shadow:0 8px 0 #000,0 0 60px rgba(0,0,0,.9);
+ -webkit-text-stroke:3px #000;paint-order:stroke fill}
+.big .red{color:#e63946}
+.big .gold{color:#f5c451}
+.num{position:absolute;top:640px;left:60px;font-weight:900;font-size:66px;color:#f5c451;
+ text-shadow:0 0 30px rgba(245,196,81,.5);z-index:5;
+ background:rgba(4,6,13,.92);padding:26px 40px;border-radius:22px;
+ border:2px solid rgba(245,196,81,.35)}
+.num small{display:block;font-size:34px;color:#f2e8d5;margin-top:12px;font-weight:900}
+/* K线崩盘图 */
+svg.crash{position:absolute;bottom:0;left:0;width:100%}
+/* 右下帽子剪影 */
+.man{position:absolute;right:24px;bottom:140px;width:360px;z-index:2;
+ filter:drop-shadow(0 0 46px rgba(245,196,81,.35))}
+.tag{position:absolute;right:70px;top:96px;background:#e63946;color:#fff;font-weight:900;
+ font-size:36px;padding:14px 28px;border-radius:12px;transform:rotate(4deg)}
+svg.crash{opacity:.85}
+</style></head><body>
+<div class="top">华尔街之鬼<small>JESSE LIVERMORE</small></div>
+<div class="tag">真实事件</div>
+<div class="big">一天赚<span class="gold">一亿</span>美元<br>却输掉<span class="red">整个人生</span></div>
+<div class="num">$100,000,000 → $0<small>五次暴富 · 五次破产 · 一声枪响</small></div>
+<svg class="man" viewBox="0 0 200 260"><g fill="#04060d"><rect x="55" y="4" width="90" height="60" rx="6"/><rect x="36" y="58" width="128" height="14" rx="6"/><circle cx="100" cy="118" r="40"/><path d="M28 260 Q28 158 100 148 Q172 158 172 260 Z"/></g></svg>
+<svg class="crash" viewBox="0 0 1080 430"><path d="M0 120 L160 90 260 140 340 80 430 130 520 250 620 360 740 400 900 415 1080 420" fill="none" stroke="#e63946" stroke-width="14" stroke-linejoin="round"/><path d="M520 250 C 680 200 850 120 1060 50" fill="none" stroke="#f5c451" stroke-width="12" stroke-dasharray="14 10"/><polygon points="1030,60 1075,40 1060,88" fill="#f5c451"/></svg>
+</body></html>

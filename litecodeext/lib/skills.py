@@ -170,6 +170,11 @@ _CN_SKILL_MAP: dict = {
     "word": "docx", "文档": "docx", "docx": "docx", ".docx": "docx",
     # xlsx
     "excel": "xlsx", "表格": "xlsx", "电子表格": "xlsx", "xlsx": "xlsx", ".xlsx": "xlsx",
+    # 竖版解说短视频 (天才交易员模板)
+    "抖音视频": "douyin-explainer-video", "短视频": "douyin-explainer-video", "科普视频": "douyin-explainer-video",
+    "解说视频": "douyin-explainer-video", "视频号": "douyin-explainer-video", "竖版视频": "douyin-explainer-video",
+    "竖屏视频": "douyin-explainer-video", "天才交易员": "douyin-explainer-video", "做个视频": "douyin-explainer-video",
+    "做一条视频": "douyin-explainer-video",
     # pptx
     "ppt": "pptx", "pptx": "pptx", "幻灯片": "pptx", "演示": "pptx",
     "演示文稿": "pptx", "slides": "pptx", ".pptx": "pptx",

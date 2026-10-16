@@ -3,7 +3,7 @@
 test_sse_backpressure.py — v1.9 P38-b SSE 背压保护
 
 验证：
-- T1 client disconnect 检测路径存在（grep code）
+- T1 断连只结束订阅, 不停上游 (grep code)
 - T2 chunk hard limit 路径存在
 - T3 sse.jsonl 埋点配置正确
 - T4 telemetry sse_stream_done 事件可写入
@@ -20,17 +20,15 @@ sys.path.insert(0, str(ROOT / "litecodeext"))
 class TestSSEBackpressure(unittest.TestCase):
 
     def test_t1_client_disconnect_check(self):
-        """T1: web_ui.py 含 await request.is_disconnected() 检测"""
-        src = (ROOT / "litecodeext" / "web_ui.py").read_text()
-        self.assertIn("is_disconnected()", src,
-                      "缺少客户端断开检测")
-        # 检测后应 break 出循环
-        # 验证有 _disconnected 标记
-        self.assertIn("_disconnected = True", src)
+        """T1: 断连检测只结束订阅; 上游 producer 不看浏览器 (2026-10-16 轮次与连接解耦)"""
+        src = (ROOT / "litecodeext" / "routers" / "chat_router.py").read_text()
+        self.assertIn("is_disconnected()", src, "缺少客户端断开检测")
+        producer = src[src.index("def _producer"):src.index("def _follow")]
+        self.assertNotIn("is_disconnected", producer, "上游消费不能随浏览器断开而停")
 
     def test_t2_hard_limit_check(self):
         """T2: web_ui.py 含 SSE_HARD_LIMIT 保护"""
-        src = (ROOT / "litecodeext" / "web_ui.py").read_text()
+        src = (ROOT / "litecodeext" / "routers" / "chat_router.py").read_text()
         self.assertIn("SSE_HARD_LIMIT", src)
         self.assertIn("SSE_HIGH_VOLUME_WARN", src)
         # 应有 hard_limit aborted 路径
@@ -38,7 +36,7 @@ class TestSSEBackpressure(unittest.TestCase):
 
     def test_t3_sse_telemetry_config(self):
         """T3: SSE 流写 sse.jsonl 埋点"""
-        src = (ROOT / "litecodeext" / "web_ui.py").read_text()
+        src = (ROOT / "litecodeext" / "routers" / "chat_router.py").read_text()
         self.assertIn('jsonl="sse.jsonl"', src)
         # 三类事件
         self.assertIn("sse_stream_high_volume", src)

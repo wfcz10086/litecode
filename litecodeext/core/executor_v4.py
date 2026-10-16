@@ -50,7 +50,7 @@ RETRYABLE_ERRORS = [
 
 def classify_error(output: str, returncode: int) -> str:
     """
-    返回: 'ok' | 'retryable' | 'permanent' | 'test_fail'
+    返回: 'ok' | 'retryable' | 'permanent' | 'test_fail' | 'failed'
 
     关键修复: returncode==0 直接返回 'ok'，不检查 output 中的错误模式。
     [v7] 新增 'test_fail': 断言/测试失败不重试, 直接返回给 LLM 分析。
@@ -76,7 +76,18 @@ def classify_error(output: str, returncode: int) -> str:
     for pat in RETRYABLE_ERRORS:
         if pat in output:
             return 'retryable'
-    return 'retryable'
+    # [2026-10-13] 原来兜底也是 retryable: 复现脚本抛异常 / grep 无匹配 / 普通非 0 退出都被自动重跑 3 次,
+    # 改文件的命令跑 3 遍有副作用, 还白等 3 秒。没认出来的非 0 退出原样交给模型判断。
+    return 'failed'
+
+
+# 只有这类命令碰到网络抖动才值得自动重试; 别的命令输出里出现 "502"/"timeout" 字样多半只是内容
+_NETWORK_CMD = re.compile(
+    r"\b(curl|wget|pip3?|uv|npm|pnpm|yarn|apt(-get)?|git\s+(clone|fetch|pull|push)|docker\s+(pull|push)|ssh|scp|rsync)\b")
+
+
+def is_network_cmd(command: str) -> bool:
+    return bool(_NETWORK_CMD.search(command or ""))
 
 
 # ─────────────────────────────────────────────────────────
@@ -337,7 +348,10 @@ async def _run_cmd(command: str, timeout: Optional[int], work_dir: Path) -> str:
         if error_class == 'test_fail':
             return f"ERROR[TEST_FAIL]: {output.strip()}"
 
-        # retryable — 指数退避
+        if error_class == 'failed' or not is_network_cmd(command):
+            return f"ERROR[EXIT={exitcode}]: {output.strip()}"
+
+        # retryable — 只有网络类命令指数退避
         last_result = output
         if attempt < MAX_RETRIES - 1:
             await asyncio.sleep(delay)

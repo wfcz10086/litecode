@@ -356,18 +356,17 @@ class Tracer:
         # 检测2: 频率检测
         # [v1.0] execute_shell 也需检查参数多样性（批量 curl 测试是正常行为）
         _PATH_TOOLS = {"write_file", "read_file", "patch_file"}
-        _DIVERSE_TOOLS = _PATH_TOOLS | {"execute_shell"}  # 这些工具允许高频但不同参数
         recent = hist[-8:]
         threshold = 5 if name in _PATH_TOOLS else 4
         if len(recent) >= 6:
             name_counts = _Counter(h["name"] for h in recent)
             if name_counts.get(name, 0) >= threshold:
-                if name in _DIVERSE_TOOLS:
-                    # 参数足够多样化（≥3种不同签名）则不算循环
-                    sigs = [h["sig"][:120] for h in recent if h["name"] == name]
-                    if len(set(sigs)) < 3:
-                        return True
-                else:
+                # 参数足够多样化（≥3种不同签名）则不算循环。
+                # [FIX 2026-10-16] 原先只对 _DIVERSE_TOOLS 查多样性, 其余工具 8 次里 4 次就判循环:
+                # 连建 6 个 task_create / 给 5 个文件 update_map 被当死循环, 3 连后 SYSTEM OVERRIDE
+                # 还把真实的 task_create 结果清掉了。参数不同 = 在推进, 对所有工具一视同仁。
+                sigs = [h["sig"][:120] for h in recent if h["name"] == name]
+                if len(set(sigs)) < 3:
                     return True
 
         # 检测3: 相同错误输出

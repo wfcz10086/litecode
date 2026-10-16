@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>
+:root{--ink:#060a14;--bg:#0a1226;--gold:#f5c451;--red:#e63946;--paper:#f2e8d5;--blue:#1b3a6b}
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1080px;height:1920px;overflow:hidden;background:var(--bg);
+ font-family:"Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif;color:var(--paper)}
+#stage{position:absolute;inset:0}
+.bgwash{position:absolute;inset:0;background:
+ radial-gradient(120% 80% at 50% 0%,#122347 0%,var(--bg) 55%,#05070f 100%)}
+.vig{position:absolute;inset:0;pointer-events:none;
+ box-shadow:inset 0 0 300px 120px rgba(0,0,0,.75)}
+.scan{position:absolute;inset:0;pointer-events:none;opacity:.07;background:
+ repeating-linear-gradient(0deg,transparent 0 6px,#000 6px 9px)}
+/* 右侧竖排幕名 */
+#actband{position:absolute;top:70px;right:44px;writing-mode:vertical-rl;
+ font-weight:900;font-size:44px;letter-spacing:.35em;color:var(--gold);
+ border-right:4px solid var(--gold);padding-right:18px;opacity:.92;
+ text-shadow:0 0 24px rgba(245,196,81,.4)}
+/* 字幕 */
+.sub{position:absolute;left:60px;right:60px;bottom:220px;text-align:center;
+ font-weight:900;font-size:62px;line-height:1.42;color:#fff;
+ text-shadow:0 4px 0 #000,0 0 26px rgba(0,0,0,.9);opacity:0}
+.sub b{color:var(--gold)}
+.sub .hi{color:var(--red)}
+.scene{position:absolute;inset:0;opacity:0}
+.num{font-weight:900;font-variant-numeric:tabular-nums;color:var(--gold);
+ text-shadow:0 0 40px rgba(245,196,81,.55)}
+/* S0 */
+#candles,#confetti,#crowd{position:absolute;inset:0}
+.candle{position:absolute;width:26px;border-radius:4px}
+#s0num{position:absolute;top:660px;width:100%;text-align:center;font-size:110px}
+#s0title{position:absolute;top:900px;width:100%;text-align:center;
+ font-size:150px;font-weight:900;color:#fff;letter-spacing:.08em}
+#s0title span{display:inline-block;opacity:0;transform:translateY(60px) scale(1.3)}
+#s0tape{position:absolute;bottom:120px;left:0;width:200%;height:74px;
+ background:#000;border-top:3px solid var(--red);border-bottom:3px solid var(--red);
+ color:var(--red);font-weight:900;font-size:44px;line-height:74px;white-space:nowrap}
+/* S1 */
+#board{position:absolute;left:70px;top:330px;width:940px;height:900px;
+ background:#0e2b23;border:26px solid #3d2b1c;border-radius:10px;
+ box-shadow:0 30px 80px rgba(0,0,0,.6);padding:44px 40px;overflow:hidden;
+ transform:rotate(-1.5deg)}
+.qrow{font-family:monospace;font-size:34px;color:#cfe8d9;opacity:0;
+ letter-spacing:2px;white-space:pre;margin-bottom:26px}
+#boy{position:absolute;left:120px;bottom:430px;width:360px}
+#s1stamp{position:absolute;top:420px;right:120px;font-size:200px;font-weight:900;
+ color:var(--gold);opacity:0;transform:scale(3);text-shadow:0 6px 0 #7a5a12}
+#ban{position:absolute;top:800px;left:50%;width:460px;height:460px;margin-left:-230px;
+ border:16px solid var(--red);border-radius:50%;display:flex;flex-direction:column;
+ align-items:center;justify-content:center;color:var(--red);font-weight:900;
+ font-size:96px;opacity:0;transform:rotate(-18deg) scale(3);gap:8px}
+#ban small{font-size:40px;letter-spacing:.3em}
+/* S2 */
+#s2year{position:absolute;top:300px;width:100%;text-align:center;font-size:340px;
+ font-weight:900;color:transparent;-webkit-text-stroke:3px rgba(245,196,81,.35)}
+#coinpile{position:absolute;bottom:340px;left:0;width:100%}
+.coin{position:absolute;border-radius:50%;background:radial-gradient(circle at 34% 30%,#ffe9a8,var(--gold) 55%,#b8860b);
+ border:4px solid #8a6508;font-weight:900;color:#6b4d05;display:flex;align-items:center;justify-content:center}
+#morgan{position:absolute;right:60px;bottom:300px;width:430px;opacity:0}
+#bubble{position:absolute;right:90px;bottom:1150px;background:var(--paper);color:#111;
+ font-weight:900;font-size:56px;padding:26px 38px;border-radius:26px;opacity:0}
+#bubble:after{content:"";position:absolute;bottom:-26px;right:110px;border:16px solid transparent;border-top-color:var(--paper)}
+#s2num{position:absolute;top:760px;width:100%;text-align:center;font-size:130px}
+#fallline{position:absolute;top:400px;left:0;width:100%}
+/* S3 */
+#curve{position:absolute;top:520px;left:0;width:100%}
+.crashstamp{position:absolute;font-weight:900;font-size:58px;color:var(--red);
+ border:6px solid var(--red);border-radius:12px;padding:6px 20px;opacity:0;transform:scale(2.4) rotate(-12deg)}
+#five00{position:absolute;top:760px;width:100%;text-align:center;font-size:160px}
+/* S4 */
+#skyline{position:absolute;bottom:330px;left:0;width:100%}
+#crashchart{position:absolute;top:430px;left:0;width:100%}
+#s4date{position:absolute;top:300px;width:100%;text-align:center;font-size:74px;font-weight:900;color:#fff}
+#s4big{position:absolute;top:1150px;width:100%;text-align:center;font-size:190px}
+.head{position:absolute;bottom:0;width:56px;height:56px;background:#000;border-radius:50% 50% 10px 10px}
+/* S5 */
+#sinkarea{position:absolute;top:440px;left:0;width:100%;text-align:center}
+.goldbar{display:inline-block;width:420px;height:150px;border-radius:16px;
+ background:linear-gradient(160deg,#ffe9a8,var(--gold) 45%,#a87708);
+ border:6px solid #7c5a06;font-weight:900;font-size:56px;color:#5c4205;
+ line-height:150px;box-shadow:0 20px 50px rgba(0,0,0,.5)}
+.ripple{position:absolute;left:50%;border:4px solid rgba(160,200,255,.5);border-radius:50%;transform:translateX(-50%)}
+#s5debt{position:absolute;top:1240px;width:100%;text-align:center;font-size:110px;color:var(--red);
+ text-shadow:0 0 18px #000,0 4px 0 #000,0 0 40px rgba(230,57,70,.5);z-index:3}
+#oldman{position:absolute;right:30px;bottom:330px;width:440px;opacity:0;z-index:1}
+#watersurf{position:absolute;top:900px;left:0;width:100%;height:6px;
+ background:linear-gradient(90deg,transparent,rgba(160,200,255,.6),transparent)}
+/* S6 */
+#door{position:absolute;left:50%;top:430px;width:520px;height:1050px;margin-left:-260px;
+ background:linear-gradient(180deg,#3a2a18,#241809);border:14px solid #120b04;border-radius:8px}
+#doornum{position:absolute;top:120px;width:100%;text-align:center;font-size:110px;
+ font-weight:900;color:var(--gold);text-shadow:0 0 30px rgba(245,196,81,.6)}
+#doorlight{position:absolute;bottom:-2px;left:6%;width:88%;height:26px;background:#ffbe4d;
+ box-shadow:0 0 90px 40px rgba(255,190,77,.65);border-radius:50%}
+#note{position:absolute;left:50%;top:820px;width:640px;height:400px;margin-left:-320px;
+ background:var(--paper);color:#1a1a1a;border-radius:6px;transform:rotate(-3deg);
+ box-shadow:0 30px 70px rgba(0,0,0,.7);padding:60px 50px;opacity:0;
+ font-size:64px;font-weight:900;line-height:1.6;
+ font-family:"Noto Serif CJK SC","Noto Sans CJK SC",serif}
+#quote{position:absolute;top:520px;left:50%;transform:translateX(-50%);writing-mode:vertical-rl;
+ font-size:96px;font-weight:900;color:var(--gold);letter-spacing:.28em;opacity:0;
+ text-shadow:0 0 30px rgba(245,196,81,.45)}
+#endcard{position:absolute;inset:0;background:rgba(3,5,10,.94);opacity:0;
+ display:flex;flex-direction:column;align-items:center;justify-content:center;gap:56px}
+#endcard .big{font-size:104px;font-weight:900;color:#fff;text-align:center;line-height:1.5}
+#endcard .gold{color:var(--gold)}
+.followbtn{width:560px;height:150px;border-radius:75px;background:var(--red);
+ color:#fff;font-size:64px;font-weight:900;display:flex;align-items:center;
+ justify-content:center;gap:24px;box-shadow:0 0 80px rgba(230,57,70,.55)}
+</style></head><body>
+<div id="stage">
+ <div class="bgwash"></div>
+ <div id="actband">序章</div>
+
+ <div class="scene" id="sc0">
+  <div id="candles"></div><div id="s0num" class="num">$0</div>
+  <div id="s0title"></div>
+  <div id="s0tape">▼ NYSE 1929.10.24 ▼ 崩盘 ▼ SELL ▼ NYSE 1929.10.24 ▼ 崩盘 ▼ SELL ▼ NYSE 1929.10.24 ▼ 崩盘 ▼ SELL ▼ NYSE 1929.10.24 ▼ 崩盘 ▼ SELL ▼&nbsp;</div>
+ </div>
+
+ <div class="scene" id="sc1">
+  <div id="board"></div>
+  <svg id="boy" viewBox="0 0 200 260"><g fill="#05070d"><circle cx="100" cy="60" r="42"/><path d="M40 260 Q40 140 100 130 Q160 140 160 260 Z"/><path d="M150 170 L196 205 L188 220 L142 190 Z"/></g><circle id="chalkdust" cx="192" cy="212" r="9" fill="#e8f4ea" opacity="0"/></svg>
+  <div id="s1stamp">14岁</div>
+  <div id="ban">拉黑<small>全行业封杀</small></div>
+ </div>
+
+ <div class="scene" id="sc2">
+  <div id="s2year">1907</div>
+  <svg id="fallline" viewBox="0 0 1080 600"><polyline id="fallpath" points="0,120 180,150 300,140 420,260 560,300 700,430 860,480 1080,560" fill="none" stroke="#e63946" stroke-width="10" stroke-dasharray="2200" stroke-dashoffset="2200"/><text x="60" y="80" fill="#e63946" font-size="52" font-weight="900">▼ 市场</text></svg>
+  <div id="s2num" class="num">$0</div>
+  <div id="coinpile"></div>
+  <svg id="morgan" viewBox="0 0 200 260"><g fill="#0b0f1c"><rect x="55" y="4" width="90" height="64" rx="6"/><rect x="38" y="62" width="124" height="14" rx="6"/><circle cx="100" cy="120" r="40"/><path d="M30 260 Q30 160 100 150 Q170 160 170 260 Z"/><rect x="88" y="160" width="24" height="70" fill="#5a1015"/></g></svg>
+  <div id="bubble">求你，放过市场</div>
+ </div>
+
+ <div class="scene" id="sc3">
+  <svg id="curve" viewBox="0 0 1080 900"><path id="curvepath" d="M20 820 L140 620 L240 700 L330 380 L430 860 L520 500 L610 850 L700 300 L790 840 L880 260 L980 420" fill="none" stroke="#f5c451" stroke-width="12" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="3000" stroke-dashoffset="3000"/><text x="30" y="120" fill="rgba(242,232,213,.5)" font-size="44" font-weight="900">他的财富曲线</text></svg>
+  <div id="five00" class="num" style="opacity:0">$500</div>
+ </div>
+
+ <div class="scene" id="sc4">
+  <svg id="skyline" viewBox="0 0 1080 300"><path d="M0 300 L0 180 60 180 60 120 130 120 130 200 200 200 200 60 280 60 280 160 360 160 360 100 440 100 440 210 520 210 520 30 600 30 600 150 690 150 690 90 770 90 770 190 850 190 850 70 930 70 930 160 1010 160 1010 130 1080 130 1080 300 Z" fill="#05070d"/></svg>
+  <svg id="crashchart" viewBox="0 0 1080 700"><path id="crashline" d="M20 180 L180 150 L300 200 L380 130 L450 170 L520 320 L600 520 L700 600 L820 650 L1060 660" fill="none" stroke="#e63946" stroke-width="12" stroke-linejoin="round" stroke-dasharray="2000" stroke-dashoffset="2000"/><path id="hisline" d="M450 320 C 620 260 780 160 1020 60" fill="none" stroke="#f5c451" stroke-width="14" stroke-dasharray="1200" stroke-dashoffset="1200"/><text id="hislabel" x="760" y="180" fill="#f5c451" font-size="60" font-weight="900" opacity="0">他的做空 ▲</text></svg>
+  <div id="s4date">1929.10.24 黑色星期四</div>
+  <div id="crowd"></div>
+  <div id="confetti"></div>
+  <div id="s4big" class="num" style="opacity:0">$1亿</div>
+ </div>
+
+ <div class="scene" id="sc5">
+  <div id="sinkarea"><div class="goldbar" id="bar1">$100M</div></div>
+  <div id="watersurf"></div>
+  <div id="s5debt" style="opacity:0">负债 $5,000,000</div>
+  <svg id="oldman" viewBox="0 0 400 340"><g fill="#05070d"><path d="M200 10 L204 90 196 90 Z" stroke="#05070d" stroke-width="4"/><ellipse cx="200" cy="98" rx="46" ry="12"/><circle cx="200" cy="88" r="38"/><path d="M130 340 Q138 200 205 185 Q275 200 280 340 Z"/></g><circle cx="200" cy="20" r="26" fill="#ffbe4d" opacity=".85"/><circle cx="200" cy="20" r="60" fill="#ffbe4d" opacity=".18"/></svg>
+ </div>
+
+ <div class="scene" id="sc6">
+  <div id="door"><div id="doornum">3202</div><div id="doorlight"></div></div>
+  <div id="note"></div>
+  <div id="quote">市场从不会错<br>错的常常是观点</div>
+  <div id="endcard"><div class="big">他战胜了市场<br><span class="gold">却输给了自己</span></div><div class="followbtn">＋ 关注 · 下期拆解利弗莫尔五律</div></div>
+ </div>
+
+ <div class="sub" id="sub"></div>
+ <div class="scan"></div><div class="vig"></div>
+</div>
+<script src="tl.js"></script><script src="engine.js"></script>
+</body></html>

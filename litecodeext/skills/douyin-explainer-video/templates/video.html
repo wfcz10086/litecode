@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<!-- 竖版 1080x1920 解说视频画布. 不要改尺寸; 颜色走 script.json 的 theme (render 时注入 --bg/--accent/--alert) -->
+<style>
+:root{--bg:#0a1226;--accent:#f5c451;--alert:#e63946;--paper:#f2e8d5;--deep:#05070f}
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1080px;height:1920px;overflow:hidden;background:var(--bg);color:var(--paper);
+ font-family:"Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif}
+#stage,#scenes,#dust,.scene{position:absolute;inset:0}
+.bgwash{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 0%,color-mix(in srgb,var(--bg) 70%,#3a5a9a) 0%,var(--bg) 55%,var(--deep) 100%)}
+.vig{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 300px 120px rgba(0,0,0,.75)}
+.scan{position:absolute;inset:0;pointer-events:none;opacity:.07;background:repeating-linear-gradient(0deg,transparent 0 6px,#000 6px 9px)}
+.mote{position:absolute;border-radius:50%;background:var(--accent);opacity:.25;filter:blur(1px)}
+.scene{opacity:0}
+/* 右上竖排幕名 + 底部进度条 */
+#actband{position:absolute;top:70px;right:44px;writing-mode:vertical-rl;font-weight:900;font-size:44px;letter-spacing:.35em;
+ color:var(--accent);border-right:4px solid var(--accent);padding-right:18px;text-shadow:0 0 24px color-mix(in srgb,var(--accent) 40%,transparent)}
+#progbar{position:absolute;left:0;right:0;bottom:0;height:10px;background:rgba(255,255,255,.08)}
+#prog{height:100%;width:0;background:var(--accent)}
+/* 字幕: 安全区在底部 220px 以上 (避开抖音底部 UI) */
+.sub{position:absolute;left:60px;right:60px;bottom:220px;text-align:center;font-weight:900;font-size:62px;line-height:1.42;color:#fff;
+ text-shadow:0 4px 0 #000,0 0 26px rgba(0,0,0,.9);opacity:0}
+.sub b{color:var(--accent)} .sub .hi{color:var(--alert)}
+/* 通用元素 */
+.big{position:absolute;width:100%;text-align:center;font-size:120px}
+.num{font-weight:900;font-variant-numeric:tabular-nums;color:var(--accent);text-shadow:0 0 40px color-mix(in srgb,var(--accent) 55%,transparent)}
+.num.down{color:var(--alert)}
+.h-title{position:absolute;top:360px;left:110px;right:150px;white-space:nowrap;text-align:center;font-size:96px;font-weight:900;color:#fff;line-height:1.25;
+ text-shadow:0 6px 0 #000}
+/* hook */
+.hook-title{position:absolute;top:880px;width:100%;text-align:center;font-size:140px;font-weight:900;color:#fff;letter-spacing:.06em}
+.hook-title .ch{display:inline-block;opacity:0}
+.tape{position:absolute;bottom:120px;left:0;width:300%;height:74px;background:#000;border-top:3px solid var(--alert);border-bottom:3px solid var(--alert);
+ color:var(--alert);font-weight:900;font-size:44px;line-height:74px;white-space:nowrap}
+/* headline */
+.kicker{position:absolute;top:220px;width:100%;text-align:center;font-size:320px;font-weight:900;color:transparent;
+ -webkit-text-stroke:3px color-mix(in srgb,var(--accent) 35%,transparent)}
+.h-lines{position:absolute;top:760px;left:110px;right:110px}
+.h-line{font-size:56px;font-weight:700;margin-bottom:46px;padding-left:34px;border-left:10px solid var(--accent);opacity:0}
+/* stamps */
+.stamp{position:absolute;white-space:nowrap;padding:18px 40px;border:12px solid var(--alert);border-radius:18px;color:var(--alert);font-size:84px;font-weight:900;
+ opacity:0;background:rgba(0,0,0,.25);letter-spacing:.08em}
+/* counter */
+.c-bar{position:absolute;top:1040px;left:140px;right:140px;height:28px;border-radius:14px;background:rgba(255,255,255,.12);overflow:hidden}
+.c-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--alert))}
+.c-note{position:absolute;top:1140px;left:100px;right:100px;text-align:center;font-size:54px;font-weight:700;opacity:0}
+/* versus */
+.vs-card{position:absolute;top:560px;width:410px;height:620px;border-radius:28px;background:rgba(13,20,38,.85);border:6px solid var(--accent);
+ display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;text-align:center;padding:30px}
+.vs-card.left{left:40px} .vs-card.right{right:40px;border-color:var(--alert)}
+.vs-name{font-size:68px;font-weight:900;color:#fff} .vs-val{font-size:50px;line-height:1.3;font-weight:900;color:var(--accent)}
+.vs-card.right .vs-val{color:var(--alert)}
+.vs-badge{position:absolute;top:1220px;left:50%;margin-left:-100px;width:200px;height:200px;border-radius:50%;background:var(--alert);
+ color:#fff;font-size:110px;font-weight:900;display:flex;align-items:center;justify-content:center;opacity:0;box-shadow:0 0 60px rgba(0,0,0,.6)}
+/* quote */
+.q-text{position:absolute;top:620px;left:110px;right:110px;font-size:84px;font-weight:900;line-height:1.5;color:#fff;
+ font-family:"Noto Serif CJK SC","WenQuanYi Zen Hei",serif}
+.endcard{position:absolute;top:1260px;left:140px;right:140px;padding:34px;border-radius:24px;background:var(--accent);color:#000;
+ text-align:center;font-size:58px;font-weight:900;opacity:0}
+/* image */
+.img-wrap{position:absolute;top:240px;left:60px;right:60px;height:1200px;overflow:hidden;border-radius:26px;border:6px solid var(--accent)}
+.img-wrap img{width:100%;height:100%;object-fit:cover}
+</style>
+<script src="tl.js"></script>
+<script>
+  // theme → CSS 变量 (seek 之前生效)
+  (function () { const th = (window.TL && TL.theme) || {}, r = document.documentElement.style;
+    for (const k of ["bg", "accent", "alert", "paper"]) if (th[k]) r.setProperty("--" + k, th[k]); })();
+</script>
+<link rel="stylesheet" href="custom.css" onerror="this.remove()">
+</head><body>
+<div id="stage">
+  <div class="bgwash"></div>
+  <div id="dust"></div>
+  <div id="scenes"></div>
+  <div class="vig"></div><div class="scan"></div>
+  <div id="actband"></div>
+  <div class="sub" id="sub"></div>
+  <div id="progbar"><div id="prog"></div></div>
+</div>
+<script src="custom.js" onerror="void 0"></script>
+<script src="engine.js"></script>
+</body></html>

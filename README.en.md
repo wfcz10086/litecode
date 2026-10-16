@@ -16,6 +16,17 @@
 
 ---
 
+## 🆕 What's new
+
+### v2026.10.16
+- 🎬 **New skill: one sentence → a short video for Douyin**. Say *"make a Douyin explainer about Buffett"*. It writes the voice-over script, records the narration, animates the scenes and adds music. You get three things back: a vertical `final.mp4`, a cover image and a publishing pack (titles, caption, hashtags). Everything uses local tools, so there are no licensing issues. Sample: *The Fall of a Genius Trader*, about 85 s.
+- 🔌 **Closing the page no longer stops the task**: chat turns now run in the background. Refresh, close the browser, lose the network or switch to another chat, and the task keeps running; when you come back it picks up where it is. Other tabs, and other people viewing the same chat, see it live. The stop button always matches what is really happening.
+- 🧯 **More accurate, quieter system nudges**: creating many tasks or writing many files in a row is no longer treated as a loop. The "write a test" reminder fires once per file. Re-running the same command after editing a file is no longer blocked.
+- 🛡️ **Disable tools per request**: add `disabled_tools: ["web"]` to a request and the model gets no web tools for that call. Useful for offline mode and fair benchmarks. When a shell command fails, only network commands are retried automatically. Old tool output is trimmed only when the context is actually close to full.
+- 📏 **Benchmarks**: an official SWE-bench Verified runner is included. Web access is off by default, and any instance where the model went online anyway is not scored.
+
+---
+
 ## 1. Getting it running (just copy-paste)
 
 You need: a Linux box (home server, VPS, old PC — anything) with Docker installed.
@@ -77,6 +88,7 @@ Working on day one:
 - 🗣️ Say *"scan this repo and write an architecture report"* → it splits the job into a 3-step pipeline (scan → analyze → write) and runs it end to end.
 - ⏰ Set a timer: every morning at 9:00 it pulls your data and pushes a briefing to WeCom.
 - 🖼️ Paste a screenshot, it reads it. Ask for slides, it renders them. Need an image — DALL·E / SD / ComfyUI are already wired.
+- 🎬 *"Make a Douyin video about Jesse Livermore"* → script, voice-over, animation and music done for you: a vertical mp4, a cover and the post copy.
 - ⌨️ One line in the terminal: it writes files, runs commands, shows you the diff, and tells you what it cost in tokens.
 
 And a side no other agent has:
@@ -129,14 +141,14 @@ And a side no other agent has:
 A tool only exists while you're holding it. An employee is *there*. LiteCode is built to the employee standard:
 
 - **It remembers** — preferences you stated, things you discussed. New sessions don't start with introductions.
-- **It has skills** — 92 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
+- **It has skills** — 93 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
 - **It works unsupervised** — timers fire on schedule, big jobs split themselves into pipelines, failures retry with lessons learned.
 - **It's always reachable** — browser, terminal, WeChat; start a chat in one place, continue in another.
 - **It serves only you** — your machine, your model, data never leaves. It has no other master.
 
 ### Numbers first
 
-| 72 | 92 | 9 | 14 | 5 | 4 | 3 | 1 |
+| 74 | 93 | 9 | 14 | 5 | 4 | 3 | 1 |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | tools | skills | agent types | search engines | model backends | memory tiers | fronts | container |
 
@@ -174,7 +186,7 @@ Free APIs → a local SearXNG aggregator → 14 engines in parallel → a real b
 
 ### 🔗 Buff every AI tool you already own
 
-The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 92 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
+The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 93 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
 
 ---
 

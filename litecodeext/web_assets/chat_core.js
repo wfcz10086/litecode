@@ -47,9 +47,11 @@ function renderSL(){
 }
 /* [D 2026-05-22] 切 session 立即清屏 + loading state, 不再等 fetch 完才反应 */
 async function swS(sid){
-  if(streaming)return;
   if(sid===cur)return;
+  /* [chat-runs] 进行中切走: 只断本页订阅, 后台轮次照跑, 切回来自动接上 */
+  if(streaming){_streamGen++;try{_curReader&&_curReader.cancel();}catch(e){}_resetStreamUi();}
   cur=sid;closeSB();
+  try{localStorage.setItem('lc.cur',sid);}catch(e){}
   const s=sess.find(x=>x.id===sid);
   document.getElementById('ct').textContent=s?.name||sid;
   document.getElementById('exp-btn').style.display='inline-flex';
@@ -65,6 +67,7 @@ async function swS(sid){
     if(cur!==sid)return;  // 切换期间又点了别的会话, 丢弃旧 fetch
     renderMsgs(d.messages||[]);
     sbot(true);
+    if(window.LCAttach)LCAttach.resumeIfRunning(sid,d.messages||[]);
   }catch(e){
     if(msgsEl)msgsEl.innerHTML=`<div style="padding:20px;color:var(--dg);font-size:12px">加载失败: ${esc(String(e))}</div>`;
   }
@@ -682,13 +685,33 @@ async function send(){
   if(!cur){const d=await(await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:msg.slice(0,40)+(msg.length>40?'…':'')})})).json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0});renderSL();}
   const s=sess.find(x=>x.id===cur);if(s&&s.name==='New Chat'){s.name=msg.slice(0,30)+(msg.length>30?'…':'');renderSL();}
   document.getElementById('ct').textContent=s?.name||cur;
+  const bodyEl=_newAiBubble();
+  await _streamTurn(bodyEl,()=>fetch(`/api/chat/${cur}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg, strategist_mode: !!window._stratMode})}));
+}
+/* [chat-runs 2026-10-16] 轮次在后台跑, 本页只是订阅者: 发消息 / 刷新重连 / 切回会话都走 _streamTurn.
+ * _streamGen 每次切走 / 中断 +1, 旧订阅的收尾不再动按钮状态, 也不触发自动重连 (见 chat_attach.js) */
+let _streamGen=0;
+function _newAiBubble(){
   const uid='b'+Date.now()+Math.random().toString(36).slice(2,4);
   const aw=document.createElement('div');aw.className='msg ai';const ar2=document.createElement('div');ar2.className='mr';ar2.textContent='AI';const ab=document.createElement('div');ab.className='mb';ab.id=uid;ab.innerHTML='<div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>';aw.appendChild(ar2);aw.appendChild(ab);document.getElementById('msgs').appendChild(aw);sbot(true);
-  const bodyEl=document.getElementById(uid);
-  streaming=true;window.streaming=true;document.getElementById('ib').classList.add('vis');
+  return document.getElementById(uid);
+}
+function _resetStreamUi(){streaming=false;window.streaming=false;_sending=false;_curReader=null;document.getElementById('sdb').disabled=false;document.getElementById('ib').classList.remove('vis');}
+async function _streamTurn(bodyEl,open){
+  const sid=cur,gen=++_streamGen;
+  try{localStorage.setItem('lc.cur',sid);}catch(e){}  /* 刷新后回到这个会话并接上进度 */
+  streaming=true;window.streaming=true;_sending=true;document.getElementById('sdb').disabled=true;document.getElementById('ib').classList.add('vis');
   let ft='',sr_=null,fc=true,sdiffs=[];_lu=null;
   try{
-    const resp=await fetch(`/api/chat/${cur}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg, strategist_mode: !!window._stratMode})});
+    const resp=await open();
+    if(resp.status===409){
+      /* 别的标签页 / 别人已在本会话跑一轮: 不重复发, 直接接入实时进度 */
+      bodyEl.closest('.msg')?.remove();_streamGen++;_resetStreamUi();
+      toast('⏳ 该会话还在执行上一轮, 已接入实时进度');
+      if(window.LCAttach)LCAttach.resume(sid);
+      return;
+    }
+    if(!resp.ok||!resp.body)throw new Error('HTTP '+resp.status);
     const reader=resp.body.getReader();_curReader=reader;const dec=new TextDecoder();let buf='';
     /* [audit-p0 #18] 60s idle watchdog: 若连续 60s 无任何 SSE 帧 (data 或 : 心跳) → abort 视为超时 */
     let _sseWatch=setTimeout(()=>{try{reader.cancel('sse_idle_timeout');}catch(_){}}, 60000);
@@ -845,7 +868,8 @@ async function send(){
   }
   /* [P54+] 同样补预览 — 扫文本里的绝对路径 */
   if(window._scanAndPreview){try{_scanAndPreview(bodyEl, bodyEl.textContent||'');}catch(e){}}
-  streaming=false;window.streaming=false;_sending=false;_curReader=null;document.getElementById('sdb').disabled=false;document.getElementById('ib').classList.remove('vis');sbot();
+  if(gen===_streamGen){_resetStreamUi();if(window.LCAttach)LCAttach.afterTurn(sid);}
+  sbot();
 }
 /* "推理中…" 占位状态只在等首个真实事件时有用, 之后移除; 移完 .tg 空了也一并删 */
 function _dropPrep(body){body.querySelectorAll('.tg .ti-prep').forEach(x=>x.remove());const tg=body.querySelector('.tg');if(tg&&!tg.children.length)tg.remove();}
@@ -863,6 +887,7 @@ async function interrupt(){
   try{
     try{await fetch(`/api/interrupt/${cur}`,{method:'POST'});}catch(e){}
     /* 立即取消 reader 让 stream 循环 break, 复位 streaming/_sending/UI */
+    _streamGen++;  /* 主动停止: 旧订阅收尾不触发自动重连 */
     if(_curReader){try{await _curReader.cancel();}catch(e){}_curReader=null;}
     streaming=false;window.streaming=false;_sending=false;
     document.getElementById('sdb').disabled=false;

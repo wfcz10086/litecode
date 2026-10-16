@@ -25,6 +25,8 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "core"))  # core 模块扁平导入
 from lib import overhead_calib as _oc
+from lib import context_pressure as _cp
+from lib import tool_filter as _tf
 from lib.config import (
     CFG, BASE, log, load_cfg,
     TOKEN, PORT, HOST, MODEL_ID, BACKEND_URL, API_KEY, BACKEND_TYPE,
@@ -691,7 +693,12 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
     _sw_every   = int(_AGT.get("sliding_window_every", 5))
     _sw_min     = int(_AGT.get("sliding_window_min_msgs", 20))
     _sw_keep    = int(_AGT.get("sliding_window_keep_recent", 14))
-    if iteration > 0 and iteration % _sw_every == 0 and len(ctx.messages) > _sw_min:
+    # [2026-10-13] 只在上下文真有压力时才缩: 128K 窗口跑 SWE-bench, 第 10 轮就把读过的代码砍成一行,
+    # 模型只好重读 → 触发防死循环。压力 = 当前 prompt 估值 / (窗口*token_budget_pct)。
+    _sw_pressure = float(_AGT.get("sliding_window_pressure", 0.5))
+    if (iteration > 0 and iteration % _sw_every == 0 and len(ctx.messages) > _sw_min
+            and _cp.under_pressure(ctx.messages, usage, est_tokens,
+                                   int(CONTEXT_WINDOW * float(_AGT.get("token_budget_pct", 0.6))), _sw_pressure)):
         _trim_boundary = max(2, len(ctx.messages) - _sw_keep)
         _trimmed_count = 0
         for _mi in range(2, _trim_boundary):  # 跳过 system + 第一条 user
@@ -895,7 +902,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
         iter_real_completion = 0
         while _vllm_retry_count <= _vllm_max_retry:
             try:
-                async for chunk in _vllm_stream(ctx.messages, TOOL_DEFS,
+                async for chunk in _vllm_stream(ctx.messages, _tf.visible(TOOL_DEFS, ctx.disabled_tools),
                                                  max_tokens_override=_overflow_max_tokens):
                     # ── [STREAM-INTERRUPT] vLLM 流式输出期间检查中断 ──
                     with _interrupt_lock:
@@ -1745,6 +1752,7 @@ async def agent_stream(
     model: str = MODEL_ID,
     user_content: Any = None,   # [v1.4] 多模态: 若传 list, 直接作为 user.content
     strategist: bool = False,   # [2026-09-03] 权谋/多方博弈推演模式 (前端 chip)
+    disabled_tools: frozenset = frozenset(),   # [2026-10-13] 本次请求禁用的工具, 见 lib/tool_filter.py
 ) -> AsyncGenerator[str, None]:
     # 同 session 的并发请求串行化：防止两个 client 同时跑 agent loop 导致 LLM 并行/文件竞争
     _lock = _get_session_lock(session_id) if session_id else None
@@ -1753,7 +1761,8 @@ async def agent_stream(
     # ── AGENT_STREAM_REFACTOR M5a: 防 UnboundLocalError, 必须在 try 之前构造 ──
     # finally 依赖 _ctx.new_msgs / _ctx.base_history / _ctx.sid_tag, 若构造放 try 内
     # 且抛异常, finally 引用 _ctx 会 UnboundLocalError (老 bug 换个形式复活)
-    _ctx = TurnContext(sid_tag=session_id[:8] if session_id else "anon", session_id=session_id)
+    _ctx = TurnContext(sid_tag=session_id[:8] if session_id else "anon", session_id=session_id,
+                       disabled_tools=frozenset(disabled_tools or ()))
     try:
         # ── 防 UnboundLocalError: finally 依赖的变量必须最先赋值 ──
         # 注意: 不用 `x: list = []` 注解赋值，Python 3.11 在某些异常路径下会误判为未绑定
@@ -2146,6 +2155,12 @@ async def agent_stream(
                             tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _args_err})
                             _ctx.tracer.tool_call(name=fn_name, args={}, result=_args_err, elapsed=0, is_error=True)
                             log.warning(f"  [TOOL-ARGS] {fn_name} 参数非法 JSON, 已回给模型重发")
+                            continue
+
+                        if fn_name in _ctx.disabled_tools:
+                            tool_results.append({"role": "tool", "tool_call_id": tc["id"],
+                                                 "content": _tf.blocked_msg(fn_name)})
+                            log.warning(f"  [TOOL-DISABLED:{_ctx.sid_tag}] {fn_name}")
                             continue
 
                         # ── [TOOL-LOOP] 主循环工具重复死循环检测 (S1-D → plugins/tools/guard.py) ──
@@ -2639,6 +2654,10 @@ async def agent_stream(
                             )
                             if not _has_test:
                                 _all_untested.append((_sf, _sfext))
+                        # [FIX 2026-10-16] 同一批没测试的文件每写一个新文件就整单重报一次, 纯噪音;
+                        # 每个文件只提醒一次 (模型选择不测时尊重它, 收尾还有端到端验证兜底)
+                        _all_untested = [u for u in _all_untested if u[0] not in _test_state.test_reminded]
+                        _test_state.test_reminded.update(u[0] for u in _all_untested)
                         if _all_untested:
                             _ext_guide = {
                                 ".py":  ("tests/test_{name}.py",
@@ -2669,7 +2688,7 @@ async def agent_stream(
                             _test_inject = (
                                 f"[SYSTEM-TEST] ⚠ 已写 {len(_test_state.src_files_written)} 个源文件，但 {len(_all_untested)} 个没有测试:\n"
                                 f"{_untested_list}\n\n"
-                                f"下一步必须写测试（否则此提醒每轮重复）:\n"
+                                f"下一步写测试:\n"
                                 f"  mkdir -p {_tests_root}\n"
                                 f"  文件: {_tpl_name.replace('{name}', _recent_sf.split('/')[-1].rsplit('.',1)[0])}\n"
                                 f"  模板:\n    {_tpl_body}\n\n"
@@ -2683,9 +2702,9 @@ async def agent_stream(
                                 # tool_results 里的 dict 往往就是 messages 末尾那个对象, 别追加两遍
                                 if _last is not None and _last is not tool_results[-1] and _last.get("role") == "tool":
                                     _last["content"] += "\n\n" + _test_inject
-                            # 同时作为独立 user 消息（双重保险）
-                            _ctx.messages.append({"role": "user", "content": _test_inject})
-                            _ctx.new_msgs.append({"role": "user", "content": _test_inject})
+                            else:   # 没有 tool result 可挂时才单独发一条 (原先两处都发, 同一提醒占双份上下文)
+                                _ctx.messages.append({"role": "user", "content": _test_inject})
+                                _ctx.new_msgs.append({"role": "user", "content": _test_inject})
                             log.info(f"  [TEST] injected: {_untested_names[:3]}")
 
                     # ── [RUN-TEST] 本轮写了测试/验证文件 → 立即执行 ──

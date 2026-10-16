@@ -122,6 +122,17 @@ _write_streak: dict = {}  # sid -> [(ts, abs_path), ...]
 _BATCH_GUARD_EXEMPT_EXTS = {".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".cfg", ".ini"}
 
 
+def _is_test_file(name: str) -> bool:
+    stem = name.rsplit(".", 1)[0]
+    return (stem.startswith("test_") or stem.endswith("_test")
+            or ".test" in name or ".spec" in name or stem.endswith("Test"))
+
+
+def note_shell_run(sid: str):
+    """跑过 execute_shell = 已经在验证, 批量写入计数清零 (规则本意是"写→验→写")。"""
+    _write_streak.pop(sid, None)
+
+
 def _check_batch_write_guard(sid: str, fp_str: str, is_new: bool) -> str:
     """每次 write_file 调用. 返回追加的 SYSTEM 警告 (空串 = 无警告).
     只针对源代码新文件 (非 doc/config). 同 session 60s 内 ≥3 个就警告.
@@ -129,8 +140,8 @@ def _check_batch_write_guard(sid: str, fp_str: str, is_new: bool) -> str:
     if not sid or not is_new:
         return ""
     fp_p = Path(fp_str)
-    if fp_p.suffix.lower() in _BATCH_GUARD_EXEMPT_EXTS:
-        return ""
+    if fp_p.suffix.lower() in _BATCH_GUARD_EXEMPT_EXTS or _is_test_file(fp_p.name):
+        return ""   # 测试文件不算: SYSTEM-TEST 刚要求补测试, 这里再骂"批量产出"就自相矛盾
     now = time.time()
     lst = _write_streak.setdefault(sid, [])
     # 清窗外
@@ -337,6 +348,7 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
         return await _handler(sid, args)
 
     if name == "execute_shell":
+        note_shell_run(sid)
         cmd        = args.get("command", "")
         timeout    = args.get("timeout")
         background = args.get("background", False)

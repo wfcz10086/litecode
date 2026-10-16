@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
+from lib import tool_filter as _tf
 from lib.sse import _mkid, sse_done, sse_error, sse_stop, sse_usage
 
 from ._deps import _srv, require_auth
@@ -83,7 +84,8 @@ async def chat_completions(request: Request):
         user_message = "(图片输入)"
 
     gen = srv.agent_stream(user_message, session_id, model,
-                           user_content=user_content_raw, strategist=strategist)
+                           user_content=user_content_raw, strategist=strategist,
+                           disabled_tools=_tf.parse(body.get("disabled_tools")))
 
     if stream:
         return StreamingResponse(
