@@ -30,7 +30,7 @@ const LAYOUTS = window.LAYOUTS = Object.assign({
       const t = mk(el, "hook-title");
       t.style.fontSize = fitFont(p.title || "", 140, 960) + "px";
       [...(p.title || "")].forEach(ch => mk(t, "ch", esc(ch)));
-      if (p.tape) mk(el, "tape", esc((p.tape + "　").repeat(8)));
+      if (p.tape) mk(el, "tape", esc((p.tape + "　").repeat(8))).dataset.qa = "overlay";   // 滚动带本来就伸出屏外
     },
     update(el, p, u) {
       const n = el.querySelector(".hook-num");

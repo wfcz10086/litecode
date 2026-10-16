@@ -23,6 +23,12 @@
 > *Hanbao* is southwest-Chinese slang for a lovable simpleton: not flashy, but it never drops the job. Close the tab and it keeps working, it nags less, and one sentence gets you a video ready to post.
 
 - 🎬 **New skill: one sentence → a short video for Douyin**. Say *"make a Douyin explainer about Buffett"*. It writes the voice-over script, records the narration, animates the scenes and adds music. You get three things back: a vertical `final.mp4`, a cover image and a publishing pack (titles, caption, hashtags). Everything uses local tools, so there are no licensing issues. Sample: *The Fall of a Genius Trader*, about 85 s.
+- 🚦 **Three gates before any video ships**, all enforced by scripts:
+  - **Fact check**: years, "N years later", counts and amounts in the narration must match a sourced fact list.
+  - **Layout check**: it catches overlapping text, text running off screen and subtitles stuck on one line.
+  - **Final-video check**: it samples 3 frames per scene from the finished video for review.
+
+  A one-command pipeline now stops at the first failing step and resumes from it once fixed. The sample *Fall of a Genius Trader* was remade through these gates, fixing a miscalculated year, unsourced details, stuck subtitles and several overlaps.
 - 🔌 **Closing the page no longer stops the task**: chat turns now run in the background. Refresh, close the browser, lose the network or switch to another chat, and the task keeps running; when you come back it picks up where it is. Other tabs, and other people viewing the same chat, see it live. The stop button always matches what is really happening.
 - 🧯 **More accurate, quieter system nudges**: creating many tasks or writing many files in a row is no longer treated as a loop. The "write a test" reminder fires once per file. Re-running the same command after editing a file is no longer blocked.
 - 🛡️ **Disable tools per request**: add `disabled_tools: ["web"]` to a request and the model gets no web tools for that call. Useful for offline mode and fair benchmarks. When a shell command fails, only network commands are retried automatically. Old tool output is trimmed only when the context is actually close to full.

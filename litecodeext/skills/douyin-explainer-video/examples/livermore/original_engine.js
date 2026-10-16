@@ -39,7 +39,7 @@ const candles=[],coins=[],conf=[],heads=[];
     d.textContent=` ${tick[i].padEnd(4)} ${a} ${b.toFixed(2).padStart(5)}  ${R()>.5?"▲":"▼"}`;
     B.appendChild(d);}
   // S3 破产章
-  [[430,760,"破产·1908",3.4],[610,740,"破产·1911",4.9],[790,730,"再破产",6.4]]
+  [[90,760,"破产·1908",3.4],[520,930,"破产·1911",4.9],[150,1100,"再破产",6.4]]
    .forEach(([x,y,txt,at])=>{const d=document.createElement("div");
     d.className="crashstamp";d.textContent=txt;d.style.left=x+"px";d.style.top=y+"px";
     d.dataset.at=at;$("sc3").appendChild(d);});
@@ -59,7 +59,7 @@ const candles=[],coins=[],conf=[],heads=[];
 function phrases(text){return text.split(/(?<=[，。！？；：])/).filter(s=>s.trim());}
 const SUBS = TL.scenes.map(s=>{const ph=phrases(s.text);
   const tot=ph.reduce((a,x)=>a+x.length,0);let c=0;
-  return ph.map(p=>{const t0=c/tot;c+=p.length;return{t0,t1:c,p};});});
+  return ph.map(p=>{const t0=c/tot;c+=p.length;return{t0,t1:c/tot,p};});});
 let lastSub="";
 function setSub(subIdx,u,dur){
   const el=$("sub");const list=SUBS[subIdx];
@@ -73,7 +73,7 @@ function setSub(subIdx,u,dur){
 }
 
 /* ---------- 各场景 ---------- */
-const ACTS=["序章 · 1929","第一幕 · 抄牌少年","第二幕 · 1907","第三幕 · 破产轮回","第四幕 · 黑色星期四","第五幕 · 陨落","终章 · 3202"];
+const ACTS=["序章 · 1929","第一幕 · 抄牌少年","第二幕 · 1907","第三幕 · 破产轮回","第四幕 · 黑色星期四","第五幕 · 陨落","终章 · 1940"];
 
 function upS0(u,d){
   candles.forEach(c=>{const y=((u*c.sp+c.off)%(d+400))-260;c.d.style.top=y+"px";});
@@ -92,7 +92,7 @@ function upS1(u,d){
   const st=$("s1stamp");
   let txt=null,tt=0;
   if(u<6.2){txt="14岁";tt=(u-1)/.6;}
-  else if(u<8.6){txt="20岁";tt=(u-6.4)/.6;}
+  else if(u<8.6){txt="神童";tt=(u-6.4)/.6;}
   if(txt){st.textContent=txt;const p=oback(tt);st.style.opacity=clamp(tt*4,0,1);
     st.style.transform=`scale(${3-2*clamp(p,0,1)}) rotate(-6deg)`;}
   else st.style.opacity=0;
@@ -115,14 +115,15 @@ function upS2(u,d){
 }
 function upS3(u,d){
   $("curvepath").style.strokeDashoffset=3000*(1-ez(u/8));
+  const T3=TL.scenes[3].text, cut=d*Math.max(T3.indexOf("一九一五"),0)/T3.length;   // 旁白念到 1915 时翻身
   document.querySelectorAll(".crashstamp").forEach(s=>{
     const p=oback((u-(+s.dataset.at))/.45);
-    s.style.opacity=clamp((u-(+s.dataset.at))*5,0,1);
+    s.style.opacity=clamp((u-(+s.dataset.at))*5,0,1)*(1-ez((u-cut+.2)/.4));
     s.style.transform=`scale(${2.4-1.4*clamp(p,0,1)}) rotate(-12deg)`;});
-  const f=$("five00"),fp=oback((u-9.6)/.6);
-  f.style.opacity=clamp((u-9.6)*3,0,1);
+  const f=$("five00"),fp=oback((u-cut-.2)/.6);
+  f.style.opacity=clamp((u-cut-.2)*3,0,1);
   f.style.transform=`scale(${clamp(fp,0,1)})`;
-  f.innerHTML='$500 <span style="font-size:70px;color:#fff">→ 几天赢回 →</span>';
+  f.innerHTML='借来的小钱<div style="font-size:64px;color:#fff">→ 再次杀回华尔街 →</div>';
 }
 function upS4(u,d){
   $("crashline").style.strokeDashoffset=2000*(1-ez(u/5));
@@ -155,12 +156,12 @@ function upS5(u,d){
 }
 function upS6(u,d){
   let li=1;
-  if(u>3.1) li=u<4?(R()<.5?.2:1):0;           // 门缝灯光闪烁熄灭
+  if(u>3.1) li=u<4?(Math.sin(u*97)>0?1:.2):0;           // 门缝灯光闪烁熄灭
   $("doorlight").style.opacity=li;
   $("doornum").style.opacity=1-ez((u-8)/1);
   $("door").style.opacity=1-ez((u-8.5)/1);
   const n=$("note");
-  if(u>4.2){n.style.opacity=clamp((u-4.2)/.4,0,1);
+  if(u>4.2){n.style.opacity=clamp((u-4.2)/.4,0,1)*(1-ez((u-8.9)/.6));   // 金句竖排出来前纸条先退场
     const full="我的人生，是一次失败。";
     const k=Math.floor((u-4.4)/.24);
     n.textContent=full.slice(0,clamp(k,0,full.length))+(k<full.length&&k>0&&Math.sin(u*9)>0?"｜":"");}

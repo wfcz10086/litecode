@@ -1,29 +1,28 @@
-# PLAN: 天才交易员的陨落 — 竖版动漫科普视频
+# PLAN: 天才交易员的陨落 — 竖版动漫科普视频 (v2, 2026-10-16 重做)
 
 主题: 杰西·利弗莫尔 (Jesse Livermore) 1877-1940
-规格: 1080x1920 竖版, ~90s, 24fps, 动漫/漫画风, edge-tts 旁白 + BGM
+规格: 1080x1920 竖版, ~85s, 24fps, 动漫/漫画风, edge-tts 旁白 + BGM (dark)
 风格: 浮世绘+漫画分镜, 深海蓝 #0a1226 / 金 #f5c451 / 绯红 #e63946 / 米白
 
 ## Steps
+- [x] 查资料 → script.json 的 facts (每条带 source), factcheck.py 通过
+- [x] 题材画面: original_video.html + original_engine.js (7 场专属画面: K 线雨 / 行情牌 / 金币堆 / 财富曲线 / 崩盘线 / 金条沉水 / 酒店门)
+- [x] run.py: fact → tts → check → render → bgm → mix → final → qa
+- [x] cover.html → cover.png (shot.py 版面自检通过 + vision 复查)
+- [x] publish.md
+- [x] 成片终检: qa/final_grid.png vision 逐行复查
 
-- [ ] step1: script.py → script.json (7场台词) + edge-tts 逐场生成 mp3 + ffprobe 取时长 → timeline.json ✅
-- [ ] step2: video.html + engine.js — seek(t) 纯函数时间轴渲染 (7个场景 + 字幕)
-- [ ] step3: render.py — playwright 逐帧截图 frames/*.png (24fps), 后台跑
-- [ ] step4: bgm.py — numpy 合成低音氛围 BGM → ffmpeg 合成 final.mp4 (帧序列+旁白+BGM)
-- [ ] step5: 验证: ffprobe 时长/抽帧截图检查
-- [ ] step6: cover.html → cover.png (1080x1440 漫画封面)
-- [ ] step7: publish.md — 发布包 (标题x3 + 正文 + 话题标签)
-
-## 事实核对 (旁白依据)
-- 1877 生于马萨诸塞; 14岁离家去波士顿, 在对赌行(bucket shop)抄报价板
-- 20岁本金约$10,000, 被新英格兰对赌行联合拉黑
-- 1907 单日做空赚 $3M; 摩根(J.P. Morgan)托人请他手下留情
-- 1908-1934 多次破产 (第4次1915前; 1934第4/5次正式破产, 负债$5M+)
-- 1915 借$500东山再起
-- 1929 大崩盘做空获利 ~$100M (史上个人单日最大获利之一)
-- 1940-11-28 纽约 Sherry-Netherland 酒店 3202 房身亡, 遗书 "My life has been a failure" (我的人生是一次失败)
-- 名言: "市场永远不会错, 观点常常会错"
+## v1 → v2 改了什么 (都是 v1 的真实问题)
+| 问题 | v1 | v2 |
+|---|---|---|
+| 相对年份算错 | 1929 "十四年后" 去世 (实为 1940, 11 年) | "十一年后" — factcheck 现在会拦 |
+| 一天 vs 一段时间 | "最黑暗的一天赚走一亿" | "股灾里逆势做空, 赚走约一亿" |
+| 无出处细节 | 借 500 美元翻身 / 3202 号房 / 第五次破产 / 负债五百万 / 华尔街之鬼 | 借来的一笔小钱 / 终章 · 1940 / 再次破产 / 华尔街巨熊 |
+| 字幕卡住 | 分句 t1 存成字数 → 每场字幕停在第一句 | 改成比例; render.py check 现在会拦 |
+| 画面重叠 | 三个破产章叠在一起; 金句竖排压住纸条; 第四幕标题撞幕名 | 错开排 / 纸条先退场 / 标题让出右侧 |
+| 渲染不确定 | 终章灯光闪烁在 seek 里调随机数 | 改成 Math.sin(u*97) |
+| 少年剪影 | 纯黑一团压在行情牌上 | 缩小下移 + 金色轮廓光 |
 
 ## 审核安全
-- 死亡不直写"开枪自杀", 用"一声枪响结束了传奇"; 无枪械画面
-- 无荐股/收益承诺, 结尾是悲剧教训向
+- 死亡不写细节 ("一声枪响结束了这段传奇"), 不进标题; 无枪械画面
+- 无荐股/收益承诺, 结尾是悲剧教训向; 金额一律写"约"

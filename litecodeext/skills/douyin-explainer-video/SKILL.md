@@ -21,24 +21,32 @@ SK=<本 skill 目录>          # 容器内 /opt/litecode/skills/douyin-explainer
 P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 ```
 
-## 流程 (7 步, 用 task_create 建好再逐个推进)
+## 流程 (用 task_create 建好再逐个推进)
 
-1. **选题 + 文案** → `$P/script.json`。先读 `copywriting.md` 写口播。
-   事实先核对 (年份/数字/名言), 写进 PLAN.md 的"事实核对"段; 不确定的数字别写死。
-2. **配音 + 时间轴**: `python3 $SK/scripts/tts.py` → `audio/*.mp3` + `timeline.json`
-   (旁白里有 3 个以上连续英文字母会被拦: TTS 会念怪, 改中文)。
-3. **画面**: `cp $SK/templates/video.html $SK/templates/engine.js $P/`,
-   `python3 $SK/scripts/render.py snap` 出每场中点关键帧 → `python3 $SK/scripts/grid.py`
-   → `vision_ocr preview/grid.png` 逐帧查: 文字溢出 / 遮挡 / 乱码 / 字幕可读。不过关就改, 再 snap。
-4. **逐帧渲染** (耗时 5-15 分钟): `execute_shell background=true: python3 $SK/scripts/render.py all`。
-   等待期间并行做 5/6/7, 别干等。
-5. **BGM + 混音**: `python3 $SK/scripts/bgm.py [dark|epic|light]` → `python3 $SK/scripts/merge.py mix`;
-   渲染完再 `python3 $SK/scripts/merge.py final` → `final.mp4`。
-6. **封面** 1080x1440: 参照 `examples/livermore/cover.html` 写 `cover.html`,
-   `python3 $SK/scripts/shot.py cover.html cover.png 1080 1440`, vision_ocr 打分 ≥8 才过。
-7. **发布包** `publish.md`: 标题 x3 + 正文 + 话题 8-10 个 + 置顶评论 + 发布 checklist
-   (模板见 `examples/livermore/publish.md`)。
-   最后 ffprobe 核对时长/分辨率, 抽 3 帧 vision 复查, 汇报文件路径。
+1. **核对事实 + 写文案** → `$P/script.json` (先读 `copywriting.md`)。
+   **先查资料再动笔**: 年份 / 金额 / 次数 / 名言逐条写进 `facts` (带 source), 查不到可靠出处的说法就不写。
+2. **配画面**: `cp $SK/templates/video.html $SK/templates/engine.js $P/`;
+   题材专属画面写 `custom.js` (见下)。通用版式够用时不写也行, 但**题材画面是质感的来源**。
+3. **一键跑** (background=true): `cd $P && python3 $SK/scripts/run.py`
+   依次: fact 事实闸 → tts 配音 → check 版面自检 → render 逐帧 → bgm → mix → final → qa 成片抽帧。
+   任一关卡失败立即停, 日志写明哪步、怎么修; 修完 `run.py --from <那一步>` 接着跑。
+   等渲染时并行做 4/5, 别干等。
+4. **封面** 1080x1440: 参照 `examples/livermore/cover.html` 写 `cover.html`,
+   `python3 $SK/scripts/shot.py cover.html cover.png 1080 1440` (自带版面自检), 再 vision_ocr 打分 ≥8。
+5. **发布包** `publish.md`: 标题 x3 + 正文 + 话题 8-10 个 + 置顶评论 + checklist (见 `examples/livermore/publish.md`)。
+   标题和正文里的数字同样只能来自 facts。
+6. **成片终检 (交付前必做)**: `vision_ocr qa/final_grid.png` (每行一场, 30%/60%/90% 三帧) 逐行查:
+   文字互压 / 被图形挡 / 出屏 / 乱码 / 画面大片空白 / **同一场三帧字幕一样 (字幕卡住)**。
+   有问题 → 改 → `run.py --from check` → 再查。全过才汇报交付。
+
+## 三道关 (都是脚本硬闸, 不靠自觉)
+| 关 | 脚本 | 抓什么 | 来历 |
+|---|---|---|---|
+| 事实闸 | `factcheck.py` | 旁白年份不在 facts / "N年后"算错 / "第N次"没核实 / 金额对不上 | 原片把 1929→1940 写成"十四年后" |
+| 版面自检 | `render.py check` | 每场 4 个时刻量实际文字框: 互相压住 / 出屏 / 撑破框 / **字幕卡住** | 原片印章叠印章、金句压纸条、每场字幕卡第一句 |
+| 成片终检 | `qa_final.py` + vision | 规格 (1080x1920/有音轨/时长) + 抽帧拼图人眼复查 | 预览帧只截中点, 后改的遮挡看不到 |
+
+故意叠放的元素 (印章盖在行情牌上、整屏遮罩卡、滚动警示带、金币堆) 加 `data-qa="overlay"` 豁免版面自检。
 
 ## script.json
 ```json
@@ -46,6 +54,7 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
  "title": "天才交易员的陨落",
  "voice": "zh-CN-YunxiNeural", "rate": "+14%", "gap": 0.7,
  "mood": "dark",                       // BGM: dark 悲剧悬疑 / epic 逆袭商战 / light 科普搞笑
+ "facts": [{"year": 1929, "fact": "股灾期间做空净赚约一亿美元", "source": "Wikipedia"}],   // 事实闸对账用
  "theme": {"bg": "#0a1226", "accent": "#f5c451", "alert": "#e63946"},
  "highlight": {"gold": ["一亿美元"], "red": ["破产"]},   // 字幕关键词上色
  "scenes": [
@@ -73,8 +82,9 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 window.LAYOUTS_EXT = { coins: { build(el, p) { /* 建 DOM 一次 */ },
                                 update(el, p, u, dur) { /* u=本场已过秒数, 只依赖 u 改样式 */ } } };
 ```
-**铁律**: update 必须是 u 的纯函数 —— 不许 setTimeout / CSS transition / animation / Date.now / Math.random
-(随机用 engine 的 `R()`, 在 build 里取好)。否则逐帧截图会抖、重渲不一致。
+**铁律**: update 必须是 u 的纯函数 —— 不许 setTimeout / CSS transition / animation / Date.now / Math.random,
+也不许在 update 里调 `R()` (原片门缝灯光闪烁就犯过: 同一帧每次渲染不一样)。随机数在 build 里取好存起来;
+要"闪烁"用 `Math.sin(u*97)>0` 这类 u 的确定函数。
 完整的专属画面写法见 `examples/livermore/original_engine.js`。
 
 ## 审核与合规
@@ -84,6 +94,8 @@ window.LAYOUTS_EXT = { coins: { build(el, p) { /* 建 DOM 一次 */ },
 - 真人名字可以讲公开史实, 不编造对话当真事, 不做人身攻击
 
 ## 常见坑
+- 字幕分句: 每句 {t0, t1} 都要是 0-1 的比例 (原片 t1 存成累计字数 → 永远命中第一句, 整场字幕不动)
+- 某句话出现的时刻: 用旁白里关键词的位置比例算 (`d * text.indexOf("一九一五") / text.length`), 别写死秒数 —— 改旁白后时长会变
 - playwright 报 chromium 版本不对: 脚本已自动找 `~/.cache/ms-playwright/chromium-*`, 不用装
 - 中文字体: 容器已有 Noto CJK / 文泉驿; 新字体别联网下
 - 帧数大: 85s×24fps≈2000 张 png ≈1GB, 成片后可删 frames/

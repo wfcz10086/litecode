@@ -16,7 +16,7 @@
         "context_window": 131072,
         "max_tokens": 8192,
         "enable_thinking": true,
-        "thinking_budget": 4096,
+        "thinking_budget": 16384,
         "supports_vision": true,
         "_note": "2026-10-13 新增: 同 qwen3.8-flash-next-local 模型, 新部署 max_model_len 131072, 思考/工具调用已开。"
     },
