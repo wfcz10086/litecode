@@ -5,9 +5,9 @@ v1.5 P28 / v1.9 P39 — Web E2E 测试 fixture
   pip install pytest-playwright
   playwright install chromium
 
-跑:
-  pytest tests/web -v          # 默认 headless（CI）
-  pytest tests/web -v --headed # 本地观察
+跑 (本目录用例全部自动标记 online, 默认被 tests/conftest.py 排除, 须显式开启):
+  pytest tests/web -v --run-online          # 默认 headless（CI）
+  pytest tests/web -v --run-online --headed # 本地观察
 """
 import os
 import socket
@@ -94,11 +94,14 @@ def _playwright_available() -> bool:
         return False
 
 
-PLAYWRIGHT_OK = _playwright_available()
+@pytest.fixture(scope="session")
+def _playwright_ok():
+    """惰性探测 (原为模块级, 导致仅收集 tests/ 就会拉起一次 chromium)"""
+    return _playwright_available()
 
 
 @pytest.fixture
-def playwright_required():
+def playwright_required(_playwright_ok):
     """需要 playwright + chromium 的测试用此 fixture，缺则 skip"""
-    if not PLAYWRIGHT_OK:
+    if not _playwright_ok:
         pytest.skip("playwright/chromium 未安装或无法启动 — 跳过 E2E 测试")

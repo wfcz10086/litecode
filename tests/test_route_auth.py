@@ -73,15 +73,36 @@ class TestRouteAuth(unittest.TestCase):
                 del sys.modules[m]
         try:
             import web_ui
-            # patch 鉴权全局变量为测试模式
-            web_ui.AUTH_ENABLED = True
-            web_ui.AUTH_PASSWORD = "testpwd123"
-            web_ui._valid_tokens = {}  # 清空 token 表
-            self.app = web_ui.app
-            self.client = TestClient(self.app)
-            self.web_ui = web_ui
         except Exception as e:
             self.skipTest(f"无法加载 web_ui 模块: {e}")
+        # 鉴权状态已在 S1-G 从 web_ui 搬到 plugins.auth.core (模块级单例),
+        # 原先 patch web_ui.AUTH_ENABLED / AUTH_PASSWORD 已无效 — 实际读的是本机 config.json
+        # 的密码, 结果随机器而变。这里直接 patch 真正的状态源, 并把 token 落盘文件
+        # 重定向到临时目录, 避免写本机 ~/.litecode/web_auth_tokens.json。
+        # 注意: 不能只 `from plugins.auth import core` 再 patch — 前序用例 (清 sys.modules /
+        # plugin registry 按文件路径重载) 可能让同一份 core.py 存在多个模块对象, web_ui 的
+        # require_auth 与 /api/login 端点可能分属不同副本。这里收集 web_ui 实际用到的所有
+        # 鉴权模块全局字典 (require_auth + 各路由 endpoint 的 __globals__), 逐个 patch。
+        from unittest import mock
+        auth_globals = {id(web_ui._require_auth.__globals__): web_ui._require_auth.__globals__}
+        for route in web_ui.app.routes:
+            g = getattr(getattr(route, "endpoint", None), "__globals__", None)
+            if g is not None and "_AUTH_PASSWORD" in g and "_valid_tokens" in g:
+                auth_globals[id(g)] = g
+        for g in auth_globals.values():
+            patcher = mock.patch.dict(g, {
+                "_AUTH_ENABLED": True,
+                "_AUTH_PASSWORD": "testpwd123",
+                "_valid_tokens": {},
+                "_login_fails": {},
+                "_login_lock_until": {},
+                "_TOKENS_FILE": self.tmp_dir / "web_auth_tokens.json",
+            })
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.app = web_ui.app
+        self.client = TestClient(self.app)
+        self.web_ui = web_ui
 
     def test_t1_health_no_auth_required(self):
         """T1: GET /api/health — 当前实现需要 auth (修正预期: 应 401)"""
@@ -140,6 +161,11 @@ class TestRouteAuth(unittest.TestCase):
         # logout
         r2 = self.client.post("/api/logout", cookies=cookies)
         self.assertEqual(r2.status_code, 200)
+        # 登出后旧 token 必须在服务端失效 (仅删浏览器 cookie 不够: 泄漏的 token 仍可用 7 天)
+        from fastapi.testclient import TestClient
+        r3 = TestClient(self.app, cookies=cookies).get("/api/sessions")
+        self.assertEqual(r3.status_code, 401,
+                         f"登出后旧 token 仍可访问保护路由: {r3.status_code}")
 
 
 if __name__ == "__main__":

@@ -222,19 +222,19 @@ print('stream signature OK')
 # 背景: M1-M5b 七轮里程碑验收跑的是 test_full.py --offline + 本脚本, **没跑 tests/ 下的
 # pytest 文件**, 导致 test_reasoning_stall_wording 因行号漂移全线失败七轮无人发现。
 # 本检查拿实跑结果跟 tests/pytest_known_failures.txt 比对, **只拦新增失败**
-# (那 40 条既有失败是 sys.path/缺辅助模块之类的基建问题, 不该阻塞日常开发)。
+# (2026-10-17 起基线已清零; 在线类用例由 tests/conftest.py 默认排除, 本检查不连任何服务)。
 run_check "13. tests/ pytest 无新增失败" bash -c "
 BASE='$ROOT/tests/pytest_known_failures.txt'
 [ -f \"\$BASE\" ] || { echo \"基线文件缺失: \$BASE\"; exit 1; }
 ACTUAL=\$(cd '$ROOT' && timeout 300 python3 -m pytest tests/ -q -p no:cacheprovider \
     --ignore=tests/web --ignore=tests/regression 2>/dev/null \
-    | grep '^FAILED' | sed 's/^FAILED //; s/ - .*//' | sort)
+    | grep -E '^(FAILED|ERROR) ' | sed -E 's/^(FAILED|ERROR) //; s/ - .*//' | sort)
 KNOWN=\$(grep -v '^#' \"\$BASE\" | grep -v '^\$' | sort)
 NEW=\$(comm -23 <(echo \"\$ACTUAL\") <(echo \"\$KNOWN\"))
 if [ -n \"\$NEW\" ]; then
     echo '新增失败 (不在基线内):'; echo \"\$NEW\" | sed 's/^/    /'; exit 1
 fi
-echo \"无新增失败 (基线 \$(echo \"\$KNOWN\" | wc -l) 条)\"
+echo \"无新增失败 (基线 \$(printf '%s' \"\$KNOWN\" | grep -c .) 条)\"
 exit 0
 "
 

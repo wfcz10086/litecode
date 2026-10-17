@@ -116,7 +116,8 @@
   }
 
   function _mkArtifactCard(a) {
-    const href = a.kind === 'url' ? a.url : ('/download?path=' + encodeURIComponent(a.path));
+    // 文件产物给的是绝对路径: 走 /api/media (白名单目录内, 图片/PDF 内联预览, 其余下载); 原 /download 无此路由
+    const href = a.kind === 'url' ? a.url : ('/api/media?path=' + encodeURIComponent(a.path));
     const card = document.createElement('a');
     card.href = href;
     card.target = '_blank';

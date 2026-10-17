@@ -6,7 +6,8 @@ TTL 24h. 前端可撤销 toast, 也可批量清理.
 
     { "sid": ..., "ts": ..., "expires": ts+86400,
       "kept": int,             # truncate 保留数
-      "dropped_msgs": [...],   # 被裁剪掉的消息 (完整对象)
+      "dropped_msgs": [...],   # 被裁剪掉的消息 (完整对象, web 缓存格式)
+      "dropped_server_msgs": [...],  # 同次截断从 server 会话截掉的原始消息 (server 格式, 恢复时原样写回)
       "reason": "truncate|edit|retry" }
 """
 from __future__ import annotations
@@ -47,6 +48,19 @@ def snapshot(sid: str, kept: int, dropped_msgs: list,
     tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2))
     tmp.replace(fp)
     return {"trash_id": fp.stem, "path": str(fp), "expires": rec["expires"]}
+
+
+def attach_server_msgs(trash_id: str, server_msgs: list) -> bool:
+    """截断两端时, 把 server 会话被截掉的原始消息补进同一条回收记录 (恢复时两端各按原格式写回)。"""
+    fp = _TRASH_DIR / f"{trash_id}.json"
+    if not server_msgs or not fp.exists():
+        return False
+    rec = json.loads(fp.read_text())
+    rec["dropped_server_msgs"] = server_msgs
+    tmp = fp.with_suffix(".tmp")
+    tmp.write_text(json.dumps(rec, ensure_ascii=False, indent=2))
+    tmp.replace(fp)
+    return True
 
 
 def _all_files() -> List[Path]:

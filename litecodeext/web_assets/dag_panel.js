@@ -1,12 +1,11 @@
 // ── DAG 编辑器 (P34-d 三端补全) ────────────────────────────
 let _dagEditor=null,_dagCurrent=null,_dagNodeOutputBuf={};
 async function loadDAGList(){
-  if(!_dagEditor){_dagEditor=dagEditorInit('dag-canvas');window._dag=_dagEditor;}
-  try{
-    const r=await fetch('/api/dags');const d=await r.json();
-    const sel=document.getElementById('dag-select');
-    sel.innerHTML='<option value="">— 选择 DAG —</option>'+(d.dags||[]).map(n=>`<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  }catch(e){toast('加载 DAG 列表失败');}
+  // 旧 #pnl-dag / #dag-select / #dag-canvas 与 dagEditorInit 已在 P0-6 删除, 原实现每次被调用都抛
+  // "dagEditorInit is not defined" (对话里建/改 DAG 触发 panel_refresh 时)。现改为: 新版全屏 DAG
+  // 界面开着且停在列表页时重绘列表, 其余情况无事可做。
+  const ov=document.getElementById('dag-ui');
+  if(ov&&ov.classList.contains('on')&&window.DAG&&window.DAG._state.screen==='list')window.DAG.showList();
 }
 async function loadDAG(name){
   if(!name)return;_dagCurrent=name;
@@ -655,13 +654,15 @@ async function aiGenDAG(){
   _showDAGCard('ai-gen', {}, async d=>{
     toast('🤖 生成中...');
     try{
-      const r=await fetch('/api/orchestration/generate',{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({description:d.desc})});
-      if(r.ok){
-        const j=await r.json();
-        if(_dagEditor && j.plan){_dagEditor.fromJSON(j.plan);toast('✓ 已生成');}
+      // 原调 /api/orchestration/generate (无此端点, 恒 404); 改走与新编辑器同一个生成端点
+      const r=await fetch('/api/dags/generate',{method:'POST',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({request:d.desc})});
+      const j=await r.json().catch(()=>({}));
+      if(r.ok && j.steps){
+        if(_dagEditor){_dagEditor.fromJSON(j.plan||j);}
+        toast(j.warning ? '✓ 已生成 (有校验提示, 保存前请检查)' : '✓ 已生成 '+j.steps.length+' 步');
       }else{
-        toast('AI 生成端点待实现 (HTTP '+r.status+')');
+        toast('AI 生成失败: '+(j.error||('HTTP '+r.status)));
       }
     }catch(e){toast('生成失败: '+e);}
   });

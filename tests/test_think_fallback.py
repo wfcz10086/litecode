@@ -134,18 +134,9 @@ def test_case5_multiple_think_blocks():
 
 import pytest
 
-@pytest.mark.xfail(
-    reason=(
-        "Current impl uses `<think>` substring match: '<thinking>' contains "
-        "'<think>' so the state machine triggers on it. This is a known limitation "
-        "accepted for now — fixing requires anchoring to word boundary or </thinking>."
-    ),
-    strict=False,
-)
+# 原为 xfail (子串匹配把 <thinking> 误判为 <think>); 实现已修好, 2026-10-17 转为正式回归保护
 def test_case6_thinking_tag_no_false_positive():
     """<thinking>yyy</thinking> should NOT be routed to reasoning channel."""
     reasoning, content = _replay(["<thinking>yyy</thinking>"])
-    # With the current substring match, <think> is found inside <thinking>,
-    # so this will incorrectly put 'ing>yyy</thinking>' (or similar) in reasoning.
     assert reasoning == "", f"false positive: reasoning={reasoning!r}"
     assert "yyy" in content

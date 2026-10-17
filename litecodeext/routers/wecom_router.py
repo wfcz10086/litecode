@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from routers.auth_router import require_auth
 
 router = APIRouter()
+ORDER = 80  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 try:
     from wecom_bridge import get_manager as _wc_manager  # type: ignore

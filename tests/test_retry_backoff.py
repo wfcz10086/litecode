@@ -2,7 +2,8 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path("/opt/litecode/litecodeext")))
+# 原写死 /opt/litecode/litecodeext, worktree / 其他机器下会测到别处的代码
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "litecodeext"))
 
 import asyncio
 import statistics

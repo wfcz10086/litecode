@@ -11,7 +11,10 @@ def test_history_and_stream_diff_render_accept_only_text():
     node = shutil.which('node')
     if not node:
         pytest.skip('需要 Node.js 执行前端回归测试')
-    source = (Path(__file__).resolve().parents[1] / 'web_assets/chat_core.js').read_text()
+    # 原 chat_core.js 已按职责拆成 chat_*.js (历史渲染在 chat_render.js, 流式在 chat_stream.js), 合并后再找
+    assets = Path(__file__).resolve().parents[1] / 'web_assets'
+    source = '\n'.join((assets / n).read_text() for n in (
+        'chat_render.js', 'chat_msg_actions.js', 'chat_stream.js', 'chat_upload.js', 'chat_panels.js'))
     lines = source.splitlines()
     history = next(line.strip() for line in lines if line.strip().startswith('diffs.forEach(dv=>'))
     stream = next(line.strip() for line in lines if line.strip().startswith('if(delta.diff_view)'))

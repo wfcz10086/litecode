@@ -13,7 +13,7 @@ import ast
 import unittest
 from pathlib import Path
 
-_SERVER = Path(__file__).resolve().parent.parent / "litecode_server.py"
+_SERVER = Path(__file__).resolve().parent.parent / "lib" / "agent" / "text_reply.py"  # 拆分大文件后的所在
 
 
 def _load_func(name: str):

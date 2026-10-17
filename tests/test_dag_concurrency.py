@@ -21,6 +21,10 @@ os.environ["LITECODE_TEST_OFFLINE"] = "1"
 
 class TestDAGConcurrency(unittest.TestCase):
 
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self._ws, ignore_errors=True)
+
     def setUp(self):
         for m in list(sys.modules.keys()):
             if m == "core" or m.startswith("core."):
@@ -31,6 +35,11 @@ class TestDAGConcurrency(unittest.TestCase):
         self.DAGOrchestrator = DAGOrchestrator
         self.DAGPlan = DAGPlan
         self.StepSpec = StepSpec
+        # checkpoint 按 plan_id (步骤内容哈希) 持久化, 默认落 /tmp/orchestrator —
+        # 同内容的计划第二次跑会 instant-restore 不再执行 fake_run, 计时断言必挂。
+        # 每个用例用独立临时 workspace, 不依赖本机历史状态。
+        import tempfile
+        self._ws = Path(tempfile.mkdtemp(prefix="dagconc_"))
 
     def test_t1_same_layer_parallel(self):
         """T1: 同层 3 个独立节点，每个 sleep 0.5s — 总耗时应 ~0.5s（并发）非 1.5s（串行）"""
@@ -46,7 +55,7 @@ class TestDAGConcurrency(unittest.TestCase):
             ],
             auto_critic=False,
         )
-        orch = self.DAGOrchestrator(run_subagent_fn=fake_run)
+        orch = self.DAGOrchestrator(run_subagent_fn=fake_run, workspace=self._ws)
 
         async def run_and_time():
             t0 = time.time()
@@ -77,7 +86,7 @@ class TestDAGConcurrency(unittest.TestCase):
             ],
             auto_critic=False,
         )
-        orch = self.DAGOrchestrator(run_subagent_fn=fake_run)
+        orch = self.DAGOrchestrator(run_subagent_fn=fake_run, workspace=self._ws)
 
         async def run_and_time():
             t0 = time.time()
@@ -96,6 +105,10 @@ class TestDAGConcurrency(unittest.TestCase):
         import tempfile
         import json
         tmp = Path(tempfile.mkdtemp(prefix="dagperf_"))
+        # 用 addCleanup 还原 env, 避免泄漏给后续用例
+        _old_ws = os.environ.get("OPENCLAW_WORKSPACE")
+        self.addCleanup(lambda: os.environ.pop("OPENCLAW_WORKSPACE", None)
+                        if _old_ws is None else os.environ.__setitem__("OPENCLAW_WORKSPACE", _old_ws))
         os.environ["OPENCLAW_WORKSPACE"] = str(tmp)
         # 重新加载 telemetry 模块以读新 workspace
         for m in list(sys.modules.keys()):
@@ -115,7 +128,7 @@ class TestDAGConcurrency(unittest.TestCase):
             ],
             auto_critic=False,
         )
-        orch = DAGOrchestrator(run_subagent_fn=fake_run)
+        orch = DAGOrchestrator(run_subagent_fn=fake_run, workspace=tmp)
         asyncio.run(orch.execute(plan, sse_emit=None))
 
         dag_jsonl = tmp / "telemetry" / "dag.jsonl"

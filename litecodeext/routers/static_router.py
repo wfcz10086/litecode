@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from routers.state import S
 
 router = APIRouter()
+ORDER = 999  # 注册顺序: 全部路由之后 (兜底静态资源)
 
 
 _ASSET_MIME = {

@@ -109,5 +109,47 @@ class TestChatRuns(unittest.TestCase):
         self.assertIsNone(run(main()))
 
 
+
+def done_then_tail_producer(tail=0.3):
+    """模拟 agent_stream: 先发 [DONE], 之后还要收尾 (落库) 一段时间才真正结束。"""
+    def factory():
+        async def gen():
+            yield "data: hi\n\n"
+            yield "data: [DONE]\n\n"
+            await asyncio.sleep(tail)
+        return gen()
+    return factory
+
+
+class TestFinishingWindow(unittest.TestCase):
+    """2026-10-16 深度长跑 S6: 客户端读到 [DONE] 立刻发下一条, 撞上收尾窗口被 409。"""
+
+    def test_done_marks_finishing_and_wait_returns_after_tail(self):
+        async def main():
+            reg = RunRegistry()
+            r = reg.start("s", done_then_tail_producer(0.3))
+            while not r.finishing:
+                await asyncio.sleep(0.01)
+            self.assertTrue(reg.running("s"))           # 收尾中仍算占用, 不能抢跑
+            finished = await r.wait_finished(timeout=2)
+            return finished, reg.running("s")
+        finished, running = run(main())
+        self.assertTrue(finished)
+        self.assertFalse(running)
+
+    def test_still_generating_is_not_finishing(self):
+        async def main():
+            reg = RunRegistry()
+            r = reg.start("s", slow_producer(20, gap=0.05))
+            await asyncio.sleep(0.1)
+            state = (r.finishing, await r.wait_finished(timeout=0.05))
+            await r.task
+            return state
+        finishing, finished = run(main())
+        self.assertFalse(finishing)                     # 还在生成: 不进入等待, 入口照旧 409
+        self.assertFalse(finished)                      # 超时返回 False, 不会无限等
+
+
+
 if __name__ == "__main__":
     unittest.main()

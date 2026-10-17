@@ -491,44 +491,10 @@ _init_state(
 )
 # aproxy 函数会在 web_ui.py 内定义后注入 (见下方 _aproxy 定义之后的 state.S.aproxy = _aproxy)
 
-# 拆出来的 router (每批拆完即 include, 老 endpoint 同步删):
-# phase 1: auth + health + model + config + timer
-# phase 2: memory + workspace + wechat + projects
-from routers.health_router    import router as _health_router
-from routers.model_router     import router as _model_router
-from routers.config_router    import router as _config_router
-from routers.timer_router     import router as _timer_router
-from routers.memory_router    import router as _memory_router
-from routers.workspace_router import router as _workspace_router
-from routers.wechat_router    import router as _wechat_router
-from routers.wecom_router     import router as _wecom_router
-from routers.projects_router  import router as _projects_router
-# phase 3: static + sessions + dag (chat 因 SSE 复杂保留在 web_ui.py)
-from routers.static_router    import router as _static_router
-from routers.sessions_router  import router as _sessions_router
-from routers.dag_router       import router as _dag_router
-# S1-N: 通用 artifact 仓库 (owner-scoped, 与老 /api/artifacts/{sid} 独立命名空间)
-from routers.artifacts_v2_router import router as _artifacts_v2_router
-# #44: Docker 管理 (ps/logs/stats/restart/stop/start/inspect)
-from routers.docker_router      import router as _docker_router
-from routers.chat_router        import router as _chat_router
-from routers.windows_nodes_router import router as _windows_nodes_router
-app.include_router(_health_router)
-app.include_router(_model_router)
-app.include_router(_config_router)
-app.include_router(_timer_router)
-app.include_router(_memory_router)
-app.include_router(_workspace_router)
-app.include_router(_wechat_router)
-app.include_router(_wecom_router)
-app.include_router(_projects_router)
-app.include_router(_sessions_router)
-app.include_router(_dag_router)
-app.include_router(_artifacts_v2_router)
-app.include_router(_docker_router)
-app.include_router(_chat_router)
-app.include_router(_windows_nodes_router)
-app.include_router(_static_router)
+# 其余 router 由 routers.discover() 自动发现并按各模块 ORDER 顺序 include (插拔: 加文件即生效)
+from routers import discover as _discover_routers
+for _router in _discover_routers():
+    app.include_router(_router)
 
 # 把 web_ui 里的 _aproxy 函数注入给 router 共享 (各 router 通过 S.aproxy 调上游 server)
 from routers.state import S as _shared_state

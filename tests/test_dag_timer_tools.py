@@ -8,12 +8,19 @@ from pathlib import Path
 from unittest.mock import MagicMock, AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "litecodeext"))
+# core/ 需扁平导入 (tool_dispatch 内 `from tools.bg import ...`), 与 litecode_server.py 启动时一致
+sys.path.insert(0, str(Path(__file__).parent.parent / "litecodeext" / "core"))
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    # 每次新建事件循环: get_event_loop() 在 3.12 下若前序测试已关闭默认 loop 会抛 RuntimeError
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
 
 
 def _make_dag_ws(tmp_path: Path, name: str, nodes=None, edges=None) -> Path:

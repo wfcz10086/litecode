@@ -22,6 +22,7 @@ from routers.auth_router import require_auth
 from routers.state import S
 
 router = APIRouter()
+ORDER = 60  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 
 _PREVIEW_IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg", ".bmp", ".ico"}

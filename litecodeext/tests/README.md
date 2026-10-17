@@ -6,7 +6,7 @@
 
 | 文件 | 用途 | 运行方式 |
 |------|------|---------|
-| `test_full.py` | 25 场景在线测试 + 38 离线单元测试 | `python3 tests/test_full.py [--offline \| --scenario N \| --tag T]` |
+| `test_full.py` | 25 场景在线测试 + 38 离线单元测试 (入口; 实现拆在 `_full_*.py` + `test_full_part_*.py`) | `python3 tests/test_full.py [--offline \| --scenario N \| --tag T]` |
 | `test_v123_fixes.py` | 模型切换 / 子代理工具注入等 API 级回归 | `python3 tests/test_v123_fixes.py http://host:18789 token` |
 | `swe_bench.py` | SWE-bench Verified 精简评测 runner | `python3 tests/swe_bench.py --smoke \| --limit N` |
 

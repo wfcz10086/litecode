@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from routers.auth_router import require_auth
 
 router = APIRouter()
+ORDER = 130  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 
 def _ops():

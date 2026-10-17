@@ -2,6 +2,8 @@
 import sys, json
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "litecodeext"))
+# core/ 需扁平导入 (orchestrator 内 `from blackboard import ...`); 原靠前序测试注入, 单跑会挂
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "litecodeext" / "core"))
 
 from core.orchestrator import _sse_step_status
 

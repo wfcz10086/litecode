@@ -24,10 +24,13 @@ class Run:
         self.started = time.time()
         self.ended: Optional[float] = None
         self.task: Optional[asyncio.Task] = None
+        self.finishing = False   # 已发出 [DONE], 只剩收尾 (server 落库 / web 侧保存)
         self._cond = asyncio.Condition()
 
     async def _push(self, frame: str):
         self.frames.append(frame)
+        if "[DONE]" in frame:
+            self.finishing = True
         async with self._cond:
             self._cond.notify_all()
 
@@ -36,6 +39,15 @@ class Run:
         self.ended = time.time()
         async with self._cond:
             self._cond.notify_all()
+
+    async def wait_finished(self, timeout: float) -> bool:
+        """等本轮彻底结束 (条件变量唤醒, 不轮询); 返回是否已结束。"""
+        async with self._cond:
+            try:
+                await asyncio.wait_for(self._cond.wait_for(lambda: self.done), timeout=timeout)
+            except asyncio.TimeoutError:
+                pass
+        return self.done
 
     def status(self) -> dict:
         result = {"running": not self.done, "frames": len(self.frames),

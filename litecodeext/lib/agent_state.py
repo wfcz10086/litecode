@@ -117,10 +117,8 @@ class BatchWriteState:
 
 @dataclass
 class MiscTurnState:
-    """[FIX]/[VALIDATE] 散项 -- 各自单字段、字段数不足以单独成域的 2 个跨阶段变量。
-    `system_injected` 写 4 读 0 (AGENT_STREAM_REFACTOR M3 已用 AST 核实), 原样迁移
-    不删, 判定依据见 docs/AGENT_STREAM_REFACTOR.md 迭代回执。"""
-    system_injected: bool = False      # [FIX] 系统注入标记（RUN-TEST/BLOCK-TEST后跳过enforce）
+    """[VALIDATE] 散项 -- 字段数不足以单独成域的跨阶段变量。
+    (原 system_injected 写 4 读 0 的死字段已于 2026-10-17 删除, 见 BACKLOG 死变量清理条目。)"""
     output_artifacts: list = field(default_factory=list)  # [VALIDATE] 已写的输出产物 (.docx/.pptx/.xlsx/.pdf/.csv/.html/.json)
 
 

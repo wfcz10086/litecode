@@ -1,0 +1,306 @@
+// chat_render.js — 会话列表 / 切换 / 重命名 + 历史消息渲染 (renderMsgs / addMsg) [原 chat_core.js 拆分 1/5]
+// ── 核心聊天引擎 ─────────────────────────────────────────────
+// 会话列表 / 消息渲染 / send+SSE 流处理 / 上传 / 项目 / 统计 / 记忆
+// [2026-08-25 P2-4] 从 app.js 抽出. 原 app.js 里这段挂在 "noVNC 桌面预览"
+// banner 之下, 但那个 banner 只覆盖了紧随其后的 renderVnc() 一个函数,
+// 剩余 1200+ 行其实是核心聊天逻辑 —— banner 标错了, 抽出时按内容重新命名.
+async function loadSess(){try{const r=await fetch('/api/sessions');sess=await r.json();renderSL();}catch{}}
+/* [v1.12 P68] 标星会话: localStorage 存 pinned id 列表 */
+function _pinnedSet(){try{return new Set(JSON.parse(localStorage.getItem('lc_pinned_sessions')||'[]'));}catch{return new Set();}}
+function _pinnedSave(set){localStorage.setItem('lc_pinned_sessions',JSON.stringify([...set]));}
+function pinSess(sid){const s=_pinnedSet();if(s.has(sid))s.delete(sid);else s.add(sid);_pinnedSave(s);renderSL();}
+function renderSL(){
+  const el=document.getElementById('sl');
+  if(!sess.length){el.innerHTML='<div style="padding:14px;font-size:12px;color:var(--tx3);text-align:center">暂无会话</div>';return;}
+  /* [v1.12 P66] 搜索过滤 */
+  const q=(document.getElementById('sess-search')?.value||'').trim().toLowerCase();
+  let arr=q ? sess.filter(s=>(s.name||'').toLowerCase().includes(q)||(s.id||'').toLowerCase().includes(q)) : sess.slice();
+  /* [v1.12 P67] 排序 */
+  const sortKey=document.getElementById('sess-sort')?.value||'recent';
+  if(sortKey==='name'){arr.sort((a,b)=>(a.name||'').localeCompare(b.name||''));}
+  else if(sortKey==='count'){arr.sort((a,b)=>(b.count||0)-(a.count||0));}
+  /* recent 用后端默认顺序 */
+  /* [v1.12 P68] pinned 上提 */
+  const pinned=_pinnedSet();
+  arr.sort((a,b)=>{const pa=pinned.has(a.id)?1:0,pb=pinned.has(b.id)?1:0;return pb-pa;});
+  if(!arr.length){el.innerHTML='<div style="padding:14px;font-size:12px;color:var(--tx3);text-align:center">无匹配</div>';return;}
+  // [D 2026-05-22] session item 加最近活跃时间, 双行布局更易扫
+  const _fmtAgo = ts => {
+    if (!ts) return '';
+    const s = Math.max(0, (Date.now()/1000) - ts);
+    if (s < 60) return '刚刚';
+    if (s < 3600) return Math.floor(s/60)+'分前';
+    if (s < 86400) return Math.floor(s/3600)+'h前';
+    if (s < 604800) return Math.floor(s/86400)+'d前';
+    return new Date(ts*1000).toISOString().slice(5,10);
+  };
+  el.innerHTML=arr.map(s=>{
+    const icon=s.id.startsWith('wx-')?'💬 ':s.id.startsWith('cli-')?'🖥️ ':s.name.startsWith('🔌')?'':'';
+    const isPinned=pinned.has(s.id);
+    const star=isPinned?'★':'☆';
+    const ago=_fmtAgo(s.last_used||s.created);
+    return`<div class="si${s.id===cur?' act':''}" data-sid="${esc(s.id)}" onclick="swS('${s.id}')"><div style="flex:1;min-width:0"><div class="sn">${isPinned?'<span style="color:var(--ac);margin-right:2px">★</span>':''}${icon}${esc(s.name)}</div><div class="sm">${s.count}条 · ${ago}</div></div><button class="sdl" onclick="event.stopPropagation();pinSess('${s.id}')" title="标星" style="margin-right:2px;color:${isPinned?'var(--ac)':'var(--tx3)'}">${star}</button><button class="sdl" onclick="event.stopPropagation();delS('${s.id}')">✕</button></div>`;
+  }).join('');
+  if (window.LCProjects) try { LCProjects.decorate(el); } catch (e) {}
+  // 滚动到当前 active item
+  const act = el.querySelector('.si.act');
+  if (act && act.scrollIntoView) try { act.scrollIntoView({block:'nearest',behavior:'instant'}); } catch(e){}
+}
+/* [D 2026-05-22] 切 session 立即清屏 + loading state, 不再等 fetch 完才反应 */
+async function swS(sid){
+  if(sid===cur)return;
+  /* [chat-runs] 进行中切走: 只断本页订阅, 后台轮次照跑, 切回来自动接上 */
+  if(streaming){_streamGen++;try{_curReader&&_curReader.cancel();}catch(e){}_resetStreamUi();}
+  cur=sid;closeSB();
+  try{localStorage.setItem('lc.cur',sid);}catch(e){}
+  const s=sess.find(x=>x.id===sid);
+  document.getElementById('ct').textContent=s?.name||sid;
+  document.getElementById('exp-btn').style.display='inline-flex';
+  renderSL();
+  // 立即清屏 + loading
+  const msgsEl=document.getElementById('msgs');
+  if(msgsEl){
+    msgsEl.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--tx3);font-size:12px"><div class="dots" style="justify-content:center;margin-bottom:8px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>加载会话中…</div>';
+  }
+  try{
+    const r=await fetch(`/api/sessions/${sid}`);
+    const d=await r.json();
+    if(cur!==sid)return;  // 切换期间又点了别的会话, 丢弃旧 fetch
+    renderMsgs(d.messages||[]);
+    sbot(true);
+    if(window.LCAttach)LCAttach.resumeIfRunning(sid,d.messages||[]);
+  }catch(e){
+    if(msgsEl)msgsEl.innerHTML=`<div style="padding:20px;color:var(--dg);font-size:12px">加载失败: ${esc(String(e))}</div>`;
+  }
+}
+/* [v1.12 P64] 双击 #ct 重命名: 替换为 input, Enter 保存, Esc 取消 */
+function renameCurSession(){
+  if(!cur||streaming)return;
+  const ct=document.getElementById('ct');
+  if(!ct||ct.querySelector('input'))return;
+  const oldName=ct.textContent;
+  ct.innerHTML=`<input id="ct-rename-input" value="${esc(oldName)}" style="font-size:14px;padding:2px 6px;border:1px solid var(--ac);background:var(--bg2);color:var(--tx);border-radius:3px;font-family:inherit">`;
+  const inp=document.getElementById('ct-rename-input');
+  inp.focus();inp.select();
+  const cancel=()=>{ct.textContent=oldName;};
+  const save=async()=>{
+    const newName=inp.value.trim();
+    if(!newName||newName===oldName){cancel();return;}
+    try{
+      await fetch(`/api/sessions/${cur}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:newName})});
+      ct.textContent=newName;
+      const s=sess.find(x=>x.id===cur);if(s)s.name=newName;
+      renderSL();toast('✓ 已重命名');
+    }catch(e){cancel();toast('❌ 重命名失败');}
+  };
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter'){save();}else if(e.key==='Escape'){cancel();}});
+  inp.addEventListener('blur',save);
+}
+async function newChat(){if(streaming)return;const r=await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})});const d=await r.json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0});renderSL();document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">New Chat</div></div>';document.getElementById('ct').textContent='New Chat';closeSB()}
+async function delS(sid){if(!await confirmCard('删除会话','确定要删除此会话? 消息和上下文将永久移除','删除'))return;await fetch(`/api/sessions/${sid}`,{method:'DELETE'});sess=sess.filter(s=>s.id!==sid);renderSL();if(cur===sid){cur=null;document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div></div>';}}
+/* [v12.9] 渲染前合并连续 assistant 消息 —— 多轮 iteration 持久化成多条 assistant 时,
+   刷新后显示为多个独立 "AI" 气泡, spawn_agent/工具调用被拆散。合并后同一轮成一个气泡。*/
+function _mergeConsecutiveAssistants(msgs){
+  const out=[];
+  for(const m of (msgs||[])){
+    const last=out[out.length-1];
+    if(m.role==='assistant' && last && last.role==='assistant' && (last.source||'')===(m.source||'')){
+      const joiner=(last.content && m.content)?'\n\n':'';
+      last.content=(last.content||'')+joiner+(m.content||'');
+      last.tools=[...(last.tools||[]),...(m.tools||[])];
+      last.diffs=[...(last.diffs||[]),...(m.diffs||[])];last.desktop_steps=[...(last.desktop_steps||[]),...(m.desktop_steps||[])];
+      last._tool_results=[...(last._tool_results||[]),...(m._tool_results||[])];
+      const lr=last.reasoning||'', mr=m.reasoning||'';
+      last.reasoning=lr+(lr&&mr?'\n\n':'')+mr;
+      if(m.usage) last.usage=m.usage;  /* 用最后一条 usage (含总 tokens) */
+      last.ts=m.ts||last.ts;
+    }else{
+      out.push({...m, tools:[...(m.tools||[])], diffs:[...(m.diffs||[])], _tool_results:[...(m._tool_results||[])]});
+    }
+  }
+  return out;
+}
+function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}const merged=_mergeConsecutiveAssistants(msgs);merged.forEach(m=>addMsg(m.role,m.content,m.tools||[],false,m.diffs||[],m.usage,m.source||'',m.wx_user||'',m.reasoning||'',m._tool_results||[],m.desktop_steps||[]));sbot()}
+function rdiff(df){if(typeof df!=='string')return '';return df.split('\n').map(l=>{const cl=l.startsWith('+')&&!l.startsWith('+++')?'da':l.startsWith('-')&&!l.startsWith('---')?'dd_':l.startsWith('@@')?'dm':'';return`<span class="${cl}">${esc(l)}</span>`;}).join('\n')}
+/* ── 微信附件解析：从消息文本中提取图片/文件路径 ── */
+const _IMG_EXTS=new Set(['jpg','jpeg','png','gif','webp','bmp','svg']);
+const _PDF_EXT='pdf';
+function _parseWxAttachments(text){
+  const items=[];
+  // 匹配新格式: 路径: /absolute/path/to/xxx.ext
+  const pathRe=/路径:\s*(\S+)/gi;
+  let m;
+  while((m=pathRe.exec(text))!==null){
+    const p=m[1];const ext=(p.split('.').pop()||'').toLowerCase();
+    if(_IMG_EXTS.has(ext))items.push({type:'image',path:p});
+    else if(['mp4','avi','mov','mkv','webm','flv'].includes(ext))items.push({type:'video',path:p});
+    else items.push({type:'file',path:p,ext});
+  }
+  return items;
+}
+function _buildAttachNode(att){
+  const p=att.path;const fname=p.split('/').pop()||p;
+  const apiUrl=`/api/media?path=${encodeURIComponent(p)}`;
+  if(att.type==='image'){
+    const img=document.createElement('img');img.className='wx-img';img.src=apiUrl;img.alt=fname;
+    img.onclick=()=>{const m=document.getElementById('imgModal');document.getElementById('imgModalImg').src=apiUrl;m.classList.add('show');};
+    img.onerror=()=>{img.style.display='none';};
+    return img;
+  }
+  if(att.type==='video'){
+    const v=document.createElement('video');v.controls=true;v.style.cssText='max-width:280px;max-height:200px;border-radius:var(--rs);border:1px solid var(--bd2)';
+    const s=document.createElement('source');s.src=apiUrl;v.appendChild(s);return v;
+  }
+  // 文件（含PDF）
+  const ext=att.ext||'';
+  const icon=ext==='pdf'?'📕':['doc','docx'].includes(ext)?'📝':['xls','xlsx'].includes(ext)?'📊':['zip','tar','gz'].includes(ext)?'📦':'📄';
+  const a=document.createElement('a');a.className='wx-file';a.href=apiUrl;a.download=fname;a.target='_blank';
+  if(ext==='pdf')a.onclick=e=>{e.preventDefault();window.open(apiUrl,'_blank');};
+  a.innerHTML=`<span class="wx-file-icon">${icon}</span><div class="wx-file-info"><div class="wx-file-name">${esc(fname)}</div><div class="wx-file-size">${esc(ext.toUpperCase()||'FILE')}</div></div><span class="wx-file-dl">↓</span>`;
+  return a;
+}
+function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[],desktopSteps=[]){
+  tools=(tools||[]).filter(t=>t!=='推理中…'); /* 老会话里落库的等首包占位, 不是工具调用 */
+  document.getElementById('empty')?.remove();const el=document.getElementById('msgs');
+  const wrap=document.createElement('div');wrap.className=`msg ${role==='user'?'user':'ai'}`;
+  const rl=document.createElement('div');rl.className='mr';
+  const isWx=source==='wechat';
+  if(role==='user'){rl.textContent=isWx?(wx_user||'微信用户'):'你';}else{rl.textContent=isWx?'AI (微信)':'AI';}
+  if(isWx){const tag=document.createElement('span');tag.style.cssText='font-size:9px;color:var(--ac3);margin-left:4px';tag.textContent='💬';rl.appendChild(tag);}
+  wrap.appendChild(rl);
+  const bubble=document.createElement('div');bubble.className='mb';
+  if(role==='user'){
+    if(isWx){
+      // 微信用户消息：先提取并渲染附件，再显示纯文本
+      const atts=_parseWxAttachments(content||'');
+      // 清理掉路径行，只保留实际文字
+      /* [v1.4] 清理附件占位文本 — 纳入多模态新占位符 + 复杂压缩包概览新块 */
+      let cleanText=(typeof content==='string'?content:'')
+        .replace(/\[之前缓冲的附件[^\]]*\]\n?/g,'')
+        .replace(/路径:\s*\S+\n?/g,'')
+        .replace(/文件名:\s*[^\n]+\n?/g,'')
+        .replace(/\[图片已作为多模态输入嵌入本消息[^\]]*\][^\[]*(?=\n\n|$)/gs,'')
+        .replace(/请直接描述图片你看到的内容[^\n]*\n?/g,'')
+        .replace(/那些工具读的是二进制文件[^\n]*\n?/g,'')
+        .replace(/\[压缩包概览\][^\[]*/g,'')
+        .replace(/\[类型分布\][^\n]*\n?/g,'')
+        .replace(/\[文件清单[^\]]*\][^\[]*/g,'')
+        .replace(/\[顶层文件预览\][^\[]*/g,'')
+        .replace(/\[(?:图片内容识别|PDF内容预览|Word文档内容预览|Excel表格预览|CSV数据预览|PPT内容预览|文件内容预览|音频信息|视频信息|压缩包内容列表|图片|未知类型[^\]]*|预处理失败)[:\]：][^\[]*(?=\[|$)/gs,'')
+        .replace(/---\n?/g,'')
+        .replace(/(?:图片|文件|视频)路径:\s*\S+\n?/g,'')
+        .replace(/\[收到图片\]\n?/g,'')
+        .replace(/\[收到文件:[^\]]*\]\n?/g,'')
+        .replace(/\[收到视频\]\n?/g,'')
+        .trim();
+      if(cleanText)bubble.textContent=cleanText;
+      if(atts.length){const ac=document.createElement('div');ac.className='wx-attach';atts.forEach(a=>ac.appendChild(_buildAttachNode(a)));bubble.appendChild(ac);}
+    }else{
+      /* [multi-upload] 扫描 [file: /path/xxx] — 图片作 <img> 内嵌, 其他做附件卡片。
+         content 可能是字符串, 也可能是多模态 array (历史回放时 LLM 接收格式) —
+         array 模式下提取 text 部分再扫描, image_url 块作为 _preview 占位图标入 refs */
+      let raw='';
+      if(Array.isArray(content)){
+        content.forEach(p=>{
+          if(typeof p==='string')raw+=p;
+          else if(p&&p.type==='text')raw+=(p.text||'');
+          else if(p&&p.type==='image_url'&&p.image_url&&p.image_url.url){
+            /* array 里有 image_url data-url → 直接作 img src 渲染, 不走 refs 流程 */
+          }
+        });
+      }else if(typeof content==='string'){raw=content;}
+      else if(content){raw=String(content);}
+      const refs=[];const txtOnly=raw.replace(/\[file:\s*([^\]]+?)\]/gi,(_m,p)=>{refs.push(p.trim());return '';}).trim();
+      if(txtOnly)bubble.textContent=txtOnly;
+      if(refs.length){
+        const ac=document.createElement('div');ac.className='mfa';
+        refs.forEach(p=>{
+          const name=p.split('/').pop()||p;
+          const rel=p.replace(/^.*?\/tmp\/openclaw_workspace\//,'');
+          const src=`/api/workspace/preview?path=${encodeURIComponent(rel)}`;
+          if(_IMG_EXT.test(name)){
+            const img=document.createElement('img');img.src=src;img.alt=name;img.onclick=()=>_openImg(src);ac.appendChild(img);
+          }else{
+            const a=document.createElement('a');a.className='mfc';a.href=`/api/workspace/download?path=${encodeURIComponent(rel)}`;a.target='_blank';
+            a.innerHTML=`<span class="mft">${_fileBadge(name)}</span><span class="mfn" title="${esc(name)}">${esc(name)}</span>`;
+            ac.appendChild(a);
+          }
+        });
+        bubble.appendChild(ac);
+      }
+    }
+  }else{
+    /* [v12.7-fix] 历史消息恢复时, 把持久化的 reasoning 也渲染成折叠块 (默认折叠) */
+    if(reasoning){
+      const rsEl=document.createElement('div');rsEl.className='rsb';
+      const rsid='r'+Date.now()+Math.random().toString(36).slice(2,4);
+      rsEl.innerHTML=`<div class="rsh" onclick="this.parentElement.classList.toggle('open')"><span class="arr">&#x25BA;</span><span>💭 推理过程</span><span class="rsi">${reasoning.length} 字符</span></div><div class="rsc" id="${rsid}"></div>`;
+      bubble.appendChild(rsEl);
+      rsEl.querySelector('#'+rsid).textContent=reasoning;
+    }
+    if(tools.length){const tg=document.createElement('div');tg.className='tg';tools.forEach((t,_i)=>{const ti=document.createElement('div');ti.className='ti';const c=t.indexOf(': ');if(c>0){const argsStr=t.slice(c+2);if(argsStr.length>TOOL_ARGS_PREVIEW){const aid='ta'+Date.now()+Math.random().toString(36).slice(2,4);ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="targs" id="${aid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="ta tap">${esc(argsStr.slice(0,TOOL_ARGS_PREVIEW))}…</span><span class="tac">${esc(argsStr)}</span></span>`;}else{ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="ta">${esc(argsStr)}</span>`;}}else ti.textContent=t.slice(0,TOOL_ARGS_PREVIEW);tg.appendChild(ti);if(toolResults&&toolResults[_i]&&toolResults[_i].result){const res=toolResults[_i].result;const tr=document.createElement('div');tr.className='tr_';if(res.length>TOOL_RESULT_PREVIEW){const rid='tr'+Date.now()+Math.random().toString(36).slice(2,4);tr.innerHTML=`<span class="trc" id="${rid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="trp">↳ ${esc(res.slice(0,TOOL_RESULT_PREVIEW))}…</span><span class="trf">↳ ${esc(res)}</span></span>`;}else{tr.textContent='↳ '+res;}tg.appendChild(tr);}});
+      /* [#16 3段折叠] 工具调用 ≥3 条时收进折叠块; 1-2 条直接展开 (少量场景直看更快) */
+      if(tools.length>=3){
+        const tgb=document.createElement('div');tgb.className='tgb';
+        const toolNames=Array.from(new Set(tools.map(t=>{const c=t.indexOf(': ');return c>0?t.slice(0,c):t;}))).slice(0,3);
+        tgb.innerHTML=`<div class="tgh" onclick="this.parentElement.classList.toggle('open')"><span class="arr">&#x25BA;</span><span>🔧 工具调用 <b>${tools.length}</b></span><span class="tgi">${toolNames.join(' · ')}${toolNames.length<tools.length?'…':''}</span></div>`;
+        const tgc=document.createElement('div');tgc.className='tgc';tgc.appendChild(tg);tgb.appendChild(tgc);
+        bubble.appendChild(tgb);
+      }else{bubble.appendChild(tg);}
+    }
+    desktopSteps.forEach(step=>window.LCDesktopSteps?.render(bubble,step));
+    diffs.forEach(dv=>{const df=dv?.diff;if(typeof df!=='string'||!df)return;const fname=(typeof dv.filepath==='string'?dv.filepath:'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Math.random().toString(36).slice(2,7);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bubble.appendChild(dEl);});
+    if(content){
+      /* [v1.4] 防御: 多模态 content 可能是 array, 提取 text 部分再 marked */
+      let textContent = content;
+      if(Array.isArray(content)){
+        textContent = content.map(p=>{
+          if(typeof p==='string')return p;
+          if(p&&p.type==='text')return p.text||'';
+          if(p&&p.type==='image_url')return '[图片]';
+          return '';
+        }).filter(Boolean).join('\n');
+      } else if(typeof content !== 'string'){
+        textContent = String(content);
+      }
+      function _renderMd(container,txt){try{container.innerHTML=marked.parse(txt||'');}catch(e){container.textContent=txt;}container.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{try{hljs.highlightElement(c);}catch(e){}});});_scanAndPreview(container,txt);}
+      if(textContent.length>LONG_MSG_THRESHOLD){
+        const lmid='lm'+Date.now()+Math.random().toString(36).slice(2,4);
+        const lmEl=document.createElement('div');lmEl.className='lmb';
+        lmEl.innerHTML=`<div class="lmh"><span class="arr">&#x25BA;</span><span>📜 长文消息 ${textContent.length} 字符</span></div><div class="lmc" id="${lmid}"></div>`;
+        const lmh=lmEl.querySelector('.lmh');const lmc=lmEl.querySelector('.lmc');
+        lmh.onclick=()=>{lmEl.classList.toggle('open');if(lmEl.classList.contains('open')&&!lmc._rendered){lmc._rendered=true;_renderMd(lmc,textContent);}};
+        bubble.appendChild(lmEl);
+      }else{
+        const md=document.createElement('div');md.className='mb';
+        _renderMd(md,textContent);
+        bubble.appendChild(md);
+      }
+    }
+    if(usage){const ub=document.createElement('div');ub.className='ub';const f=n=>(n||0).toLocaleString();ub.innerHTML=`<span>P:<b>${f(usage.prompt_tokens)}</b></span><span>C:<b>${f(usage.completion_tokens)}</b></span><span>T:<b>${f(usage.total_tokens)}</b></span>${usage.iterations>1?`<span>${usage.iterations}轮</span>`:''}${usage.elapsed_seconds?`<span>${usage.elapsed_seconds}s</span>`:''}`;bubble.appendChild(ub);}
+    /* 流式路径在 send() 末尾会 _scanAndPreview(bodyEl, bodyEl.textContent) — tool 结果里的图片路径在那时被扫到并渲染预览卡。
+       但 renderMsgs → addMsg 重放历史时只走 _renderMd 扫 content 文本, tool result 里的路径不会被扫 → 刷新后图没了。
+       这里补一次, 仅扫 toolResults, 不重复扫 content 已扫过的部分。 */
+    if(toolResults && toolResults.length && window._scanAndPreview){
+      const trText = toolResults.map(t => t && t.result ? String(t.result) : '').join('\n');
+      if(trText){ try{ _scanAndPreview(bubble, trText); }catch(e){} }
+    }
+  }
+  /* [P54+] 消息底部工具栏 — user: 编辑 / ai: 复制+朗读+重试 */
+  if(!isWx){
+    const mac=document.createElement('div');mac.className='mac';
+    if(role==='user'){
+      mac.innerHTML=`<button class="mab" title="编辑（会抹除该消息之后的整段消息串）" onclick="msgEditUser(this)">✏️ 编辑</button>`;
+    }else{
+      /* [V9 2026-07-25] 中断的 assistant 消息 → 额外显示 ▶ 继续 按钮 */
+      const rawStr = (typeof content === 'string' ? content : '');
+      const wasInterrupted = /\[任务已被用户中断\]\s*$/.test(rawStr);
+      mac.innerHTML=`<button class="mab" title="复制全部" onclick="msgCopy(this)">📋 复制</button>`
+                  + `<button class="mab tts" title="朗读 / 停止" onclick="msgTTS(this)">🔊 朗读</button>`
+                  + (wasInterrupted?`<button class="mab resume-btn" title="从中断处继续" onclick="msgResume(this)">▶ 继续</button>`:'')
+                  + `<button class="mab danger" title="重试（会抹除该消息及之后的所有消息）" onclick="msgRetry(this)">🔄 重试</button>`;
+    }
+    bubble.appendChild(mac);
+  }
+  wrap.appendChild(bubble);el.appendChild(wrap);if(scroll)sbot();return{wrap,bubble};
+}

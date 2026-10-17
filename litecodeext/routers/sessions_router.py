@@ -21,6 +21,7 @@ from lib import share as _share
 from lib import trash as _trash
 
 router = APIRouter()
+ORDER = 100  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 
 def _wui():
@@ -102,6 +103,41 @@ async def api_rename(sid: str, request: Request):
     return {"ok": True, "name": d["name"]}
 
 
+def _server_cut_index(srv_msgs: list, keep: int, is_sys_inject=None) -> int:
+    """web 缓存保留前 keep 条时, server 会话应截断的下标。
+
+    计数规则与 web_ui._convert_server_session 一致 (web 一条 ↔ server 一条):
+    user 有内容且非系统注入 ([SYSTEM...] 伪 user) 才算; assistant 有正文或 tool_calls 才算;
+    tool 并入前一条 assistant 不单算; system 不算。截断点是第 keep+1 条"计数消息"的位置,
+    所以最后一条保留的 assistant 之后的 tool 结果跟着保留。
+    旧实现把 tool 也计数, 截断点前移: 留下没有结果的 tool_call, 或误删上一轮的最终回答。"""
+    def counted(m):
+        role, content = m.get("role"), m.get("content") or ""
+        if role == "user":
+            text = content
+            if isinstance(content, list):
+                text = next((p.get("text", "") for p in content
+                             if isinstance(p, dict) and p.get("type") == "text"), "")
+            return bool(content) and not (is_sys_inject and is_sys_inject(text))
+        if role == "assistant":
+            return bool(content or m.get("tool_calls"))
+        return False
+    n = 0
+    for i, m in enumerate(srv_msgs):
+        if counted(m):
+            if n >= keep:
+                return i
+            n += 1
+    return len(srv_msgs)
+
+
+def _server_session_file(wui, sid: str):
+    """agent 侧 (litecode_server) 的会话历史文件; 截断与回收站恢复共用。"""
+    from pathlib import Path
+    _paths = wui.CFG.get("paths", {})
+    return Path(_paths.get("sessions_dir", "/tmp/litecode_workspace/sessions")) / f"{sid}.json"
+
+
 @router.post("/api/sessions/{sid}/truncate")
 async def api_truncate(sid: str, request: Request):
     """截断 session: 保留前 keep 条消息, 删除其后所有.
@@ -135,29 +171,21 @@ async def api_truncate(sid: str, request: Request):
     # ── server-side session 同步 truncate ──
     server_dropped = 0
     try:
-        _paths = wui.CFG.get("paths", {})
-        _sessions_dir = Path(_paths.get("sessions_dir", "/tmp/litecode_workspace/sessions"))
-        _srv_file = _sessions_dir / f"{sid}.json"
+        _srv_file = _server_session_file(wui, sid)
         if _srv_file.exists():
             srv_d = json.loads(_srv_file.read_text())
             srv_msgs = srv_d.get("msgs", [])
-            # server 端 msgs 通常含 system; 找到 keep 等价位置:
-            # web cache messages 不含 system, server msgs[0] 通常是 system.
-            # 简化策略: truncate 到 web keep 等价 user/assistant 计数
-            _kept_non_sys = 0
-            _cut_idx = len(srv_msgs)
-            for _i, _m in enumerate(srv_msgs):
-                if _m.get("role") in ("user", "assistant", "tool"):
-                    if _kept_non_sys >= keep:
-                        _cut_idx = _i
-                        break
-                    _kept_non_sys += 1
+            # web 第 keep 条对应 server 的位置: 按 web 转换规则计数 (见 _server_cut_index)
+            _cut_idx = _server_cut_index(srv_msgs, keep, getattr(wui, "_is_sys_inject_text", None))
             server_dropped = len(srv_msgs) - _cut_idx
+            _srv_dropped_msgs = srv_msgs[_cut_idx:]
             srv_d["msgs"] = srv_msgs[:_cut_idx]
             # atomic write
             _tmp = _srv_file.with_suffix(".tmp")
             _tmp.write_text(json.dumps(srv_d, ensure_ascii=False, indent=2))
             _tmp.replace(_srv_file)
+            if _trash_meta and _srv_dropped_msgs:   # 恢复时 server 侧也能原样写回
+                _trash.attach_server_msgs(_trash_meta["trash_id"], _srv_dropped_msgs)
     except Exception as _e:
         import logging; logging.getLogger("openclaw").warning(f"  [truncate] server-side fail: {_e}")
     audit_log(request, "session.truncate", sid,
@@ -546,6 +574,21 @@ async def api_share_view(token: str, request: Request):
     }
 
 
+_SHARE_PAGE = Path(__file__).resolve().parents[1] / "web_assets" / "share.html"
+# 公开页只允许自带的内联脚本/样式与同源 API, 禁止被嵌入
+_SHARE_CSP = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+              "connect-src 'self'; img-src 'self' data:; base-uri 'none'; frame-ancestors 'none'")
+
+
+@router.get("/share/{token}")
+async def share_page(token: str):
+    """分享链接的人读页面 (免登录): 页面自己去取已脱敏的 /api/share/{token} 渲染; JSON 接口保留给 API/CLI。"""
+    from fastapi.responses import FileResponse
+    return FileResponse(_SHARE_PAGE, media_type="text/html; charset=utf-8",
+                        headers={"Cache-Control": "no-store", "Content-Security-Policy": _SHARE_CSP,
+                                 "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer"})
+
+
 # ── [P0-#17] trash / 回收站 ───────────────────────────────────────
 @router.get("/api/trash")
 async def api_trash_list(request: Request, sid: str = ""):
@@ -576,12 +619,25 @@ async def api_trash_restore(trash_id: str, request: Request):
     dropped = rec.get("dropped_msgs") or []
     if not dropped:
         return {"ok": True, "restored": 0, "note": "empty trash"}
+    # 先写回 server 会话 (agent 读的历史), 再写 web 缓存: web 文件更新, load_session 不会再用
+    # server 版整份重导盖掉恢复结果 (原先只写 web 缓存, 刷新后像没恢复, 模型侧也读不到)。
+    server_restored = 0
+    srv_dropped = rec.get("dropped_server_msgs") or []
+    srv_file = _server_session_file(wui, sid)
+    if srv_dropped and srv_file.exists():
+        srv_d = json.loads(srv_file.read_text())
+        srv_d["msgs"] = srv_d.get("msgs", []) + srv_dropped
+        tmp = srv_file.with_suffix(".tmp")
+        tmp.write_text(json.dumps(srv_d, ensure_ascii=False, indent=2))
+        tmp.replace(srv_file)
+        server_restored = len(srv_dropped)
     d.setdefault("messages", [])
     d["messages"].extend(dropped)
     d["last_used"] = time.time()
     wui.save_session(d)
-    audit_log(request, "trash.restore", sid, trash_id=trash_id, restored=len(dropped))
-    return {"ok": True, "restored": len(dropped), "sid": sid}
+    audit_log(request, "trash.restore", sid, trash_id=trash_id, restored=len(dropped),
+              server_restored=server_restored)
+    return {"ok": True, "restored": len(dropped), "server_restored": server_restored, "sid": sid}
 
 
 @router.delete("/api/trash/{trash_id}")

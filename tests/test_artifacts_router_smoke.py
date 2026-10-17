@@ -16,9 +16,28 @@ from plugins.artifacts.store import get_store, reset_store_for_test  # noqa: E40
 
 
 # 关闭鉴权 (require_auth 缺 header 会 401; 测试用一个绕过 override)
-import routers.auth_router as _auth  # noqa: E402
-_orig_require = _auth.require_auth
-_auth.require_auth = lambda req: None   # 全绿
+# 只替换 artifacts_v2_router 模块内实际调用的名字, 并在本模块用例结束后还原。
+# 原写法是在 import 期把 routers.auth_router.require_auth 全局替换成 no-op 且 pytest 下
+# 永不还原 → 之后才 import 的 web_ui / sessions_router 等全部绑到 no-op, 鉴权被静默关闭,
+# test_route_auth 的 401 断言随执行顺序失败。
+import pytest  # noqa: E402
+import routers.artifacts_v2_router as _art_router  # noqa: E402
+_orig_require = _art_router.require_auth
+
+
+def _disable_auth():
+    _art_router.require_auth = lambda req: None   # 全绿
+
+
+def _restore_auth():
+    _art_router.require_auth = _orig_require
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _no_auth_for_this_module():
+    _disable_auth()
+    yield
+    _restore_auth()
 
 reset_store_for_test()
 app = FastAPI()
@@ -100,6 +119,7 @@ def test_delete_and_purge():
 
 
 if __name__ == "__main__":
+    _disable_auth()
     try:
         test_list_all()
         test_filter_owner_and_prefix()
@@ -109,6 +129,6 @@ if __name__ == "__main__":
         test_delete_and_purge()
         print("\n[PASS] S1-N phase 2 artifacts router smoke")
     finally:
-        _auth.require_auth = _orig_require
+        _restore_auth()
         import shutil
         shutil.rmtree(_TMP, ignore_errors=True)

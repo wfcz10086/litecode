@@ -206,6 +206,9 @@ def _drive(monkeypatch, turns, session_id=None, user_message="test"):
     import litecode_server as srv
     fake = _FakeVLLM(turns)
     monkeypatch.setattr(srv, "_vllm_stream", fake)
+    # 流解析段已拆到 lib/agent/llm_call.py, 在实际查找名字的模块上同样打桩
+    import lib.agent.llm_call as _llm_call
+    monkeypatch.setattr(_llm_call, "_vllm_stream", fake)
 
     async def _run():
         chunks = []
@@ -232,6 +235,9 @@ def _drive_with_tool_result_override(monkeypatch, turns, tool_name, canned_resul
         return await real_execute_tool(name, args, sid=sid)
 
     monkeypatch.setattr(srv, "execute_tool", _fake_execute_tool)
+    # 工具执行段已拆到 lib/agent/tool_exec.py, 在实际查找名字的模块上同样打桩
+    import lib.agent.tool_exec as _tool_exec
+    monkeypatch.setattr(_tool_exec, "execute_tool", _fake_execute_tool)
     return _drive(monkeypatch, turns, session_id=session_id, user_message=user_message)
 
 

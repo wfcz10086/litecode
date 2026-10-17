@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from routers.auth_router import require_auth
 
 router = APIRouter()
+ORDER = 40  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 
 # Timer Manager 延迟 import — 避免 timer_manager 模块缺失时 web_ui 起不来

@@ -28,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "litecodeext"))
 from wechat_bridge import _filter_system_leak
 
 _FILE = Path(__file__).parent.parent / "litecodeext" / "litecode_server.py"
-_TREE = ast.parse(_FILE.read_text())
+# 主循环源码已拆到 lib/agent/ 下多个模块: 合并成一棵树扫描, "全文件"语义不变
+_AGENT_FILES = [_FILE] + sorted((_FILE.parent / "lib" / "agent").glob("*.py"))
+_TREE = ast.Module(body=[n for f in _AGENT_FILES for n in ast.parse(f.read_text()).body], type_ignores=[])
 
 _BRACKET_MARKERS = ("[系统", "[SYSTEM")
 

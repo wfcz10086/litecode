@@ -19,9 +19,11 @@ from routers.auth_router import require_auth
 from lib.chat_runs import REGISTRY
 
 router = APIRouter()
+ORDER = 140  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 SSE_HIGH_VOLUME_WARN = 5000    # [v1.9 P38-b] chunks 超阈值发警告 telemetry
 SSE_HARD_LIMIT = 50000         # chunks 硬上限 (防止 LLM 失控刷屏)
+FINISHING_WAIT_S = 10.0        # 上一轮已发 [DONE] 正在收尾时, 新消息最多等这么久
 _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 
 
@@ -132,6 +134,12 @@ async def api_chat(sid: str, request: Request):
     message = body.get("message", "").strip()
     if not message:
         raise HTTPException(400, "empty")
+    # 上一轮已发出 [DONE] 只剩收尾 (agent_stream 在 [DONE] 之后才落库历史) 时, 等它结束再开新一轮:
+    # 客户端读到 [DONE] 立刻发下一条会撞上这个窗口, 直接 409 不合理; 抢跑又会读不到上一轮历史。
+    # 仍在生成中的轮次照旧 409, 同会话串行不变。
+    prev = REGISTRY.get(sid)
+    if prev and not prev.done and prev.finishing:
+        await prev.wait_finished(timeout=FINISHING_WAIT_S)
     run = start_chat_turn(sid, message, body)
     return _follow(request, run, 0)
 

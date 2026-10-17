@@ -75,10 +75,12 @@ def test_external_unmount():
     print("[OK] unset ENV → external plugin disappears")
 
 
-async def test_call_external():
+def test_call_external():
+    # 原为 `async def` 测试, 但环境未装 pytest-asyncio, pytest 不会 await 直接报错;
+    # 改成同步用例内部 asyncio.run, pytest 与 __main__ 两种跑法一致
     os.environ[ENV_PATH] = "/tmp/lc_external_plugin_smoke"
     registry.scan()
-    res = await registry.call("hello_external", {"text": "机架 OK"}, {"sid": "smoke"})
+    res = asyncio.run(registry.call("hello_external", {"text": "机架 OK"}, {"sid": "smoke"}))
     assert res.get("ok") and "机架 OK" in res["result"], res
     print(f"[OK] call() invoke → {res}")
 
@@ -110,7 +112,7 @@ if __name__ == "__main__":
     test_internal_scan()
     test_external_mount()
     test_external_unmount()
-    asyncio.run(test_call_external())
+    test_call_external()
     test_missing_plugin_dir()
     test_collision_ignored()
     print("\n[PASS] S1-K plugin registry smoke")

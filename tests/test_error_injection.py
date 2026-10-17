@@ -5,7 +5,8 @@ test_error_injection.py — v1.9 P37-d 错误注入场景测试
 覆盖：
 - T1 工具异常 → ERROR 包装 + diff=None
 - T2 工具 timeout → 错误增强 + 不影响后续
-- T3 SSE error 事件解析（sse_contract）
+- (原 T3 SSE error 事件解析已删除: 它依赖的 tests/test_three_end_matrix.py 已在 f733f42
+  作为"非功能脚本"有意移除, 且被测的 *_extract 是测试侧自写的仿解析器, 不是产品代码)
 - T4 模型 503 / 网络异常 → fallback 不抛
 - T5 极长错误消息截断（telemetry error 字段 200 字限制）
 """
@@ -19,6 +20,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "litecodeext"))
+# core/ 需扁平导入 (tool_dispatch 内 `from tools.bg import ...`); 原先靠前序测试顺带注入, 单跑会挂
+sys.path.insert(0, str(ROOT / "litecodeext" / "core"))
 os.environ["LITECODE_TEST_OFFLINE"] = "1"
 
 
@@ -65,26 +68,6 @@ class TestErrorInjection(unittest.TestCase):
         _emit_tool_telemetry("test_tool", {"k": "v"}, 100, 0, sid="t",
                              error="Y" * 1000)  # 调用应不抛
         # 通过 = 函数可调用即可
-
-    def test_t3_sse_error_event_parse(self):
-        """T3: SSE 流含 error 事件 — 三端 extract 应识别"""
-        # 直接调三端矩阵中的 sse_contract_extract
-        sys.path.insert(0, str(ROOT / "tests"))
-        from test_three_end_matrix import sse_contract_extract, cli_extract, web_extract
-        lines = [
-            json.dumps({"choices": [{"index": 0, "delta": {"content": "a"}}]}),
-            json.dumps({"error": "503 service unavailable"}),
-            "[DONE]",
-        ]
-        sse = sse_contract_extract(lines)
-        # SSE 契约层应识别 error
-        self.assertIn("error", sse["counts"])
-        # CLI/Web 当前不消费顶层 error event（在 stream 解析层处理）
-        # 但都应识别 content + done
-        cli = cli_extract(lines)
-        web = web_extract(lines)
-        self.assertEqual(cli["counts"].get("done"), 1)
-        self.assertEqual(web["counts"].get("done"), 1)
 
     def test_t4_offline_memory_fallback_no_hang(self):
         """T4: OFFLINE 模式不可达 backend → smart_auto_memory 不挂起 (already P37-a)"""

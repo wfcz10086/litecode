@@ -156,7 +156,11 @@ async def api_auth_heartbeat(request: Request, response: Response):
 
 
 @router.post("/api/logout")
-async def api_logout(response: Response):
+async def api_logout(request: Request, response: Response):
+    # 服务端同步吊销 token: 只删浏览器 cookie 的话, 旧 token 在有效期内仍可直接调用 API
+    tok = _get_cookie(request)
+    if tok and _valid_tokens.pop(tok, None) is not None:
+        _save_tokens()
     response.delete_cookie(_COOKIE_NAME)
     return {"ok": True}
 

@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>LiteCode 对话分享</title>
+<style>
+  :root { --bg:#FBFBF9; --card:#FFFFFF; --text:#1F1F1C; --muted:#6B6B66; --line:#E8E6E1; --user:#F2F0EA; --accent:#C2602C; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#151514; --card:#1E1E1C; --text:#ECEBE7; --muted:#9A9893; --line:#2E2D2A; --user:#26251F; --accent:#E08A55; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.7 Inter, "Noto Sans SC", system-ui, -apple-system, sans-serif; }
+  main { max-width:820px; margin:0 auto; padding:32px 16px 64px; }
+  header { margin-bottom:24px; }
+  h1 { font-size:22px; margin:0 0 6px; overflow-wrap:anywhere; }
+  .meta { color:var(--muted); font-size:13px; }
+  .msg { background:var(--card); border:1px solid var(--line); border-radius:14px; padding:14px 18px; margin:12px 0; }
+  .msg.user { background:var(--user); }
+  .role { font-size:12px; font-weight:600; color:var(--accent); margin-bottom:6px; letter-spacing:.02em; }
+  .content { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .tools { color:var(--muted); font-size:12px; margin-top:8px; }
+  .state { color:var(--muted); text-align:center; padding:48px 0; }
+  footer { color:var(--muted); font-size:12px; text-align:center; margin-top:32px; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1 id="title">对话分享</h1><div class="meta" id="meta"></div></header>
+  <div id="list"><div class="state">正在加载…</div></div>
+  <footer>只读分享 · 由 LiteCode 生成</footer>
+</main>
+<script>
+// 公开只读页: 数据来自已脱敏的 /api/share/{token}; 全部用 textContent 写入, 不解析 HTML (防 XSS)。
+(async () => {
+  const list = document.getElementById('list');
+  const state = text => { list.replaceChildren(); const d = document.createElement('div'); d.className = 'state'; d.textContent = text; list.append(d); };
+  const token = decodeURIComponent(location.pathname.split('/').filter(Boolean).pop() || '');
+  let data;
+  try {
+    const r = await fetch('/api/share/' + encodeURIComponent(token), {cache: 'no-store'});
+    if (!r.ok) return state(r.status === 404 ? '分享链接无效或已过期。' : '加载失败 (HTTP ' + r.status + ')。');
+    data = await r.json();
+  } catch (e) { return state('网络错误, 请稍后重试。'); }
+  const s = data.session || {};
+  document.getElementById('title').textContent = s.name || '对话分享';
+  document.title = (s.name || '对话分享') + ' · LiteCode';
+  const parts = [];
+  if (s.created) parts.push('创建于 ' + new Date(s.created * 1000).toLocaleString());
+  if (data.expires) parts.push('链接有效期至 ' + new Date(data.expires * 1000).toLocaleString());
+  document.getElementById('meta').textContent = parts.join(' · ');
+  const msgs = (s.messages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && (m.content || (m.tools || []).length));
+  if (!msgs.length) return state('这个对话还没有内容。');
+  list.replaceChildren();
+  for (const m of msgs) {
+    const box = document.createElement('div'); box.className = 'msg ' + m.role;
+    const role = document.createElement('div'); role.className = 'role'; role.textContent = m.role === 'user' ? '用户' : 'LiteCode';
+    const content = document.createElement('div'); content.className = 'content';
+    content.textContent = typeof m.content === 'string' ? m.content.trim() : JSON.stringify(m.content);
+    box.append(role, content);
+    if ((m.tools || []).length) {
+      const t = document.createElement('div'); t.className = 'tools';
+      t.textContent = '调用了 ' + m.tools.length + ' 次工具'; box.append(t);
+    }
+    list.append(box);
+  }
+})();
+</script>
+</body>
+</html>

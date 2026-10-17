@@ -14,6 +14,7 @@ from plugins.artifacts.store import get_store
 
 
 router = APIRouter(prefix="/api/artifacts_v2", tags=["artifacts"])
+ORDER = 120  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 
 _KIND_MIME = {
