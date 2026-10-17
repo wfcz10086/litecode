@@ -13,8 +13,10 @@ import urllib.error
 import urllib.request
 
 # 顺序与控制端 lib.windows_nodes.WORKER_FILES 一致, 版本哈希按这个顺序拼接
-ASSETS = ('worker.py', 'windows_desktop_actions.py', 'windows_desktop_ocr.py')
-WORKER_MODULES = ('windows_desktop_worker', 'windows_desktop_actions', 'windows_desktop_ocr')
+ASSETS = ('worker.py', 'windows_desktop_actions.py', 'windows_desktop_ocr.py',
+          'windows_system_actions.py', 'windows_file_actions.py', 'windows_transfer.py')
+WORKER_MODULES = ('windows_desktop_worker', 'windows_desktop_actions', 'windows_desktop_ocr',
+                  'windows_system_actions', 'windows_file_actions', 'windows_transfer')
 VERSIONS = {'agent': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:16], 'assets': ''}
 
 
@@ -96,12 +98,16 @@ def request(config, path, data=None):
         return response.read()
 
 
-def run_job(config, root, job):
+def run_job(config, root, job, capabilities=None):
     from windows_desktop_worker import run
     folder = root / 'jobs' / job['id']
     folder.mkdir(parents=True, exist_ok=True)
     try:
-        # 单进程串行执行，桌面句柄属于登录用户会话；不接受任意 shell 任务。
+        # run_powershell 需本地二次校验: 开关来源是服务端经 Bearer 认证下发的节点能力。
+        if job['action'] == 'run_powershell' and not (capabilities or {}).get('shell'):
+            return {'result': {'ok': False, 'state': 'shell_disabled',
+                               'error': '节点未开启 shell 能力，拒绝执行 PowerShell'}, 'images': {}}
+        # 单进程串行执行，桌面句柄属于登录用户会话。
         result = run(job['action'], folder, job['request'])
         images = {}
         for key in ('image', 'before_image'):
@@ -183,6 +189,7 @@ def main():
                 request(config, '/result/' + job_id, payload)
                 pending_result = None
             response = json.loads(request(config, '/poll'))
+            capabilities = response.get('capabilities') or {}
             job = response.get('job')
             if job:
                 if job['action'] == 'uninstall':
@@ -192,7 +199,7 @@ def main():
                         request(config, '/status', {'state': 'uninstall_failed', 'error': '清理任务未能启动，请使用本机卸载命令'})
                         continue
                     return
-                pending_result = (job['id'], run_job(config, root, job))
+                pending_result = (job['id'], run_job(config, root, job, capabilities))
             target = response.get('versions') or {}
             # 只在空闲时更新, 不打断正在执行或待回传的桌面动作
             if not job and target.get('assets') and target['assets'] != VERSIONS['assets'] \

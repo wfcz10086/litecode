@@ -91,7 +91,7 @@
     const states = {awaiting_join: '等待执行命令', expired: '接入码已过期', installing: '安装中', online: '在线', offline: '离线', error: '安装或连接失败', revoked: '已撤销', uninstall_pending: '等待电脑接收卸载', uninstalling: '正在卸载，等待清理回执', uninstall_failed: '卸载未完成', uninstalled: '已完全卸载'};
     const stages = {enrolled: '已发现电脑', python: '准备独立 Python 环境', packages: '安装桌面组件', agent: '启动桌面代理'};
     const taskStates = {queued: '等待电脑领取', running: '电脑正在执行', returned: '动作已返回，业务结果请看截图验收', failed: '动作失败', cancelled: '已取消派发，已执行的动作无法撤回', unconfirmed: '未确认是否完成，请先检查桌面，勿重复发送'};
-    const actions = {screenshot: '截图检查', initialize: '初始化', windows: '查看窗口', click: '点击', right_click: '右键', hover: '悬停', click_text: '点击文字', scroll: '滚动', drag: '拖动', hotkey: '快捷键', type_text: '输入文字', type_secret: '输入已保存凭据', open_url: '打开网页', wechat_login: '微信登录', wechat_status: '检查微信', ocr: '识别文字', clipboard: '读取剪贴板', focus_window: '切换窗口', close_window: '关闭窗口'};
+    const actions = {screenshot: '截图检查', initialize: '初始化', windows: '查看窗口', click: '点击', double_click: '双击', right_click: '右键', hover: '悬停', click_text: '点击文字', scroll: '滚动', drag: '拖动', hotkey: '快捷键', type_text: '输入文字', type_secret: '输入已保存凭据', open_url: '打开网页', wechat_login: '微信登录', wechat_status: '检查微信', ocr: '识别文字', clipboard: '读取剪贴板', focus_window: '切换窗口', close_window: '关闭窗口'};
     const busy = new Set();
     const removeArmed = new Set();
     let refreshing = false;
@@ -150,6 +150,19 @@
               dialog.close(); input.value = '请查看 ' + node.alias + ' 当前桌面'; input.dispatchEvent(new Event('input')); input.focus();
             };
             row.append(chat);
+          }
+          if (['online', 'offline', 'error'].includes(node.state)) {
+            const shellOn = !!(node.capabilities && node.capabilities.shell);
+            row.append(el('p', '命令行(run_powershell)：' + (shellOn ? '已开启' : '已关闭（默认，模型不能自行开启）')));
+            const shell = el('button', shellOn ? '关闭命令行能力' : '开启命令行能力');
+            shell.style.marginRight = '16px';
+            shell.onclick = async () => {
+              if (!shellOn && !confirm('开启后该节点可执行任意 PowerShell，确认开启？')) return;
+              shell.disabled = true;
+              try { await api('/' + node.id + '/shell', {method: 'POST', body: JSON.stringify({enabled: !shellOn})}); await refresh(); }
+              catch (error) { message.textContent = error.message; shell.disabled = false; }
+            };
+            row.append(shell);
           }
           if (node.state !== 'revoked' && node.state !== 'uninstalled') {
             if (!['awaiting_join', 'expired', 'uninstall_pending', 'uninstalling'].includes(node.state)) {

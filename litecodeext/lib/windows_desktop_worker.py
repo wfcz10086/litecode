@@ -83,14 +83,28 @@ def open_wechat():
     raise RuntimeError('未发现微信安装路径或快捷方式')
 
 
+# 这些动作不操作交互桌面（系统信息/进程/服务/文件/受控 shell），锁屏时也应可执行。
+SYSTEM_ACTIONS = ('system_info', 'processes', 'kill_process', 'services', 'run_powershell')
+FILE_ACTIONS = ('list_dir', 'download', 'upload')
+DESKTOP_GENERIC = ('open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window',
+                   'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover',
+                   'launch_app', 'window_state', 'double_click')
+
+
 def run(action, folder, args=None):
     args = args or {}
+    if action in SYSTEM_ACTIONS:
+        from windows_system_actions import perform
+        return perform(action, folder, args)
+    if action in FILE_ACTIONS:
+        from windows_file_actions import perform
+        return perform(action, folder, args)
     if not desktop_ready():
         return {'ok': False, 'state': 'desktop_unavailable', 'error': '桌面锁定或未登录，请先解锁 Windows'}
     if action in ('ocr', 'click_text'):
         from windows_desktop_ocr import perform
         return perform(action, folder, args)
-    if action in ('open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window', 'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover'):
+    if action in DESKTOP_GENERIC:
         from windows_desktop_actions import perform
         return perform(action, folder, args)
     if action == 'type_secret':
@@ -119,8 +133,12 @@ def run(action, folder, args=None):
     image = folder / 'screen.png'
     with mss.MSS() as screen:
         screen.shot(output=str(image))
-    return {'ok': True, 'state': classify(texts) if action.startswith('wechat') else 'desktop_ready',
-            'texts': texts[:100], 'image': 'screen.png'}
+    result = {'ok': True, 'state': classify(texts) if action.startswith('wechat') else 'desktop_ready',
+              'texts': texts[:100], 'image': 'screen.png'}
+    if args.get('compress'):
+        from windows_desktop_actions import compress_screenshot_file
+        result.update(compress_screenshot_file(image))
+    return result
 
 
 if __name__ == '__main__':

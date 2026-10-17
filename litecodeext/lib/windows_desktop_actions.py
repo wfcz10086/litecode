@@ -19,7 +19,29 @@ HOTKEYS = {
     'ctrl+home': ['ctrl', 'home'], 'ctrl+end': ['ctrl', 'end'],
     'backspace': ['backspace'], 'delete': ['delete'], 'pageup': ['pageup'],
     'pagedown': ['pagedown'], 'up': ['up'], 'down': ['down'], 'left': ['left'], 'right': ['right'],
+    # 常用编辑与窗口快捷键补充
+    'win+e': ['win', 'e'], 'ctrl+shift+esc': ['ctrl', 'shift', 'esc'],
+    'ctrl+z': ['ctrl', 'z'], 'ctrl+y': ['ctrl', 'y'], 'ctrl+x': ['ctrl', 'x'],
+    'f2': ['f2'], 'alt+enter': ['alt', 'enter'],
+    # 选择与格式 (真机 2026-10-17: 无 shift+home 只能整框重打)
+    'ctrl+v': ['ctrl', 'v'], 'ctrl+b': ['ctrl', 'b'], 'ctrl+i': ['ctrl', 'i'], 'ctrl+u': ['ctrl', 'u'],
+    'shift+home': ['shift', 'home'], 'shift+end': ['shift', 'end'],
+    'shift+left': ['shift', 'left'], 'shift+right': ['shift', 'right'],
+    'shift+up': ['shift', 'up'], 'shift+down': ['shift', 'down'],
+    'ctrl+shift+left': ['ctrl', 'shift', 'left'], 'ctrl+shift+right': ['ctrl', 'shift', 'right'],
+    'ctrl+shift+home': ['ctrl', 'shift', 'home'], 'ctrl+shift+end': ['ctrl', 'shift', 'end'],
+    # 不加 win+l: 会锁屏使代理无法再操作桌面。
 }
+
+# launch_app 内置映射: 直接可执行文件名或 start 协议。cmd/powershell/终端属 shell 能力，
+# 不在这里提供，需开启 shell 能力后用 run_powershell。
+LAUNCH_APPS = {
+    'notepad': ['notepad.exe'], 'explorer': ['explorer.exe'], 'calc': ['calc.exe'],
+    'mspaint': ['mspaint.exe'], 'paint': ['mspaint.exe'],
+    'edge': ['cmd', '/c', 'start', 'msedge'], 'chrome': ['cmd', '/c', 'start', 'chrome'],
+}
+SHELL_APPS = {'cmd', 'powershell', 'pwsh', 'terminal', 'wt', 'cmd.exe', 'powershell.exe'}
+WINDOW_STATES = {'maximize': 3, 'minimize': 6, 'restore': 9}
 
 
 def validate_url(url):
@@ -90,7 +112,7 @@ def hotkey_events(keys):
     """组合键使用同一 SendInput 通道，避免旧 keybd_event 在部分界面失效。"""
     named = {'ctrl': 0x11, 'alt': 0x12, 'shift': 0x10, 'win': 0x5b,
              'enter': 0x0d, 'esc': 0x1b, 'tab': 9, 'left': 0x25,
-             '+': 0xbb, '-': 0xbd, 'f4': 0x73, 'f5': 0x74, 'up': 0x26, 'down': 0x28,
+             '+': 0xbb, '-': 0xbd, 'f2': 0x71, 'f4': 0x73, 'f5': 0x74, 'up': 0x26, 'down': 0x28,
              'right': 0x27, 'home': 0x24, 'end': 0x23, 'backspace': 8, 'delete': 0x2e,
              'pageup': 0x21, 'pagedown': 0x22, 'space': 0x20}
     codes = []
@@ -179,12 +201,71 @@ def type_unicode(text):
     send_keyboard([(0, unit, flags) for unit, flags in unicode_events(text)])
 
 
+def compress_screenshot_file(path, long_edge=1600, quality=70):
+    """把截图按长边 ≤ long_edge 缩放并转 JPEG 原地重写，坐标仍以原始屏幕为准。
+
+    返回原始/压缩后的尺寸与字节数。screen_size 记录原始屏幕像素，供点击坐标换算；
+    模型所见图片尺寸是 image_size，image_point 用两者比例映射，不受缩放影响。
+    """
+    from PIL import Image
+    path = Path(path)
+    orig_bytes = path.stat().st_size
+    with Image.open(path) as image:
+        image = image.convert('RGB')
+        orig_w, orig_h = image.size
+        longest = max(orig_w, orig_h)
+        if longest > long_edge:
+            ratio = long_edge / longest
+            image = image.resize((max(1, int(orig_w * ratio)), max(1, int(orig_h * ratio))))
+        new_w, new_h = image.size
+        image.save(path, 'JPEG', quality=quality, optimize=True)
+    return {'screen_size': [orig_w, orig_h], 'image_size': [new_w, new_h],
+            'orig_bytes': orig_bytes, 'bytes': path.stat().st_size,
+            'compressed': True}
+
+
+def launch_app(args):
+    """按名称启动应用。内置常用映射；未知名称回退到开始菜单搜索（Win→输入→回车），结果靠截图验收。"""
+    import subprocess
+    import pyautogui
+    name = str(args.get('name', '')).strip()
+    if not name:
+        raise ValueError('必须提供应用名称 name')
+    key = name.lower()
+    if key in SHELL_APPS:
+        raise ValueError('cmd/PowerShell/终端窗口属于 shell 能力，请开启 shell 能力后用 run_powershell')
+    if key in LAUNCH_APPS:
+        command = LAUNCH_APPS[key]
+        subprocess.Popen(command, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
+                         shell=False)
+        return {'method': 'mapping', 'launched': key}
+    # 兜底：开始菜单搜索。只输入应用名，不执行任意命令。
+    if len(name) > 80 or any(c in name for c in '\r\n\t'):
+        raise ValueError('应用名称不合法')
+    send_keyboard(hotkey_events(['win']), interval=0.05)
+    time.sleep(0.8)
+    type_unicode(name)
+    time.sleep(0.8)
+    send_keyboard(hotkey_events(['enter']), interval=0.05)
+    return {'method': 'start_menu', 'query': name}
+
+
+def set_window_state(args):
+    state = args.get('window_state_mode')
+    code = WINDOW_STATES.get(state)
+    if code is None:
+        raise ValueError('window_state 需要 maximize / minimize / restore')
+    window = choose_window(list_windows(), args.get('title', ''), args.get('window_handle'))
+    ctypes.windll.user32.ShowWindow(ctypes.c_void_p(window['handle']), code)
+    return {'target': window, 'window_state_mode': state}
+
+
 def perform(action, folder, args):
     import pyautogui
     import mss
     ctypes.windll.user32.SetProcessDPIAware()
     info = {}
-    if action in ('click', 'right_click', 'hover', 'drag'):
+    if action in ('click', 'double_click', 'right_click', 'hover', 'drag'):
         with mss.MSS() as screen:
             monitor = screen.monitors[1]
             point = image_point(args, monitor)
@@ -196,7 +277,8 @@ def perform(action, folder, args):
         elif action == 'hover':
             time.sleep(0.6)   # 停留让悬浮菜单/提示出现, 返回截图里可见
         else:
-            pyautogui.click(button='right' if action == 'right_click' else 'left')
+            pyautogui.click(button='right' if action == 'right_click' else 'left',
+                            clicks=2 if action == 'double_click' else 1, interval=0.08)
         info.update(before_image='before.png', point=point)
     elif action == 'open_url':
         import webbrowser
@@ -268,14 +350,22 @@ def perform(action, folder, args):
                 error = ctypes.windll.kernel32.GetLastError()
                 raise RuntimeError(f'Windows 拒绝关闭窗口，错误码 {error}；目标可能权限更高，可在已授权时使用 elevated=true')
         info['target'] = window
+    elif action == 'launch_app':
+        info.update(launch_app(args))
+    elif action == 'window_state':
+        info.update(set_window_state(args))
     elif action != 'windows':
         raise ValueError('不支持的桌面动作')
-    time.sleep(1.5 if action != 'open_url' else 4)
+    time.sleep(1.5 if action not in ('open_url', 'launch_app') else 4)
     with mss.MSS() as screen:
         screen.shot(output=str(folder / 'screen.png'))
+    if args.get('compress'):
+        info.update(compress_screenshot_file(folder / 'screen.png'))
     windows = list_windows()
-    focused = action != 'focus_window' or any(w['handle'] == info['target']['handle'] and w['foreground'] for w in windows)
+    focused = action not in ('focus_window', 'window_state') or any(
+        w['handle'] == info['target']['handle'] and (action == 'window_state' or w['foreground']) for w in windows)
     pending = action == 'close_window' and any(w['handle'] == info['target']['handle'] for w in windows)
-    state = 'close_pending' if pending else ('closed' if action == 'close_window' else ('action_executed' if focused else 'focus_failed'))
+    state = ('close_pending' if pending else 'closed' if action == 'close_window'
+             else 'action_executed' if focused else 'focus_failed')
     return {'ok': focused and not pending, 'state': state, 'image': 'screen.png',
             'windows': windows, **info}

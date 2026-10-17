@@ -16,6 +16,8 @@ router = APIRouter(dependencies=[Depends(no_store)])
 ORDER = 150  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 ASSETS = {'agent.py': 'windows_node_agent.py', 'worker.py': 'windows_desktop_worker.py',
           'windows_desktop_actions.py': 'windows_desktop_actions.py', 'windows_desktop_ocr.py': 'windows_desktop_ocr.py',
+          'windows_system_actions.py': 'windows_system_actions.py', 'windows_file_actions.py': 'windows_file_actions.py',
+          'windows_transfer.py': 'windows_transfer.py',
           'uninstall.ps1': 'windows_node_uninstall.ps1'}
 
 
@@ -111,6 +113,19 @@ async def update_command(node_id: str, request: Request):
         raise HTTPException(400, str(exc))
 
 
+@router.post('/api/windows/nodes/{node_id}/shell')
+async def set_shell(node_id: str, request: Request):
+    """开/关单个节点的 run_powershell 命令行能力。需管理权限; 工具层无法调用此接口。"""
+    require_management(request)
+    data = await body(request)
+    if not isinstance(data.get('enabled'), bool):
+        raise HTTPException(400, 'enabled 必须为布尔值')
+    try:
+        return manager().set_capability(node_id, 'shell', data['enabled'])
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
 @router.post('/api/windows/nodes/{node_id}/check')
 async def check_node(node_id: str, request: Request):
     require_management(request)
@@ -187,18 +202,20 @@ async def uninstalled(node_id: str, request: Request):
 async def poll(node_id: str, request: Request):
     from lib.windows_nodes import component_versions
     reported = {'agent': request.headers.get('x-agent-version', ''), 'assets': request.headers.get('x-assets-version', '')}
+    nodes = manager()
     deadline = time.monotonic() + 20
     while time.monotonic() < deadline:
         try:
-            job = manager().claim(node_id, credential(request), reported)
+            job = nodes.claim(node_id, credential(request), reported)
         except ValueError:
             raise HTTPException(403, '设备认证失败')
         if job:
-            return {'job': job, 'versions': component_versions()}
+            # capabilities 走已认证通道下发, 供设备对 run_powershell 做本地二次校验; 旧代理会忽略该字段。
+            return {'job': job, 'versions': component_versions(), 'capabilities': nodes.node_capabilities(node_id)}
         if await request.is_disconnected():
             break
         await asyncio.sleep(1)
-    return {'job': None, 'versions': component_versions()}
+    return {'job': None, 'versions': component_versions(), 'capabilities': nodes.node_capabilities(node_id)}
 
 
 @router.post('/api/windows/device/{node_id}/result/{job_id}')

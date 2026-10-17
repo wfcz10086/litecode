@@ -20,7 +20,11 @@
 | `click` / `drag` | 使用最新 `reference_image`、模型所见图片宽高及起止坐标，点击图标或拖动滚动条；自动换算物理像素，屏幕尺寸变化或截图超时拒绝操作 |
 | `type_secret` | 用仓库外凭据引用 `credential` 和 `field` 输入，避免在参数中传密码 |
 | `focus_window` / `close_window` | `title` 完整标题或最新 `window_handle` 唯一定位，支持同名窗口；普通关闭保留未保存提示，拒绝请求或仍可见不会误报已关闭 |
+| `launch_app` | `name` 启动应用：内置 notepad/explorer/calc/mspaint/edge/chrome，未知名称走开始菜单搜索（Win→输入→回车），结果靠截图验收；cmd/PowerShell 属 shell 能力不在此启动 |
+| `window_state` | 对 `title`/`window_handle` 定位的窗口 `window_state_mode` 最大化 / 最小化 / 还原 |
 | `wechat_login` / `wechat_status` | 打开微信供扫码 / 按界面证据判断登录状态 |
+
+截图与所有返回截图的动作支持 `compress=true`：按长边 ≤1600 缩放并转 JPEG（质量 70）提速传输；坐标换算仍以原始屏幕为准，原始屏幕尺寸记在上传截图同名 `.screen` 旁车文件里，点击 / 拖动定位不受影响。实测合成 2560×1600 渐变+UI 截图约降到 57%、像素数降到 39%；真实桌面大图（多为大面积纯色 / 文本的 PNG）降幅更明显。`ocr`/`click_text` 的识别仍在全分辨率原图上进行，只压缩回传给模型的图片。
 
 结果的 `action_executed` 只说明动作已执行，任务是否成功必须用返回截图或后续 OCR 验收。任务执行过程沿用现有 SSE 工具开始、完成事件；Web 刷新后通过 chat_runs 重新跟随。图片用 `[发送图片: 路径]` 返回，现有微信桥接会把来源会话的图片上传给原发起人。Win11 个人微信已接通周期视觉巡检（见下文），常驻消息事件监听与自动回复仍未启用，不能用机器人桥接代替该能力。
 
@@ -29,6 +33,43 @@
 `type_text` 和 `type_secret` 支持 `input_method=clipboard|unicode`。默认剪贴板粘贴；粘贴无效或输入法候选干扰时，模型可选择 Unicode 直接输入，不需要生成临时键盘脚本。发送成功仍须查看界面验证；只发送部分输入事件时报告失败，不能直接重发造成重复内容。
 
 组合键采用带物理扫描码的 SendInput，并留出按键间隔，修复部分 Flutter 界面 Ctrl+A/Ctrl+V 不生效的问题。已在 Win11 实测全选、替换输入和客户端登录。支持窗口最大化、方向键、Home/End、删除、翻页和输入法切换。
+
+## 系统运维与命令行（windows_system，仅主动回连节点）
+
+除了视觉/OCR 通道，回连节点还有一条**命令行/非视觉通道** `windows_system(alias, action)`。能用命令完成的（查文件、看进程、装软件、读写配置）优先走它，比截图点击更快更稳；只有操作 GUI 应用（如 WPS 编辑文档）才用 `windows_desktop` 的 OCR + 点击。
+
+| 动作 | 说明 |
+| --- | --- |
+| `system_info` | 系统版本、主机名、CPU 型号/核数/占用、内存、各磁盘容量/剩余、开机时长、登录用户 |
+| `processes` | 按 `sort=cpu|memory` 排序的前 `top` 个进程，可按 `name` 过滤 |
+| `kill_process` | 按 `pid` 或精确进程名结束；拒绝结束关键系统进程（System/csrss/wininit/winlogon/services/lsass/smss）和代理自身，结束 explorer 需 `force=true` |
+| `services` | 只读列出服务及状态（代理普通用户权限，不做启停）；可 `name` 过滤 |
+| `list_dir` | 列目录（名称/大小/修改时间/是否目录），最多 500 项 |
+| `download` | 把 Windows 文件（≤50MB）取回服务端工作区 `uploads/` 并登记为产出物，返回服务端路径 |
+| `upload` | 把服务端工作区内的文件（`source` 必须在工作区内，≤50MB）发到 Windows 的 `%USERPROFILE%\Downloads\LiteCode\`，文件名清洗防穿越、同名自动加序号不覆盖 |
+| `run_powershell` | 执行 PowerShell：**默认关闭**，支持 `cwd`、返回 `exit_code`/`stdout`/`stderr`/`duration_ms`，输出各截断 8000 字符，`timeout` 默认 60 秒上限 300 秒 |
+
+`kill_process`/`upload`/`download`/`run_powershell` 是有副作用动作，执行后应回读（再 `list_dir`/`processes`/`system_info` 或截图）确认，不盲目重试。幂等只读动作（`system_info`/`processes`/`list_dir`/`services`/截图）遇网络类错误服务端自动重试 1-2 次；点击/输入/结束/传输类绝不自动重试。
+
+### 命令行能力开关（run_powershell）
+
+`run_powershell` 是用户主动要的一等功能，但默认关闭、最小权限：
+
+- **只能由用户开启**：Web 节点面板「开启命令行能力」按钮，或 CLI `litecli nodes shell <别名> on|off`；都需要 Web 登录（`require_management`）。**工具层没有任何开启入口，模型不能给自己开权限**。
+- **认证沿用现有设备凭据**：不发明新密钥体系。开关状态存在服务端节点记录里，经设备**已认证的 Bearer 轮询通道**下发给节点；节点在执行 `run_powershell` 前用这份能力做**本地二次校验**，开关没开就拒绝。服务端也独立校验：未开启不下发该动作。
+- **输出中文正确**：固定前缀设 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`（中文 Windows 默认 GBK/OEM 会乱码），Python 侧按 UTF-8 解码、失败回退 GBK。
+- 仅对开启了 shell 能力的回连节点可用；SSH 别名不支持（SSH 本身已是 shell）。
+
+### 文件传输分块协议
+
+传输走现有任务通道。单块原始 4MB（base64 后约 5.3MB，远低于请求体 24MB 上限），整体 sha256 校验：
+
+- **upload**：服务端把工作区文件按 4MB 切块，逐块下发；节点追加写到 `Downloads\LiteCode` 下的 `.part-<transfer_id>` 临时文件，最后一块校验整体 sha256 后改名为唯一文件名。源文件 `resolve()` 后必须落在工作区内，杜绝把服务器任意文件发出去。
+- **download**：节点无状态（任务目录每次执行后删除），先回元数据（size/chunks/sha256/name），再按偏移逐块重读回传；服务端重组并校验 sha256 后落到 `uploads/`。
+
+## 向后兼容与版本门禁
+
+新动作（系统运维、文件传输、`launch_app`/`window_state`）只有在节点运行**最新版本代理**时才下发；版本落后的已部署节点收到新动作会得到明确的「代理版本过低，等待自动更新」错误，而不是挂起，待其空闲自动更新后即可用。老代理忽略轮询响应里新增的 `capabilities` 字段，行为不变。新增的 Windows 端文件（`windows_system_actions.py`/`windows_file_actions.py`/`windows_transfer.py`）已进入下发清单（`WORKER_FILES` / 代理 `ASSETS` / 路由 `ASSETS` / SSH 上传），两端按相同字节算版本哈希。
 
 ## 周期巡检
 

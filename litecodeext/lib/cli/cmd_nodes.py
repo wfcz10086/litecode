@@ -57,6 +57,8 @@ def nodes_list():
             parts.append(f"{n['computer']}/{n.get('user') or '?'}")
         if state == 'online':
             parts.append('桌面就绪' if n.get('desktop_ready') else '桌面待检查')
+        if (n.get('capabilities') or {}).get('shell'):
+            parts.append(_c('shell 已开启', 'magenta'))
         if n.get('update_state'):
             parts.append(UPDATES.get(n['update_state'], n['update_state']))
         if n.get('last_seen'):
@@ -142,6 +144,23 @@ def nodes_update_command(alias: str):
 def nodes_uninstall_command(alias: str):
     """打印本机卸载命令 (远程卸载不可用时在电脑上执行)."""
     _print_command(alias, 'uninstall')
+
+
+@nodes.command('shell')
+@click.argument('alias')
+@click.argument('switch', type=click.Choice(['on', 'off']))
+@click.option('-y', '--yes', is_flag=True, help='开启时跳过确认')
+def nodes_shell(alias: str, switch: str, yes: bool):
+    """开启/关闭节点的 run_powershell 命令行能力 (默认关闭, 仅本命令或 Web 可开)."""
+    node = _find(alias)
+    enabled = switch == 'on'
+    if enabled:
+        _confirm(yes, f'确认为节点 {alias} 开启 run_powershell 命令行能力? 该节点将可执行任意 PowerShell')
+    d = _r_json('POST', f"{BASE}/{node['id']}/shell", json_body={'enabled': enabled})
+    if _json_out(d):
+        return
+    state = (d.get('capabilities') or {}).get('shell')
+    _ok(f"{alias} 命令行能力已{'开启' if state else '关闭'}")
 
 
 @nodes.command('check')

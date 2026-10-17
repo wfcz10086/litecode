@@ -7,7 +7,7 @@ from . import register
 # (会话, 电脑) → 最近一次返回的截图。模型下一步看到的就是这张, 坐标以它为准;
 # 实测模型常漏传 reference_image 被拒后再重试, 白费一轮。
 _LAST_SHOT: dict = {}
-_POINTER_ACTIONS = ('click', 'right_click', 'hover', 'drag')
+_POINTER_ACTIONS = ('click', 'double_click', 'right_click', 'hover', 'drag')
 
 
 def with_reference(sid, args):

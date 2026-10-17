@@ -5,8 +5,14 @@ from pathlib import Path
 import time
 import uuid
 
-ACTIONS = ('initialize', 'screenshot', 'wechat_login', 'wechat_status', 'ocr', 'click_text', 'type_secret',
-           'open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window', 'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover')
+# 老版已部署代理支持的动作: 新动作不在此列, 对版本落后的节点拒绝下发, 等其自动更新。
+LEGACY_ACTIONS = ('initialize', 'screenshot', 'wechat_login', 'wechat_status', 'ocr', 'click_text', 'type_secret',
+                  'open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window', 'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover')
+NEW_ACTIONS = ('system_info', 'processes', 'kill_process', 'services', 'run_powershell',
+               'list_dir', 'download', 'upload', 'launch_app', 'window_state', 'double_click')
+ACTIONS = LEGACY_ACTIONS + NEW_ACTIONS
+# 幂等/只读动作: 网络类错误可安全重试; 点击/输入/结束进程/传输等有副作用动作绝不自动重试。
+IDEMPOTENT_ACTIONS = ('screenshot', 'system_info', 'processes', 'list_dir', 'services', 'windows')
 
 
 def desktop_request(args, workspace):
@@ -14,18 +20,26 @@ def desktop_request(args, workspace):
     request['amount'] = args.get('amount', -5)
     request['input_method'] = args.get('input_method', 'clipboard')
     request['window_handle'] = args.get('window_handle')
-    if args.get('action') in ('click', 'right_click', 'hover', 'drag') or args.get('x') is not None or args.get('y') is not None:
+    if args.get('action') in ('click', 'double_click', 'right_click', 'hover', 'drag') or args.get('x') is not None or args.get('y') is not None:
         from PIL import Image
         reference = Path(args.get('reference_image', '')).resolve()
         if not reference.is_relative_to((Path(workspace) / 'uploads').resolve()) or not reference.is_file():
             raise ValueError('必须提供当前工作区截图 reference_image')
         if time.time() - reference.stat().st_mtime > 300:
             raise ValueError('截图已超过五分钟，请重新截图定位')
-        with Image.open(reference) as image:
-            request['screen_size'] = list(image.size)
+        # 压缩截图的真实屏幕尺寸记在同名 .screen 旁车里, 坐标换算仍以原始屏幕为准。
+        sidecar = reference.with_name(reference.name + '.screen')
+        if sidecar.is_file():
+            request['screen_size'] = json.loads(sidecar.read_text())
+        else:
+            with Image.open(reference) as image:
+                request['screen_size'] = list(image.size)
         for key in ('x', 'y', 'end_x', 'end_y', 'image_width', 'image_height'):
             request[key] = args.get(key)
-    if args.get('action') == 'type_secret':
+    if args.get('compress'):
+        request['compress'] = True
+    action = args.get('action')
+    if action == 'type_secret':
         field = args.get('field')
         credential = args.get('credential', '')
         if field not in ('username', 'password') or not credential:
@@ -35,6 +49,39 @@ def desktop_request(args, workspace):
         if not isinstance(value, str) or not value:
             raise ValueError('该凭据字段不存在')
         request.update(text=value, sensitive=True)
+    elif action == 'processes':
+        request.update(sort=args.get('sort', 'memory'), top=int(args.get('top', 15)),
+                       name=str(args.get('name', '')))
+    elif action == 'kill_process':
+        if args.get('pid') is not None:
+            request['pid'] = args['pid']
+        if args.get('name'):
+            request['name'] = str(args['name'])
+        request['force'] = bool(args.get('force', False))
+    elif action == 'services':
+        request['name'] = str(args.get('name', ''))
+    elif action == 'run_powershell':
+        script = args.get('script', '')
+        if not isinstance(script, str) or not script.strip():
+            raise ValueError('run_powershell 需要非空 script')
+        request.update(script=script, timeout=int(args.get('timeout', 60)))
+        if args.get('cwd'):
+            request['cwd'] = str(args['cwd'])
+    elif action == 'list_dir':
+        path = args.get('path', '')
+        if not isinstance(path, str) or not path.strip():
+            raise ValueError('list_dir 需要目录 path')
+        request['path'] = path
+    elif action == 'launch_app':
+        name = args.get('name', '')
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError('launch_app 需要应用名称 name')
+        request['name'] = name
+    elif action == 'window_state':
+        mode = args.get('window_state_mode')
+        if mode not in ('maximize', 'minimize', 'restore'):
+            raise ValueError('window_state 需要 maximize / minimize / restore')
+        request['window_state_mode'] = mode
     return request
 
 
@@ -49,20 +96,99 @@ def powershell(client, script, timeout=30):
     return text
 
 
+def _run_node_job(nodes, alias, action, request, timeout, idempotent=False):
+    """派发单个节点任务并等待结果；幂等/只读动作遇网络类错误重试 1-2 次。"""
+    attempts = 3 if idempotent else 1
+    last = None
+    for attempt in range(attempts):
+        job_id = nodes.job(alias, action, request, timeout)
+        try:
+            return nodes.wait(job_id, timeout)
+        except (TimeoutError, RuntimeError) as exc:
+            last = exc
+            if not idempotent or attempt == attempts - 1:
+                raise
+            import time
+            time.sleep(1)
+    raise last
+
+
+def _node_upload(nodes, alias, args, workspace, timeout):
+    """服务端工作区文件 → Windows Downloads\\LiteCode，分块 + sha256 校验。"""
+    import base64
+    from lib.windows_transfer import resolve_within, sha256_hex, chunk_count, slice_chunk, sanitize_download_name, CHUNK
+    source = resolve_within(Path(workspace), args.get('source', ''))
+    if not source.is_file():
+        raise ValueError('源文件必须是工作区内的已有文件')
+    data = source.read_bytes()
+    total = chunk_count(len(data))   # 同时校验 ≤50MB
+    digest = sha256_hex(data)
+    name = sanitize_download_name(args.get('dest_name') or source.name)
+    transfer_id = _uuid()
+    result = None
+    for index in range(total):
+        request = {'transfer_id': transfer_id, 'name': name, 'index': index, 'total': total,
+                   'sha256': digest, 'data': base64.b64encode(slice_chunk(data, index)).decode()}
+        result = _run_node_job(nodes, alias, 'upload', request, timeout)
+        if not result.get('ok'):
+            raise RuntimeError('上传失败: ' + str(result.get('error', '未知错误')))
+    return {'ok': True, 'state': 'upload_done', 'path': result.get('path'), 'name': result.get('name'),
+            'size': len(data), 'sha256': digest, 'chunks': total}
+
+
+def _node_download(nodes, alias, args, workspace, timeout):
+    """Windows 文件 → 服务端工作区 uploads/，分块 + sha256 校验。"""
+    import base64
+    from lib.windows_transfer import reassemble, sanitize_download_name
+    meta = _run_node_job(nodes, alias, 'download', {'path': args.get('path', '')}, timeout)
+    if not meta.get('ok'):
+        raise RuntimeError('读取远端文件失败: ' + str(meta.get('error', '未知错误')))
+    total = int(meta['chunks'])
+    chunks = {}
+    for index in range(total):
+        part = _run_node_job(nodes, alias, 'download', {'path': args.get('path', ''), 'index': index}, timeout)
+        if not part.get('ok'):
+            raise RuntimeError('下载分块失败: ' + str(part.get('error', '未知错误')))
+        chunks[index] = base64.b64decode(part['chunk'], validate=True)
+    data = reassemble(chunks, meta['sha256'])
+    target = Path(workspace) / 'uploads' / ('Node-Download-' + _uuid()[:8] + '-' + sanitize_download_name(meta['name']))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return {'ok': True, 'state': 'download_done', 'path': str(target), 'name': meta['name'],
+            'size': len(data), 'sha256': meta['sha256']}
+
+
+def _uuid():
+    return uuid.uuid4().hex
+
+
 def execute(args, workspace):
     from core.tools.handlers.remote import _conn, _connect, _close
     action = args.get('action', 'screenshot')
     if action not in ACTIONS:
         raise ValueError('不支持的操作')
-    request = desktop_request(args, workspace)
     from lib.windows_nodes import Nodes
     nodes = Nodes(workspace)
-    if any(n['alias'] == args.get('alias') for n in nodes.list()):
+    node = next((n for n in nodes.list() if n['alias'] == args.get('alias')), None)
+    if node is not None:
+        if action in NEW_ACTIONS and node.get('update_state') != 'current':
+            raise ValueError('代理版本过低，等待自动更新：该节点运行的仍是旧版代理，暂不支持此动作')
+        if action == 'run_powershell' and not node.get('capabilities', {}).get('shell'):
+            raise ValueError('该节点未开启 shell 能力；请管理员在 Web 节点面板或 CLI 执行 nodes shell <alias> on 后再用')
         timeout = min(max(int(args.get('timeout', 60)), 10), 120)
-        job_id = nodes.job(args['alias'], action, request, timeout)
-        result = nodes.wait(job_id, timeout)
+        if action == 'run_powershell':
+            timeout = min(max(int(args.get('timeout', 60)) + 30, 40), 330)
+        if action == 'upload':
+            return {**_node_upload(nodes, args['alias'], args, workspace, timeout), 'alias': args['alias'], 'action': action}
+        if action == 'download':
+            return {**_node_download(nodes, args['alias'], args, workspace, timeout), 'alias': args['alias'], 'action': action}
+        request = desktop_request(args, workspace)
+        result = _run_node_job(nodes, args['alias'], action, request, timeout, idempotent=action in IDEMPOTENT_ACTIONS)
         result.update(alias=args['alias'], action=action)
         return result
+    if action in ('run_powershell', 'upload', 'download'):
+        raise ValueError('该动作仅支持已开启能力的主动回连节点，SSH 别名不可用')
+    request = desktop_request(args, workspace)
     conn, error = _conn(args)
     if error:
         raise ValueError(error)
@@ -89,6 +215,9 @@ def execute(args, workspace):
             target.write(Path(__file__).with_name('windows_desktop_ocr.py').read_text())
         with sftp.open(folder + '/windows_desktop_actions.py', 'w') as target:
             target.write(Path(__file__).with_name('windows_desktop_actions.py').read_text())
+        for extra in ('windows_system_actions.py', 'windows_file_actions.py', 'windows_transfer.py'):
+            with sftp.open(folder + '/' + extra, 'w') as target:
+                target.write(Path(__file__).with_name(extra).read_text())
         with sftp.open(folder + '/request.json', 'w') as target:
             target.write(json.dumps(request, ensure_ascii=False))
         pyw = str(Path(info['python']).with_name('pythonw.exe')) if '\\' not in info['python'] else info['python'].rsplit('\\', 1)[0] + '\\pythonw.exe'
@@ -122,6 +251,9 @@ def execute(args, workspace):
             local.parent.mkdir(parents=True, exist_ok=True)
             sftp.get(folder + '/' + result['image'], str(local))
             result['image'] = str(local)
+            screen_size = result.get('screen_size')
+            if isinstance(screen_size, list) and len(screen_size) == 2:
+                local.with_name(local.name + '.screen').write_text(json.dumps(screen_size))
             if result.get('before_image') == 'before.png':
                 before = local.with_name(local.stem + '-before.png')
                 sftp.get(folder + '/before.png', str(before))

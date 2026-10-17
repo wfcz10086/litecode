@@ -74,4 +74,10 @@ def perform(action, folder, args):
         after = capture_ocr(folder)
         result.update(state='clicked', target=target, click=[x, y], before_image='before.png',
                       image='screen.png', after_lines=after['lines'])
+    # OCR 识别用的是全分辨率原图; 仅把回传给模型的图片按需压缩, 坐标换算仍以原始屏幕为准。
+    if args.get('compress'):
+        from windows_desktop_actions import compress_screenshot_file
+        meta = compress_screenshot_file(folder / result['image'])
+        result.update(screen_size=meta['screen_size'], image_size=meta['image_size'],
+                      orig_bytes=meta['orig_bytes'], bytes=meta['bytes'])
     return result

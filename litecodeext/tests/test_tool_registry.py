@@ -14,7 +14,8 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 统一注册表引入前 TOOL_DEFS 的序列化指纹 (74 个工具)。变了说明发给模型的前缀变了。
 # 2026-10-16: ssh_exec / ssh_save_host 加 key_file / alias / jump (密钥登录 + 跳板); 其余 ssh_* / docker_remote_* 同步支持 key_file / alias / jump
 # 2026-10-16: 新增 windows_desktop 初始化、截图及微信登录状态工具。
-TOOL_DEFS_SHA256 = "5b251fb6ea56249aa9de9d954d3fdb3e5b86fd498becf528340a0ef4f89ea13d"
+# 2026-10-17: windows_desktop 增 launch_app/window_state/compress 及新快捷键; 新增 windows_system 工具 (系统运维 + 文件传输 + 受控 run_powershell)。
+TOOL_DEFS_SHA256 = "e92dffe96a434a6d791582cc8bcfcb12bc0a82079b59bbe76ae0191a26d33c22"   # 2026-10-17: windows_desktop 加 double_click 与选择、格式快捷键
 
 READ_ONLY_21 = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",

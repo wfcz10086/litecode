@@ -17,6 +17,7 @@ from .ssh_hosts_defs import SSH_HOSTS_DEFS
 from .browser_ref_defs import BROWSER_REF_DEFS
 from .windows_desktop_defs import WINDOWS_DESKTOP_DEFS
 from .windows_nodes_defs import WINDOWS_NODES_DEFS
+from .windows_system_defs import WINDOWS_SYSTEM_DEFS
 
 TOOL_DEFS = (
     SHELL_DEFS
@@ -34,6 +35,7 @@ TOOL_DEFS = (
     + BROWSER_REF_DEFS
     + WINDOWS_DESKTOP_DEFS
     + WINDOWS_NODES_DEFS
+    + WINDOWS_SYSTEM_DEFS
 )
 
 __all__ = [
@@ -41,4 +43,5 @@ __all__ = [
     "SHELL_DEFS", "WEB_DEFS", "MEDIA_DEFS", "CODE_DEFS",
     "AGENT_DEFS", "WORKFLOW_DEFS", "PROJECT_DEFS", "REMOTE_DEFS",
     "GIT_DEFS", "SNAPSHOT_DEFS", "TASK_DEFS", "SSH_HOSTS_DEFS", "BROWSER_REF_DEFS", "WINDOWS_DESKTOP_DEFS",
+    "WINDOWS_NODES_DEFS", "WINDOWS_SYSTEM_DEFS",
 ]

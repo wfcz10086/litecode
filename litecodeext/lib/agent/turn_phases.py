@@ -68,7 +68,7 @@ async def _turn_finalize(
     _usage.elapsed = time.time() - _usage.t0
     last_reply = next((m.get("content") or "" for m in reversed(_ctx.new_msgs) if m.get("role") == "assistant" and m.get("content")), "")
     total_msgs = len(_ctx.base_history) + len(_ctx.new_msgs)
-    log.info(f"\033[36m[{_ctx.sid_tag}]\033[0m <<< {str(last_reply)[:120]} \033[2m[{_usage.elapsed:.1f}s, total={total_msgs} delta={len(_ctx.new_msgs)}]\033[0m")
+    log.info(f"\033[36m[{_ctx.sid_tag}]\033[0m <<< {' '.join(str(last_reply).split())[:120]} \033[2m[{_usage.elapsed:.1f}s, total={total_msgs} delta={len(_ctx.new_msgs)}]\033[0m")
 
     # ── [TURN-END] 回合收尾状态快照 (单点埋点, 不逐个改 break) ──────────────
     # 起因: [EXEC-GATE] 只挂在"模型主动收尾"这一个出口上, 循环里还有若干别的出口

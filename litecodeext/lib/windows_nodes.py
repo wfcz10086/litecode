@@ -37,7 +37,9 @@ def _digest(value):
 
 _LIB = Path(__file__).resolve().parent
 # 与设备端 windows_node_agent.ASSETS 顺序一致; 路由用 read_text() 原样以 UTF-8 下发, 两端按相同字节算哈希。
-WORKER_FILES = ('windows_desktop_worker.py', 'windows_desktop_actions.py', 'windows_desktop_ocr.py')
+# 新增 Windows 端文件必须同时加进这里、windows_node_agent.ASSETS 和 routers 的 ASSETS 映射, 否则节点拿不到。
+WORKER_FILES = ('windows_desktop_worker.py', 'windows_desktop_actions.py', 'windows_desktop_ocr.py',
+                'windows_system_actions.py', 'windows_file_actions.py', 'windows_transfer.py')
 _VERSION_RE = re.compile(r'[0-9a-f]{16}')
 
 
@@ -104,7 +106,8 @@ class Nodes:
                 raise ValueError('节点别名已存在，不覆盖已有机器')
             data[alias] = {'id': uuid.uuid4().hex, 'alias': alias, 'state': 'awaiting_join',
                            'code_hash': _digest(code), 'expires': time.time() + 600, 'last_seen': 0,
-                           'server_url': base_url, 'encrypted_transport': base_url.startswith('https://')}
+                           'server_url': base_url, 'encrypted_transport': base_url.startswith('https://'),
+                           'capabilities': {'shell': False}}
             node_id = data[alias]['id']
         body = ("$s='" + base_url + "'; $b=Invoke-RestMethod ($s+'/api/windows/bootstrap.ps1'); "
                 "& ([scriptblock]::Create($b)) -Server $s -Code '" + code + "'")
@@ -172,6 +175,29 @@ class Nodes:
                                          and time.time() - node.get('observed_at', 0) < 90)
                 result.append(item)
             return result
+
+    SHELL_CAPABILITY = 'shell'
+
+    def set_capability(self, node_id, name, value):
+        """开/关节点能力（目前仅 shell）。只由管理接口/CLI 调用，工具层不得调用。"""
+        if name != self.SHELL_CAPABILITY:
+            raise ValueError('不支持的能力开关')
+        with self.locked() as data:
+            node = next((n for n in data.values() if n['id'] == node_id), None)
+            if not node:
+                raise ValueError('节点不存在')
+            if node['state'] in ('revoked', 'uninstalled'):
+                raise ValueError('节点已撤销或卸载，无法修改能力')
+            node.setdefault('capabilities', {})[name] = bool(value)
+            return {'alias': node['alias'], 'capabilities': dict(node['capabilities'])}
+
+    def node_capabilities(self, node_id):
+        """节点当前能力；供设备经认证轮询获取，用于本地二次校验。"""
+        with self.locked() as data:
+            node = next((n for n in data.values() if n['id'] == node_id), None)
+            caps = dict(node.get('capabilities', {})) if node else {}
+            caps.setdefault(self.SHELL_CAPABILITY, False)
+            return caps
 
     def revoke(self, node_id):
         with self.locked() as data:
@@ -357,6 +383,9 @@ class Nodes:
                     path.parent.mkdir(exist_ok=True, parents=True)
                     path.write_bytes(raw)
                     result[key] = str(path)
+                    screen_size = result.get('screen_size')
+                    if isinstance(screen_size, list) and len(screen_size) == 2:
+                        path.with_name(path.name + '.screen').write_text(json.dumps(screen_size))
             result.update(action=job['action'])
             job.update(state='done', result=result)
             _write(file, job)
