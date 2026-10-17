@@ -14,6 +14,9 @@
 #   VERSION:     str            默认 "0.0.1"
 #   AUTHOR:      str
 #   HEALTH_CHECK: async () -> bool   给管理页轮询用
+#   ROUTER:       fastapi.APIRouter  仓外插件挂 Web 路由 (由 routers.discover 收集, 不在本文件校验)
+#   ROUTER_ORDER: int            默认 500, >998 钳到 998 (static 兜底最后)
+#   ROUTER_PUBLIC: bool          默认 False = 统一要求登录; True 才放开. 详见 _contract.md
 #
 # ctx (PluginCtx) 提供:
 #   ctx["sid"]           会话 id

@@ -30,6 +30,14 @@ from lib.agent.loop_budget import _log_anchor
 #    13 个 continue/break 经 AST 分类全部指向段内循环, 零外层出口 → 整段可迁。
 #    out 8 字段 = AST 实测段内写∩段后读; reasoning_stall_count 段内只读故为参数。
 #    写回放 finally: 与内联时"异常抛出前变量已就地更新"的可见性语义一致。──
+def delta_reasoning(delta: dict) -> str:
+    """[v1.0] 推理/思考内容提取 — 多后端兼容:
+    vLLM 旧版 (< 0.9) / Ollama /v1/ → reasoning_content; vLLM 新版 (>= 0.9) → reasoning;
+    Ollama /api/chat 原生 → thinking。"""
+    return (delta.get("reasoning_content") or delta.get("reasoning")
+            or delta.get("thinking") or "")
+
+
 async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_count, out: StreamResult):
     """vLLM 流式调用主体: yield 透传 SSE chunk, 结果经 out 回传 8 字段。"""
     full_text = out.full_text
@@ -134,18 +142,8 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                 usage.total_completion_tokens += _ct2  # 真值优先, 覆盖估算
                                 iter_real_completion += _ct2
 
-                    # [v1.0] 推理/思考内容提取 — 多后端兼容
-                    # vLLM 旧版 (< 0.9)    → delta.reasoning_content
-                    # vLLM 新版 (>= 0.9)   → delta.reasoning
-                    # Ollama /v1/           → delta.reasoning_content
-                    # Ollama /api/chat      → delta.thinking (原生)
-                    # 无 parser 的模型       → <think>...</think> 嵌入 content（下方单独处理）
-                    _reasoning_chunk = (
-                        delta.get("reasoning_content") or
-                        delta.get("reasoning") or
-                        delta.get("thinking") or
-                        ""
-                    )
+                    # 无 parser 的模型 → <think>...</think> 嵌入 content（下方单独处理）
+                    _reasoning_chunk = delta_reasoning(delta)
                     if _reasoning_chunk:
                         _rc_clean, _rc_stripped = _strip_tool_call_literals(_reasoning_chunk)
                         if _rc_stripped:

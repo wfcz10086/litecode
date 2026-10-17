@@ -177,39 +177,8 @@ class Actor:
         return False
 
     # ── DAG ───────────────────────────────────────────────
-    def dag_new(self, name):
-        self.open_panel("dag")
-        self.page.evaluate("newDAG()")
-        self.page.wait_for_selector("#dc-name", timeout=3000)
-        self.page.fill("#dc-name", name)
-        self.page.click("#dc-ok")
-        self.page.wait_for_timeout(800)
-
-    def dag_add_node(self, agent_type):
-        sel = f"button[onclick*=\"addDAGNodeQuick('{agent_type}')\"]"
-        if self.page.locator(sel).count() > 0:
-            self.page.locator(sel).first.click()
-        else:
-            self.page.evaluate(f"addDAGNodeQuick('{agent_type}')")
-        self.page.wait_for_timeout(400)
-
-    def dag_save(self):
-        self.page.evaluate("saveDAG()")
-        try:
-            self.page.wait_for_selector("#toast.show", timeout=5000)
-        except PWTimeout:
-            pass
-
-    def dag_run(self, max_wait=240):
-        self.page.evaluate("runDAG()")
-        for _ in range(max_wait):
-            done = self.page.evaluate(
-                "()=>{const ns=[...document.querySelectorAll('.dag-node')];"
-                "return ns.length>0 && ns.every(n=>['success','done'].includes(n.dataset.status||''));}")
-            if done:
-                return True
-            self.page.wait_for_timeout(1000)
-        return False
+    # 2026-10-17: 旧 DAG 面板 (#pnl-dag) 已退役, dag_new/dag_add_node/dag_save/dag_run 随之删除;
+    # DAG UI 验收见 tests/web/flows/test_06_dag.py (新版 #dag-ui 全屏编辑器).
 
     # ── Settings ──────────────────────────────────────────
     def model_switch(self, model_id):

@@ -88,9 +88,50 @@ async def run(args: dict, ctx: dict) -> dict:
 {"ok": False, "error":  "..."}
 ```
 
+## 可选: 挂 Web 路由 (ROUTER, 2026-10-17 起; ABI v1 向后兼容扩展)
+
+`plugin.py` 可以**额外**导出一个 FastAPI 路由, web_ui 启动时与仓内 `routers/*_router.py` 一起 include。
+不导出这些字段的老插件 (如 `/opt/pptx`、`/opt/cad`) 行为不变; 只导出 `ROUTER`、不导出 `NAME`/`TOOLS` 的
+纯路由插件也可以 (工具侧当辅助模块跳过, 路由照常挂)。
+
+| 字段 | 类型 | 缺省 | 说明 |
+|---|---|---|---|
+| `ROUTER` | `fastapi.APIRouter` | 无 | 要挂的路由; 不是 `APIRouter` 实例 → 记日志跳过 |
+| `ROUTER_ORDER` | `int` | `500` | 注册顺序, 与仓内 router 的 `ORDER` 同一排序 `(ORDER, 名称)`, 路径重叠时先注册者生效。**>998 会被钳到 998**, 保证 `static_router` (999) 兜底永远最后; 非 int → 用 500 |
+| `ROUTER_PUBLIC` | `bool` | `False` | 默认插件路由**统一要求登录**; 只有显式 `True` 才放开 (如 webhook 回调) |
+
+```python
+# /opt/demo/plugin.py
+from fastapi import APIRouter
+ROUTER = APIRouter(prefix="/api/demo")     # 建议统一 /api/<插件名> 前缀, 避免与仓内冲突
+ROUTER_ORDER = 600
+
+@ROUTER.get("/ping")
+def ping():
+    return {"pong": True}
+```
+
+鉴权:
+- `ROUTER_PUBLIC` 不为 `True` 时, 机架不改动插件自己的 router 对象, 而是包一层
+  `APIRouter(dependencies=[Depends(routers.plugin_auth)])` 再 include。`plugin_auth` 复用
+  `plugins/auth/core.py` 的 cookie 校验 (与仓内 router 手动调用的 `require_auth(request)` 同源):
+  HTTP 未登录 → 401, WebSocket 未登录 → 以 1008 关闭。`config.web_ui.auth.enabled=false` 时全部放行 (与仓内一致)。
+- 该依赖只作用于 `@ROUTER.get/post/.../websocket` 声明的 FastAPI 路由; 用 `ROUTER.mount()` 挂的
+  StaticFiles / 子应用等 Starlette 原生路由**不受保护**, 插件须自行处理。
+- `ROUTER_PUBLIC = True` 的插件若有需要登录的端点, 必须在端点内自行调用
+  `from plugins.auth.core import require_auth; require_auth(request)` (仓内 router 的做法)。
+
+加载与隔离:
+- 模块对象**复用** `plugins.registry` 扫描时导入的那一份 (`registry.external_modules()`), 同一个 `plugin.py`
+  不会被导入两次, 工具 `run()` 与路由共享模块级状态。
+- 插件导入失败、`ROUTER` 类型错误、挂载异常 → 只记日志跳过, 不影响 web_ui 启动 (仓内 router 缺 `router` 仍直接报错)。
+- 未设置 `LITECODE_PLUGIN_PATH` 时不收集; 路由在 web_ui **启动时**挂上, `POST /api/plugins/reload` 只重扫工具,
+  路由改动需重启 web_ui 生效。
+- 前端面板 (插件自带 JS/CSS 注入主页) 暂不支持。
+
 ## 卸载
 
-`unset LITECODE_PLUGIN_PATH` → 下次 `registry.scan()` 该插件消失，LiteCode 零改动继续跑。
+`unset LITECODE_PLUGIN_PATH` → 下次 `registry.scan()` 该插件的工具消失, 下次 web_ui 启动其路由消失，LiteCode 零改动继续跑。
 
 ## 契约变更
 

@@ -61,13 +61,14 @@ def safely(case_name, case_fn, results, shot_dir):
 
 # ─── feature → case fn map ─────────────────────────────────
 def get_feature_cases(actor, shot_dir):
+    # 2026-10-17: panel_dag / dag_manual_save(A35) / dag_run_button(A37) / chain_dag_run_view_output(D07)
+    # 依赖已删除的旧 #pnl-dag 面板, 已移除; DAG UI 验收见 tests/web/flows/test_06_dag.py
     return {
         # ── A: single-feature ─────────────────────────────────
         "health":             ("A01", lambda: C.case_health(actor, shot_dir)),
         "panel_stats":        ("A_panels", lambda: C.case_panel(actor, shot_dir, "stats")),
         "panel_memory":       ("A_panels", lambda: C.case_panel(actor, shot_dir, "memory")),
         "panel_timer":        ("A_panels", lambda: C.case_panel(actor, shot_dir, "timer")),
-        "panel_dag":          ("A_panels", lambda: C.case_panel(actor, shot_dir, "dag")),
         "panel_settings":     ("A_panels", lambda: C.case_panel(actor, shot_dir, "settings")),
         "panel_project":      ("A_panels", lambda: C.case_panel(actor, shot_dir, "project")),
         "panel_wechat":       ("A_panels", lambda: C.case_panel(actor, shot_dir, "wechat")),
@@ -80,8 +81,6 @@ def get_feature_cases(actor, shot_dir):
         "timer_cron_agent":   ("A22", lambda: C.case_timer_cron_agent(actor, shot_dir)),
         "timer_once_shell":   ("A23", lambda: C.case_timer_once_shell(actor, shot_dir)),
         "upload_image":       ("A12", lambda: C.case_upload(actor, shot_dir)),
-        "dag_manual_save":    ("A35", lambda: C.case_dag_manual(actor, shot_dir)),
-        "dag_run_button":     ("A37", lambda: C.case_dag_run_button_state(actor, shot_dir)),
         "project_map_status": ("A43", lambda: C.case_project_map(actor, shot_dir)),
         "inject_traversal":   ("A59", lambda: C.case_inject_path_traversal(actor, shot_dir)),
         "inject_no_auth":     ("A62", lambda: C.case_inject_no_auth(actor, shot_dir)),
@@ -107,7 +106,6 @@ def get_feature_cases(actor, shot_dir):
         # ── D: chain integration ────────────────────────────
         "chain_search_save_recall": ("D01", lambda: C.chain_search_save_recall(actor, shot_dir)),
         "chain_write_map_query":    ("D02", lambda: C.chain_write_map_query(actor, shot_dir)),
-        "chain_dag_run_view_output":("D07", lambda: C.chain_dag_run_view_output(actor, shot_dir)),
         "chain_chat_create_dag":    ("D08", lambda: C.chain_chat_create_dag(actor, shot_dir)),
         "chain_chat_create_timer":  ("D09", lambda: C.chain_chat_create_timer(actor, shot_dir)),
         "chain_error_search_fix":   ("D10", lambda: C.chain_error_search_fix(actor, shot_dir)),
@@ -115,14 +113,14 @@ def get_feature_cases(actor, shot_dir):
 
 
 QUICK_FEATURES = [
-    "health", "panel_dag", "panel_settings", "panel_timer",
-    "model_switch_35b", "chat_simple", "dag_run_button",
+    "health", "panel_settings", "panel_timer",
+    "model_switch_35b", "chat_simple",
     "stats", "dags_list", "dags_jobs_list",
 ]
 
 NORMAL_FEATURES = QUICK_FEATURES + [
     "chat_qa_date", "timer_cron_agent", "timer_once_shell",
-    "upload_image", "dag_manual_save", "project_map_status",
+    "upload_image", "project_map_status",
     "inject_traversal", "inject_no_auth",
     "tool_get_tree", "tool_search_code", "tool_execute_shell",
     "chain_write_map_query",

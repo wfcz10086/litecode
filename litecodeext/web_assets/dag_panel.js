@@ -1,4 +1,7 @@
-// ── DAG 编辑器 (P34-d 三端补全) ────────────────────────────
+// ── 旧 DAG 面板残留 (P34-d) ─────────────────────────────
+// 2026-10-17 退役: #pnl-dag/#dag-canvas 已在 P0-6 删除, 画布操作函数 (loadDAG/newDAG/addDAGNode*/dagUndo/
+// dagClearStatus/aiGenDAG/saveDAG/showDAGNodeOutput) 已删, closeP 迁至 app.js。
+// 仅保留仍有调用方的: loadDAGList (panel_refresh) / _showDAGCard+_hideDAGCard / runDAG / _pollDAGJob 及其辅助。
 let _dagEditor=null,_dagCurrent=null,_dagNodeOutputBuf={};
 async function loadDAGList(){
   // 旧 #pnl-dag / #dag-select / #dag-canvas 与 dagEditorInit 已在 P0-6 删除, 原实现每次被调用都抛
@@ -6,32 +9,6 @@ async function loadDAGList(){
   // 界面开着且停在列表页时重绘列表, 其余情况无事可做。
   const ov=document.getElementById('dag-ui');
   if(ov&&ov.classList.contains('on')&&window.DAG&&window.DAG._state.screen==='list')window.DAG.showList();
-}
-async function loadDAG(name){
-  if(!name)return;_dagCurrent=name;
-  try{
-    const r=await fetch(`/api/dags/${encodeURIComponent(name)}`);const d=await r.json();
-    if(_dagEditor)_dagEditor.fromJSON(d.plan||d);
-  }catch(e){toast('加载 DAG 失败: '+e);}
-  /* [P54+] 自动拉该 DAG 最近一次 job 并注入 _dagLatestJob,
-     这样 tab 刷新后点节点也能看到上次结果, 不再 "节点尚未运行" 空白 */
-  try{
-    const jr = await fetch('/api/dags/jobs');
-    const jd = await jr.json();
-    const jobs = jd.jobs || jd.data || [];
-    /* 客户端过滤: 找该 DAG 的最近一次 job */
-    const target = jobs.find(j => j.dag_name === name || j.name === name) || jobs[0];
-    if (target){
-      const jid = target.job_id || target.id;
-      if (jid){
-        const dr = await fetch(`/api/dags/jobs/${encodeURIComponent(jid)}`);
-        const detail = await dr.json();
-        if (detail && (detail.agents || detail.job_id)){
-          window._dagLatestJob = detail;
-        }
-      }
-    }
-  }catch(e){ /* 静默, 没历史 job 不算错 */ }
 }
 /* [v1.12] 卡片式 DAG 编辑表单 — 替代所有 prompt() 弹窗
  * [2026-07-24 P0-1] 扩展: 加 task rows=8 + 高级选项 (timeout/max_retries/critical/when) +
@@ -215,41 +192,6 @@ function _showDAGCard(mode, ctx, onSave){
     });
   });
 }
-
-function newDAG(){
-  _showDAGCard('new-dag', {}, d=>{
-    _dagCurrent=d.name;
-    if(_dagEditor){_dagEditor._state.nodes.forEach(n=>n.el.remove());_dagEditor._state.nodes.clear();_dagEditor._state.edges=[];}
-    toast('新建 DAG: '+d.name+' — 加节点后保存');
-  });
-}
-function addDAGNode(){
-  if(!_dagEditor){toast('面板未初始化');return;}
-  _showDAGCard('new-node', {}, d=>{
-    _dagEditor.addNode({label:d.label, agent_type:d.agent_type, task:d.task});
-  });
-}
-/* [P47 修] 工具箱一键加节点 */
-function addDAGNodeQuick(agent_type){
-  if(!_dagEditor){toast('面板未初始化');return;}
-  const i=_dagEditor._state.nodes.size+1;
-  _dagEditor.addNode({label:agent_type+'_'+i, agent_type});
-}
-/* [P47 修] 撤销 — 删最近加入的节点 */
-let _dagHist=[];
-function dagUndo(){
-  if(!_dagEditor)return;
-  const ids=Array.from(_dagEditor._state.nodes.keys());
-  if(!ids.length){toast('无可撤销');return;}
-  _dagEditor.removeNode(ids[ids.length-1]);
-  toast('已撤销');
-}
-/* [v1.12 P75] 手动清空跑过的节点徽标 */
-function dagClearStatus(){
-  if(!_dagEditor){toast('画布未就绪');return;}
-  if(_dagEditor.clearAllStatus){_dagEditor.clearAllStatus();toast('🧹 已清空状态');}
-  else{toast('clearAllStatus 不可用');}
-}
 /* [v1.10] 运行当前 DAG: POST /api/dags/{name}/run → 拿 job_id → 轮询 → 节点染色 */
 /* [v1.14] 加运行状态栏 + Run 按钮在跑时置灰，跑完恢复 + 节点点击查看输出 */
 let _dagPollTimer=null;
@@ -257,121 +199,6 @@ let _dagRunStartTs=0;
 let _dagLatestJob=null;  /* 缓存最新 job detail，供节点点击查看 */
 /* [M1] Jenkins Blue Ocean 风 Build 详情面板. 由 dag_build_view.js 创建, runDAG/_pollDAGJob 更新. */
 let _dagBuildView=null;
-/* 单击节点显示该节点的输出 */
-window.showDAGNodeOutput = function(label){
-  if (!_dagLatestJob){
-    toast('暂无运行结果。点 ▶ 运行 后再来看');
-    return;
-  }
-  /* [P54+] 兜底匹配: label / step_id / agent_type 任意一项相等即视为命中 */
-  const agent = (_dagLatestJob.agents||[]).find(a =>
-    a.label === label || a.step_id === label ||
-    (a.label||a.agent_type) === label);
-  /* modal */
-  let modal = document.getElementById('dag-node-output-modal');
-  if (!modal) {
-    modal = document.createElement('div');
-    modal.id = 'dag-node-output-modal';
-    /* [v1.3] backdrop 加厚到 .88 + 4px 模糊, 不再让画布节点透出来干扰阅读 */
-    modal.style.cssText = 'display:none;position:fixed;inset:0;'
-      + 'background:rgba(0,0,0,.88);backdrop-filter:blur(4px);'
-      + '-webkit-backdrop-filter:blur(4px);z-index:9998;'
-      + 'align-items:center;justify-content:center';
-    modal.innerHTML = `
-      <div style="background:var(--bg2);border:1px solid var(--ac2);border-radius:10px;
-                  padding:18px;max-width:820px;max-height:85vh;width:92%;display:flex;
-                  flex-direction:column;gap:10px;font-size:13px;color:var(--tx1);
-                  box-shadow:0 12px 40px rgba(0,0,0,.55)">
-        <div style="display:flex;justify-content:space-between;align-items:center;
-                    border-bottom:1px solid var(--bd);padding-bottom:8px">
-          <div id="dag-node-output-title" style="font-weight:700;font-size:14px;color:var(--ac)">节点输出</div>
-          <div style="display:flex;gap:6px;align-items:center">
-            <button id="dag-node-output-copy" class="abtn"
-                    style="padding:3px 10px;font-size:11px" title="复制全部输出到剪贴板">📋 复制</button>
-            <button onclick="document.getElementById('dag-node-output-modal').style.display='none'"
-                    class="abtn" style="padding:3px 10px;font-size:11px">× 关闭</button>
-          </div>
-        </div>
-        <div id="dag-node-output-meta" style="font-size:11px;color:var(--tx3);font-family:var(--mono);
-             padding:4px 8px;background:var(--bg1);border-radius:4px"></div>
-        <pre id="dag-node-output-body" style="flex:1;overflow:auto;background:var(--bg1);
-              padding:12px;border-radius:6px;font-family:var(--mono);font-size:12px;
-              white-space:pre-wrap;word-break:break-word;color:var(--tx2);
-              border:1px solid var(--bd);min-height:120px;line-height:1.6"></pre>
-        <div style="font-size:10px;color:var(--tx3);text-align:right">点节点空白处或按 Esc 关闭</div>
-      </div>`;
-    modal.addEventListener('click', e=>{
-      if (e.target === modal) modal.style.display = 'none';
-    });
-    /* Esc 关闭 */
-    document.addEventListener('keydown', e=>{
-      if (e.key==='Escape' && modal.style.display==='flex') {
-        modal.style.display='none';
-      }
-    });
-    document.body.appendChild(modal);
-    /* 复制按钮 */
-    setTimeout(()=>{
-      const cpb = document.getElementById('dag-node-output-copy');
-      if (cpb) cpb.onclick = ()=>{
-        const t = document.getElementById('dag-node-output-body').textContent;
-        navigator.clipboard.writeText(t || '').then(
-          ()=>{cpb.textContent='✓ 已复制';setTimeout(()=>{cpb.textContent='📋 复制'},1500);},
-          ()=>{cpb.textContent='✗ 失败'});
-      };
-    }, 50);
-  }
-  const title = document.getElementById('dag-node-output-title');
-  const meta = document.getElementById('dag-node-output-meta');
-  const body = document.getElementById('dag-node-output-body');
-  /* [P44-c] 记录当前 modal 显示的 step，供 SSE chunk 实时 append 匹配 */
-  body.dataset.stepLabel = label;
-  body.dataset.stepId = agent ? (agent.step_id||agent.label||label) : label;
-  /* 实时 buf 优先；fallback 到轮询 final output */
-  const liveKey = body.dataset.stepId;
-  const liveBuf = _dagNodeOutputBuf[liveKey] || _dagNodeOutputBuf[label];
-  if (!agent && !liveBuf){
-    /* [P54+] job 在跑但该 step 还没完成 → 不再说 "尚未运行", 改为 "执行中 / 等待"  */
-    const jobRunning = _dagLatestJob && (_dagLatestJob.status === 'running' || _dagLatestJob.paused_at);
-    const jobJid = _dagLatestJob ? (_dagLatestJob.job_id || '').slice(0,8) : '';
-    if (jobRunning){
-      title.innerHTML = `节点：<span style="color:var(--wn,#f59e0b)">⏳ ${esc(label)}</span>`;
-      const done = ((_dagLatestJob.agents||[]).length);
-      const total = _dagLatestJob.step_count || '?';
-      meta.innerHTML = `<span style="color:var(--wn,#f59e0b);font-weight:600">执行中 / 等待调度</span>`
-                     + `  ·  进度 ${done}/${total}`
-                     + `  ·  🔖 job=${esc(jobJid)}`
-                     + `  ·  状态 ${esc(_dagLatestJob.status||'?')}`;
-      body.textContent = '该节点还未产出输出。整个 DAG 仍在运行, 节点完成后会自动填充。\n\n如果需要中断, 点工具栏的 ■ 停止。';
-      body.style.borderColor = 'var(--wn,#f59e0b)';
-    } else {
-      title.innerHTML = `节点：<span style="color:var(--tx2)">${esc(label)}</span>`;
-      meta.textContent = '该节点尚未运行（或运行未匹配 label）— 请先点 ▶ 运行';
-      body.textContent = '';
-      body.style.borderColor = 'var(--bd)';
-    }
-  } else {
-    const isOK = agent ? (!!agent.success && !agent.error) : false;
-    const isFail = agent ? !!agent.error : false;
-    const isLive = !!liveBuf && !isOK && !isFail;
-    const statusEmoji = isOK ? '✅' : (isFail ? '❌' : (isLive ? '▶' : '⏳'));
-    const statusText = isOK ? '成功' : (isFail ? '失败' : (isLive ? '运行中' : '进行中'));
-    const statusColor = isOK ? 'var(--ac3,#10b981)'
-                       : isFail ? 'var(--dg,#ef4444)'
-                       : 'var(--wn,#f59e0b)';
-    const agentLabel = agent ? (agent.label||label) : label;
-    const agentType = agent ? (agent.agent_type||'?') : '?';
-    title.innerHTML = `<span style="color:${statusColor}">${statusEmoji} ${esc(agentLabel)}</span>`
-                    + `  <span style="color:var(--tx3);font-weight:400;font-size:12px">[${esc(agentType)}]</span>`;
-    meta.innerHTML = `<span style="color:${statusColor};font-weight:600">${statusText}</span>`
-                   + (agent ? `  ·  ⏱ ${(agent.elapsed||0).toFixed(1)}s` : '')
-                   + `  ·  🔖 job=${(_dagLatestJob ? (_dagLatestJob.job_id||'') : '').slice(0,8)}`
-                   + (agent&&agent.error ? `  ·  ⚠ <span style="color:var(--dg)">${esc(agent.error.slice(0,60))}</span>` : '');
-    body.textContent = liveBuf || (agent ? (agent.output_preview || agent.error || '(子代理未返回内容)') : '▶ 运行中，等待输出...');
-    body.style.borderColor = statusColor;
-  }
-  modal.style.display = 'flex';
-};
 function _setDAGRunBtn(running){
   const btn=document.getElementById('dag-run-btn');
   if(!btn)return;
@@ -586,7 +413,7 @@ async function _pollDAGJob(job_id, total){
     _dagLatestJob = j;
     /* agents 里的每条对应一个 step, label/agent_type 用来匹配节点 */
     (j.agents||[]).forEach(a=>{
-      if(_dagEditor.setNodeStatus){
+      if(_dagEditor&&_dagEditor.setNodeStatus){  /* _dagEditor 恒为 null (旧画布已删), 不加守卫会让整轮 poll 抛错, build view 收不到更新 */
         const status=a.success?'done':(a.error?'failed':'running');
         _dagEditor.setNodeStatus(a.label||a.agent_type, status, a.elapsed);
       }
@@ -649,31 +476,3 @@ async function _pollDAGJob(job_id, total){
     }
   }catch(e){console.warn('poll err',e);}
 }
-/* [P47 修] AI 一键生成 DAG plan */
-async function aiGenDAG(){
-  _showDAGCard('ai-gen', {}, async d=>{
-    toast('🤖 生成中...');
-    try{
-      // 原调 /api/orchestration/generate (无此端点, 恒 404); 改走与新编辑器同一个生成端点
-      const r=await fetch('/api/dags/generate',{method:'POST',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({request:d.desc})});
-      const j=await r.json().catch(()=>({}));
-      if(r.ok && j.steps){
-        if(_dagEditor){_dagEditor.fromJSON(j.plan||j);}
-        toast(j.warning ? '✓ 已生成 (有校验提示, 保存前请检查)' : '✓ 已生成 '+j.steps.length+' 步');
-      }else{
-        toast('AI 生成失败: '+(j.error||('HTTP '+r.status)));
-      }
-    }catch(e){toast('生成失败: '+e);}
-  });
-}
-async function saveDAG(){
-  if(!_dagCurrent){toast('先选/新建一个 DAG');return;}
-  if(!_dagEditor){toast('面板未初始化');return;}
-  try{
-    const plan=_dagEditor.toJSON();
-    const r=await fetch(`/api/dags/${encodeURIComponent(_dagCurrent)}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(plan)});
-    if(r.ok){toast('已保存: '+_dagCurrent);loadDAGList();}else{toast('保存失败 HTTP '+r.status);}
-  }catch(e){toast('保存失败: '+e);}
-}
-function closeP(n){document.getElementById('pnl-'+n).classList.remove('open');if(n==='vnc'){const f=document.getElementById('novnc-frame');if(f)f.src='about:blank';}if(n==='dag'&&_dagEditor){_dagEditor._state.linkFrom=null;_dagEditor._state.nodes.forEach(nd=>nd.el.classList.remove('dag-link-src'));}}

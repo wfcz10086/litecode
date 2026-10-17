@@ -14,6 +14,8 @@ function toast(msg,d=2200){const t=document.getElementById('toast');t.textConten
 function togSB(){const sb=document.getElementById('sb'),ov=document.getElementById('ov');const o=sb.classList.toggle('open');ov.classList.toggle('show',o)}
 function closeSB(){document.getElementById('sb').classList.remove('open');document.getElementById('ov').classList.remove('show')}
 function openP(n){closeSB();document.getElementById('pnl-'+n).classList.add('open');if(n==='stats')loadStats();if(n==='memory')loadMem();if(n==='settings')loadSet();if(n==='wechat')loadWx();if(n==='wecom')loadWc();if(n==='timer')loadTimers();if(n==='sfiles')loadSFiles();if(n==='vnc')renderVnc();if(n==='project')loadProjects();if(n==='dag')loadDAGList();if(n==='artifacts')loadArtifacts();if(n==='bg')loadBG();if(n==='docker')renderDocker();}
+// 通用面板关闭 (2026-10-17 从退役的 dag_panel.js 迁来; 旧 #pnl-dag 分支随面板删除)
+function closeP(n){const p=document.getElementById('pnl-'+n);if(p)p.classList.remove('open');if(n==='vnc'){const f=document.getElementById('novnc-frame');if(f)f.src='about:blank';}}
 // ── Timer 管理 ──────────────────────────────────────────────
 async function loadTimers(){
   const el=document.getElementById('timer-bd');

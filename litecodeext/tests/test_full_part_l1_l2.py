@@ -14,6 +14,24 @@ from _full_common import (  # noqa: F401  (共享配置/颜色/记录器, 见 _f
 )
 
 
+def _route_paths(app) -> set:
+    return {getattr(r, "path", "") for r in app.routes}
+
+
+def _has_route(paths: set, route: str) -> bool:
+    """route 本身或以它为前缀的带参路由 (如 /api/chat → /api/chat/{sid}) 已注册。"""
+    return any(p == route or p.startswith(route + "/") for p in paths)
+
+
+def _gateway_app():
+    from fastapi import FastAPI
+    sys.path.insert(0, str(BASE))
+    from gateway import mount
+    app = FastAPI()
+    mount(app)
+    return app
+
+
 def _offline_l1_smoke() -> list:
     """离线单测 #44-73 (L1 低档): smoke / 元素存在 / 静态资源。"""
     results = []
@@ -52,32 +70,22 @@ def _offline_l1_smoke() -> list:
 
     # ── 47. server 路由存在性 (/health /v1/chat/completions) ──
     def test_server_routes():
-        # [router 拆分后过期] litecode_server.py 现在只 `from gateway import mount`,
-        # 具体路由被拆进 gateway/*.py (observability/model_mgmt/openai_compat/
-        # sessions/memory) 各自的 router 里, 单看 litecode_server.py 源码文本
-        # 找不到任何一条了 (真实路由集合仍完整, 只是搬了家)。
-        src = (BASE / "litecode_server.py").read_text()
-        src += "\n".join(
-            p.read_text() for p in (BASE / "gateway").glob("*.py")
-        )
+        # 行为断言: 真把 gateway 挂到 app 上, 查路由表 (原为源码字符串匹配, 代码一搬家就红)
+        paths = _route_paths(_gateway_app())
         for route in ("/health", "/v1/chat/completions", "/v1/models",
                       "/v1/sessions", "/v1/model/list", "/v1/model/switch"):
-            assert route in src, f"litecode_server(+gateway/) 缺路由 {route}"
+            assert _has_route(paths, route), f"gateway 未注册路由 {route}"
     _test("[v1.10] server 必须路由都注册", test_server_routes)
 
     # ── 48. web_ui 路由存在性 ──
     def test_webui_routes():
-        # [router 拆分后过期] /api/login 搬到 plugins/auth/core.py (经
-        # routers/auth_router.py re-export), /api/timers 搬到
-        # routers/timer_router.py — web_ui.py 自身文本已经找不到这两条了。
-        src = (BASE / "web_ui.py").read_text()
-        src += "\n".join(
-            p.read_text() for p in (BASE / "routers").glob("*.py")
-        )
-        src += (BASE / "plugins" / "auth" / "core.py").read_text()
+        # 行为断言: 查 web_ui.app 实际路由表 (含 routers/ 自动发现与 auth 插件)
+        sys.path.insert(0, str(BASE))
+        import web_ui
+        paths = _route_paths(web_ui.app)
         for route in ("/api/login", "/api/sessions", "/api/chat", "/api/health",
                       "/api/timers", "/api/models"):
-            assert route in src, f"web_ui(+routers/) 缺路由 {route}"
+            assert _has_route(paths, route), f"web_ui 未注册路由 {route}"
     _test("[v1.10] web_ui 必须路由都注册", test_webui_routes)
 
     # ── 49. web_ui.html 顶部按钮 (sbt) ≥ 7 个 ──
@@ -476,23 +484,30 @@ def _offline_l2_mid() -> list:
         assert tok and len(tok) >= 6, f"token 太弱: {tok}"
     _test("[v1.10] auth: token 长度合规", test_auth_token_match)
 
-    # ── 92. 鉴权: 401 在 server 路由中存在校验 ──
+    # ── 92. 鉴权: server 无/错令牌 401, 正确令牌放行 ──
     def test_auth_401_check():
-        # [router 拆分后过期] 鉴权拒绝逻辑搬到 gateway/_deps.py (共享依赖,
-        # 各 gateway router 复用), litecode_server.py 自身文本已经没有 401 了。
-        src = (BASE / "litecode_server.py").read_text()
-        src += "\n".join(
-            p.read_text() for p in (BASE / "gateway").glob("*.py")
-        )
-        assert "401" in src, "litecode_server(+gateway/) 没有 401 拒绝逻辑"
-    _test("[v1.10] auth: server 包含 401 拒绝路径", test_auth_401_check)
+        from fastapi.testclient import TestClient
+        import litecode_server as srv
+        client = TestClient(_gateway_app())
+        assert client.get("/v1/models").status_code == 401
+        assert client.get("/v1/models", headers={"Authorization": "Bearer wrong"}).status_code == 401
+        assert client.get("/v1/models", headers={"Authorization": f"Bearer {srv.TOKEN}"}).status_code == 200
+    _test("[v1.10] auth: server 无/错令牌返回 401", test_auth_401_check)
 
-    # ── 93. 鉴权: 403 在 web_ui 中 (登录页) ──
+    # ── 93. 鉴权: web_ui 开启鉴权时未登录 401 ──
     def test_auth_403_check():
-        src = (BASE / "web_ui.py").read_text()
-        # 401 或 403 至少一个 (登录失败拒绝)
-        assert "401" in src or "403" in src, "web_ui 缺鉴权拒绝码"
-    _test("[v1.10] auth: web_ui 含 401/403", test_auth_403_check)
+        from fastapi.testclient import TestClient
+        sys.path.insert(0, str(BASE))
+        import web_ui
+        from plugins.auth import core as auth
+        saved = auth._AUTH_ENABLED
+        auth._AUTH_ENABLED = True
+        try:
+            r = TestClient(web_ui.app).get("/api/sessions")   # 不进 with: 不跑 lifespan, 不起微信/定时器
+            assert r.status_code == 401, r.status_code
+        finally:
+            auth._AUTH_ENABLED = saved
+    _test("[v1.10] auth: web_ui 未登录返回 401", test_auth_403_check)
 
     # ── 94. failure_memory: record + find ──
     def test_failure_memory_crud():

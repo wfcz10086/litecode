@@ -491,7 +491,8 @@ _init_state(
 )
 # aproxy 函数会在 web_ui.py 内定义后注入 (见下方 _aproxy 定义之后的 state.S.aproxy = _aproxy)
 
-# 其余 router 由 routers.discover() 自动发现并按各模块 ORDER 顺序 include (插拔: 加文件即生效)
+# 其余 router 由 routers.discover() 自动发现并按各模块 ORDER 顺序 include (插拔: 加文件即生效);
+# 仓外插件 plugin.py 导出的 ROUTER 也一并收集 (见 plugins/_contract.md, 默认要求登录)
 from routers import discover as _discover_routers
 for _router in _discover_routers():
     app.include_router(_router)

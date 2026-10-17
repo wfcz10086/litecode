@@ -90,49 +90,7 @@ def case_upload(actor, shot_dir):
     return ok, f"chip count={actor.page.locator('#pfp .pfc').count()}", [s]
 
 
-# ─── ch5.1 DAG manual ────────────────────────────────────────
-def case_dag_manual(actor, shot_dir):
-    name = "self_test_dag_demo"
-    actor.dag_new(name)
-    for at in ("explorer", "coder", "tester"):
-        actor.dag_add_node(at)
-    s1 = actor.shot("dag_built.png", shot_dir)
-    actor.dag_save()
-    # don't actually run (slow); just verify save
-    s2 = actor.shot("dag_saved.png", shot_dir)
-    actor.close_all_panels()
-    return True, f"dag {name} saved with 3 nodes", [s1, s2]
-
-
-# ─── ch9 UI run-button-disabled (the v1.14 fix) ──────────────
-def case_dag_run_button_state(actor, shot_dir):
-    """Verify that runDAG() correctly disables the run button + shows status bar."""
-    actor.open_panel("dag")
-    # initial state — button enabled
-    btn_disabled_init = actor.page.evaluate(
-        "()=>document.getElementById('dag-run-btn')?.disabled || false")
-    # simulate running state via helper
-    actor.page.evaluate("_setDAGRunBtn(true)")
-    actor.page.evaluate("_setDAGStatusBar(true,{icon:'▶',text:'self-test',progress:'0/3 · 0s'})")
-    actor.page.wait_for_timeout(400)
-    btn_disabled_run = actor.page.evaluate(
-        "()=>document.getElementById('dag-run-btn').disabled")
-    fi_visible = actor.page.evaluate(
-        "()=>getComputedStyle(document.getElementById('dag-floating-indicator')).display!=='none'")
-    bar_visible = actor.page.evaluate(
-        "()=>getComputedStyle(document.getElementById('dag-status-bar')).display!=='none'")
-    s = actor.shot("dag_run_disabled.png", shot_dir)
-    # reset
-    actor.page.evaluate("_setDAGRunBtn(false); _setDAGStatusBar(false)")
-    actor.page.wait_for_timeout(300)
-    btn_disabled_after = actor.page.evaluate(
-        "()=>document.getElementById('dag-run-btn').disabled")
-    actor.close_all_panels()
-    ok = (btn_disabled_init is False and btn_disabled_run is True
-          and fi_visible and bar_visible
-          and btn_disabled_after is False)
-    return ok, (f"init={btn_disabled_init} run={btn_disabled_run} "
-                f"fi={fi_visible} bar={bar_visible} after={btn_disabled_after}"), [s]
+# ─── ch5.1 / ch9 DAG 旧面板 case (A35/A37) 已于 2026-10-17 随旧 #pnl-dag 面板退役删除 ───
 
 
 # ─── ch7 project_map ────────────────────────────────────────
@@ -205,44 +163,7 @@ def chain_write_map_query(actor, shot_dir):
     return ok, f"map_enabled={enabled} probe_in_fs={probe_exists}", [s1, s2]
 
 
-def chain_dag_run_view_output(actor, shot_dir):
-    """D07: 创建 DAG → run → 偷读 jobs API 验每节点 output_preview"""
-    name = "self_test_d07_dag"
-    # Delete if exists from a prior run
-    actor._verify_via_api(f"/api/dags/{name}", )
-    actor.dag_new(name)
-    for at in ("explorer", "writer"):
-        actor.dag_add_node(at)
-    actor.dag_save()
-    s1 = actor.shot("d07_dag_built.png", shot_dir)
-    # run
-    actor.page.evaluate("runDAG()")
-    actor.page.wait_for_timeout(2000)
-    # poll for completion via API (faster than UI wait)
-    import time
-    deadline = time.time() + 240
-    job_id = None
-    while time.time() < deadline:
-        jobs = actor._verify_via_api("/api/dags/jobs")
-        if isinstance(jobs, dict):
-            for j in jobs.get("jobs", []):
-                if j.get("name") == name and j.get("status") in ("done", "failed"):
-                    job_id = j.get("job_id"); break
-        if job_id: break
-        actor.page.wait_for_timeout(3000)
-    s2 = actor.shot("d07_dag_done.png", shot_dir)
-    if not job_id:
-        return False, "no job completed in 240s", [s1, s2]
-    detail = actor._verify_via_api(f"/api/dags/jobs/{job_id}")
-    agents = detail.get("agents", []) if isinstance(detail, dict) else []
-    # output_preview can be empty if subagent has no task (default DAG nodes
-    # added via addDAGNodeQuick have empty task). Accept any successful run.
-    succeeded = sum(1 for a in agents if a.get("success"))
-    has_output = sum(1 for a in agents
-                     if a.get("output_preview") and len(a["output_preview"]) > 0)
-    ok = len(agents) > 0 and succeeded == len(agents)
-    return ok, (f"job={job_id} agents={len(agents)} succeeded={succeeded} "
-                f"with_output={has_output}"), [s1, s2]
+# D07 chain_dag_run_view_output 依赖旧面板 newDAG/addDAGNodeQuick/saveDAG, 2026-10-17 随面板退役删除
 
 
 def chain_chat_create_dag(actor, shot_dir):

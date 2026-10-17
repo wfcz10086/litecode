@@ -77,6 +77,7 @@
 |---|---|---|---|
 | plugin 挂载 | registry 扫 `tools/*.py` + 外部 `LITECODE_PLUGIN_PATH` 下 `plugin.py` | 🟢 真插拔 | `plugins/registry.py`, `_contract.py` |
 | 外部项目 adapter | `/opt/cad`、`/opt/pptx` 靠环境变量挂入 | 🟢 真插拔 | `registry._external_candidates` |
+| 外部插件 Web 路由 | `plugin.py` 可选导出 `ROUTER`/`ROUTER_ORDER`/`ROUTER_PUBLIC`,默认要求登录 | 🟢 真插拔(启动时挂) | `routers/__init__.py` `discover_plugin_routers` |
 | 生图 provider | config 实例 + `_DISPATCH` 类型 dict | 🟡 半插拔 | `plugins/tools/imagegen.py` |
 | 模型后端 | `config.models[]`,按 backend_type/api_format 分派 | 🟡 配置驱动 | `config.json`, `lib/thinking_adapter.py` |
 | web 搜索引擎 | `config.search.*[]` URL 模板 | 🟡 半插拔 | `plugins/tools/web_search.py` |

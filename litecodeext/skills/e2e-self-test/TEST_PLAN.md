@@ -39,15 +39,15 @@
 | **A29** | timer/delete | tmrDel(tid) | timer removed from list |
 | **A30** | timer/history | GET /api/timers/{id}/history | array |
 | **A31** | timer/notifications | GET /api/timers/notifications | array |
-| **A32** | dag/create | newDAG + dc-name fill + dc-ok | /api/dags/{name} stored |
-| **A33** | dag/add-node | addDAGNodeQuick(coder) | canvas .dag-node count++ |
+| ~~A32~~ | dag/create | ~~newDAG~~ (2026-10-17 旧面板退役, 已删) | — |
+| ~~A33~~ | dag/add-node | ~~addDAGNodeQuick~~ (2026-10-17 旧面板退役, 已删) | — |
 | **A34** | dag/connect | Shift+click pair | edge stored on save |
-| **A35** | dag/save | saveDAG | toast 已保存 |
+| ~~A35~~ | dag/save | ~~saveDAG~~ (2026-10-17 旧面板退役, 已删) | — |
 | **A36** | dag/run | runDAG | jobs/{job_id} status=done |
-| **A37** | dag/run-button-disabled | runDAG → check #dag-run-btn | disabled=true |
+| ~~A37~~ | dag/run-button-disabled | (2026-10-17 旧面板退役, #dag-run-btn 已不存在) | — |
 | **A38** | dag/status-bar | runDAG → check #dag-status-bar | display=block |
 | **A39** | dag/floating-indicator | runDAG → check #dag-floating-indicator | display=flex |
-| **A40** | dag/AI-gen | aiGenDAG → fill desc → ok | /api/dags new dag created |
+| ~~A40~~ | dag/AI-gen | ~~aiGenDAG~~ (2026-10-17 旧面板退役, 已删) | — |
 | **A41** | dag/jobs/list | GET /api/dags/jobs | array |
 | **A42** | dag/job/detail | GET /api/dags/jobs/{job_id} | agents + final_output |
 | **A43** | project_map/status | GET /api/map_status | enabled=true |
@@ -129,14 +129,14 @@
 | **D04** | timer→fire→notify | 建 cron+web_notify 1min → 等 75s → /api/timers/notifications ≥1 | yes |
 | **D05** | timer→fire→agent_chat | 建 cron+agent → 等 130s → 该 sid history 多 1 条 assistant | yes |
 | **D06** | upload→vision→summary | 上传中文 PNG → vision_ocr 识别 → writer 摘要 | 摘要含图片关键字 |
-| **D07** | DAG→run→view-output | plan_full DAG run → /api/dags/jobs/{id}.agents[].output_preview ≥80 字 | yes |
+| ~~D07~~ | DAG→run→view-output (2026-10-17 旧面板退役, case 已删) | plan_full DAG run → /api/dags/jobs/{id}.agents[].output_preview ≥80 字 | yes |
 | **D08** | chat-create-DAG | 让 agent: "创建一个 DAG ..." → 验 /api/dags 多一条 | yes |
 | **D09** | chat-create-timer | 让 agent: "每 1 分钟提醒 ..." → 验 /api/timers 多一条 | yes |
 | **D10** | error→search→fix | 抛 ImportError → search_code_error → patch_file | repo 自愈 |
 
 ## 模式
 
-- **quick** (~90s): A01, A05, A09, A12, A19, A37, A38, A39, A43
+- **quick** (~90s): A01, A05, A09, A12, A19, A38, A39, A43
 - **normal** (~10min): + A22..A29 + B01..B05 + C01,C03 + D02
 - **full** (~45min): 全部 A + B + C + D
 
@@ -150,7 +150,7 @@ python3 litecodeext/skills/e2e-self-test/scripts/run.py quick
 "跑 e2e-self-test full" → spawn tester subagent → calls run.py full
 
 # Single feature
-python3 litecodeext/skills/e2e-self-test/scripts/run.py feature --feature dag_run_button
+python3 litecodeext/skills/e2e-self-test/scripts/run.py feature --feature dags_list
 ```
 
 ## 自检循环（self-fix loop）

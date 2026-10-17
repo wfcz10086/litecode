@@ -42,6 +42,9 @@ class Registry:
         self._plugins: dict[str, PluginSpec] = {}
         self._load_errors: list[tuple[str, str]] = []   # (path, err)
         self._bridge: Optional[dict[str, PluginSpec]] = None
+        # 外部插件模块对象 (path → module), 供 Web 路由收集复用同一份模块状态, 不二次导入
+        self._ext_modules: dict[str, object] = {}
+        self._scanned = False
 
     # ── 查询 ─────────────────────────────────────────
     def get(self, name: str) -> Optional[PluginSpec]:
@@ -82,12 +85,21 @@ class Registry:
     def load_errors(self) -> list[tuple[str, str]]:
         return list(self._load_errors)
 
+    def external_modules(self) -> list[tuple[str, object]]:
+        """已成功导入的外部插件模块 [(path, module)], 按扫描顺序。未扫过则先扫一次。
+        含只导出 ROUTER 不导出工具的模块 (工具侧视为辅助模块跳过, 这里仍保留)。"""
+        if not self._scanned:
+            self.scan()
+        return list(self._ext_modules.items())
+
     # ── 扫描 ─────────────────────────────────────────
     def scan(self) -> int:
         """全量重扫. 返回加载成功的插件数量."""
         self._plugins.clear()
         self._load_errors.clear()
+        self._ext_modules.clear()
         self._bridge = None
+        self._scanned = True
 
         for p in self._internal_candidates():
             self._try_load(p, origin="internal")
@@ -143,6 +155,9 @@ class Registry:
             self._load_errors.append((str(path), f"import failed: {e!r}"))
             log.exception("plugin import failed: %s", path)
             return
+
+        if origin == "external":
+            self._ext_modules[str(path)] = mod
 
         # 未声明 NAME 也未声明 TOOLS → 辅助模块 (如 guard.py), 静默跳过
         if not hasattr(mod, "NAME") and not hasattr(mod, "TOOLS"):

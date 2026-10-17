@@ -26,26 +26,57 @@ def _offline_v10_fixes() -> list:
 
     # ── 21. 推理字段 3 后端兼容 (v1.0) ──
     def test_reasoning_multi_backend():
-        sv_file = BASE / "lib" / "agent" / "llm_call.py"   # 流解析段已从 litecode_server 拆出
-        content = sv_file.read_text()
-        # 应该同时支持 3 种字段名
-        assert 'delta.get("reasoning_content")' in content, "缺 vLLM 旧版 reasoning_content"
-        assert 'delta.get("reasoning")' in content, "缺 vLLM 新版 reasoning"
-        assert 'delta.get("thinking")' in content, "缺 Ollama native thinking"
+        # 行为断言: 三种后端字段都能取出推理文本 (原为源码字符串匹配)
+        sys.path.insert(0, str(BASE))
+        from lib.agent.llm_call import delta_reasoning
+        assert delta_reasoning({"reasoning_content": "a"}) == "a", "缺 vLLM 旧版 / Ollama v1 reasoning_content"
+        assert delta_reasoning({"reasoning": "b"}) == "b", "缺 vLLM 新版 reasoning"
+        assert delta_reasoning({"thinking": "c"}) == "c", "缺 Ollama native thinking"
+        assert delta_reasoning({"content": "答案"}) == ""
+        assert delta_reasoning({"reasoning_content": None, "reasoning": "b"}) == "b"
     _test("[v1.0] reasoning 字段 3 后端兼容 (vLLM旧/新/Ollama)", test_reasoning_multi_backend)
 
     # ── 22. 服务器 memory 后台异步化 (v1.0 修复微信延迟，v1.5 拆为 3 worker) ──
     def test_memory_bg_thread():
-        sv_file = BASE / "lib" / "agent" / "turn_persist.py"   # 回合收尾持久化已从 litecode_server 拆出
-        content = sv_file.read_text()
-        # v1.5 P35-a 修：原 _bg_memory_worker 被拆为三个独立 worker，
-        # 防止 LLM 压缩 600s 超时拖慢 rule-memory（秒级）。任一存在即视为异步化已生效。
-        bg_workers = ["_bg_compress_worker", "_bg_fast_worker", "_bg_smart_worker"]
-        present = [w for w in bg_workers if w in content]
-        assert len(present) >= 1, \
-            f"缺后台内存处理函数 — 微信回复延迟 bug 未修复 (期望 {bg_workers} 至少一个)"
-        # 应该用 threading.Thread 启动
-        assert "threading.Thread" in content, "memory worker 未用 threading.Thread 启动"
+        # 行为断言: 记忆更新再慢 (这里每个 worker 卡 2s), 回合收尾也必须立即返回,
+        # 三个 worker (compress/fast/smart) 都在后台线程里跑到。原为源码字符串匹配。
+        import threading
+        from types import SimpleNamespace
+        sys.path.insert(0, str(BASE))
+        from lib.agent import turn_persist as tp
+        gate, ran = threading.Event(), []
+
+        class SlowMgr:
+            def check_and_compact(self, msgs, _force_async=False):
+                ran.append("compress"); gate.wait(2)
+
+            def on_task_end(self, msgs):
+                ran.append("fast"); gate.wait(2)
+
+        def slow_smart(*a):
+            ran.append("smart"); gate.wait(2)
+
+        patched = {"HAS_MEMORY": True, "_save_history": lambda *a: None,
+                   "_mem_get": lambda **k: SlowMgr(), "_smart_auto_memory": slow_smart,
+                   "_auto_update_user": lambda **k: None, "_auto_update_tools": lambda **k: None}
+        saved = {k: getattr(tp, k) for k in patched}
+        try:
+            for k, v in patched.items():
+                setattr(tp, k, v)
+            ctx = SimpleNamespace(session_id="t-membg", sid_tag="t-membg",
+                                  base_history=[], new_msgs=[{"role": "user", "content": "hi"}])
+            t0 = time.time()
+            tp._turn_persist(ctx, SimpleNamespace(), SimpleNamespace(project_root=None), SimpleNamespace())
+            elapsed = time.time() - t0
+            assert elapsed < 1.0, f"回合收尾被记忆更新阻塞 {elapsed:.1f}s — 微信回复延迟 bug 回归"
+            deadline = time.time() + 2
+            while len(ran) < 3 and time.time() < deadline:
+                time.sleep(0.02)
+            assert sorted(ran) == ["compress", "fast", "smart"], f"后台 worker 未全部启动: {ran}"
+        finally:
+            gate.set()
+            for k, v in saved.items():
+                setattr(tp, k, v)
     _test("[v1.0] memory 异步化: 修复微信延迟 82 秒（v1.5 拆 3 worker）", test_memory_bg_thread)
 
     # ── 23. subagent 防御性 <think> 剥离 (v1.0) ──

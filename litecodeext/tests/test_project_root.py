@@ -21,6 +21,12 @@ class TestProjectRoot(unittest.TestCase):
         self.assertEqual(infer_project_root(WS, "/opt/other/x.py"), "")
         self.assertEqual(infer_project_root(WS, f"{WS}x/y.py"), "")      # 前缀相同但不是子目录
 
+    def test_relative_path_resolved_like_write_file(self):
+        self.assertEqual(infer_project_root(WS, "livermore/render.py"), f"{WS}/livermore")
+        self.assertEqual(infer_project_root(WS, "./a/b/c.py"), f"{WS}/a")
+        self.assertEqual(infer_project_root(WS, "render.py"), "")                # 工作区根目录脚本仍不算项目
+        self.assertEqual(infer_project_root(WS, "../etc/x/y.py"), "")           # 拼出工作区之外
+
     def test_oneoff_names(self):
         for n in ("probe_ssh.py", "tmp_fix.py", "scratch.py", "_x.py", "Probe2.py"):
             self.assertTrue(is_oneoff(n), n)

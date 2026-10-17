@@ -9,7 +9,7 @@ sys.path[:0] = [str(ROOT), str(ROOT / 'core')]
 def test_all_router_modules_discovered_static_last():
     import routers
     from routers import static_router, chat_router
-    found = routers.discover()
+    found = routers.discover(include_plugins=False)   # 仓内 router; 仓外插件见 test_plugin_router.py
     modules = sorted(p.stem for p in (ROOT / 'routers').glob('*_router.py') if p.stem != 'auth_router')
     assert len(found) == len(modules)
     assert found[-1] is static_router.router                # 兜底静态资源必须最后
