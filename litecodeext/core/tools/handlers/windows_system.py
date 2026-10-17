@@ -11,7 +11,7 @@ async def h_windows_system(sid, args):
     try:
         action = args.get('action')
         if action not in ('system_info', 'processes', 'kill_process', 'services',
-                          'list_dir', 'download', 'upload', 'run_powershell'):
+                          'list_dir', 'download', 'upload', 'run_powershell', 'inspect_file'):
             raise ValueError('不支持的系统动作')
         result = await asyncio.to_thread(execute, args, WORKSPACE)
         text = json.dumps(result, ensure_ascii=False)

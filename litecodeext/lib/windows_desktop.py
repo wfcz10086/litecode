@@ -9,10 +9,12 @@ import uuid
 LEGACY_ACTIONS = ('initialize', 'screenshot', 'wechat_login', 'wechat_status', 'ocr', 'click_text', 'type_secret',
                   'open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window', 'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover')
 NEW_ACTIONS = ('system_info', 'processes', 'kill_process', 'services', 'run_powershell',
-               'list_dir', 'download', 'upload', 'launch_app', 'window_state', 'double_click')
+               'list_dir', 'download', 'upload', 'launch_app', 'window_state', 'double_click', 'inspect_file')
+# inspect_file 是纯服务端编排的动作: 不下发给节点, 由服务端复用已有节点动作完成 (inspect_file = download + 服务端解析),
+# 因此节点端无需新代码; 仍放进 NEW_ACTIONS, 让版本门禁按它依赖的 download 能力把关。
 ACTIONS = LEGACY_ACTIONS + NEW_ACTIONS
 # 幂等/只读动作: 网络类错误可安全重试; 点击/输入/结束进程/传输等有副作用动作绝不自动重试。
-IDEMPOTENT_ACTIONS = ('screenshot', 'system_info', 'processes', 'list_dir', 'services', 'windows')
+IDEMPOTENT_ACTIONS = ('screenshot', 'system_info', 'processes', 'list_dir', 'services', 'windows', 'inspect_file')
 
 
 def desktop_request(args, workspace):
@@ -136,17 +138,17 @@ def _node_upload(nodes, alias, args, workspace, timeout):
             'size': len(data), 'sha256': digest, 'chunks': total}
 
 
-def _node_download(nodes, alias, args, workspace, timeout):
+def _node_download(nodes, alias, args, workspace, timeout, idempotent=False):
     """Windows 文件 → 服务端工作区 uploads/，分块 + sha256 校验。"""
     import base64
     from lib.windows_transfer import reassemble, sanitize_download_name
-    meta = _run_node_job(nodes, alias, 'download', {'path': args.get('path', '')}, timeout)
+    meta = _run_node_job(nodes, alias, 'download', {'path': args.get('path', '')}, timeout, idempotent)
     if not meta.get('ok'):
         raise RuntimeError('读取远端文件失败: ' + str(meta.get('error', '未知错误')))
     total = int(meta['chunks'])
     chunks = {}
     for index in range(total):
-        part = _run_node_job(nodes, alias, 'download', {'path': args.get('path', ''), 'index': index}, timeout)
+        part = _run_node_job(nodes, alias, 'download', {'path': args.get('path', ''), 'index': index}, timeout, idempotent)
         if not part.get('ok'):
             raise RuntimeError('下载分块失败: ' + str(part.get('error', '未知错误')))
         chunks[index] = base64.b64decode(part['chunk'], validate=True)
@@ -156,6 +158,22 @@ def _node_download(nodes, alias, args, workspace, timeout):
     target.write_bytes(data)
     return {'ok': True, 'state': 'download_done', 'path': str(target), 'name': meta['name'],
             'size': len(data), 'sha256': meta['sha256']}
+
+
+def _node_inspect(nodes, alias, args, workspace, timeout):
+    """回读核对: 复用 download 把文件取回服务端 uploads/ (保留副本便于审计), 再在服务端解析真实内容。
+
+    路径 (含 %USERPROFILE% 等环境变量) 由节点端 download 原样展开; 节点端无需新代码。
+    """
+    from lib.doc_inspect import inspect
+    path = args.get('path', '')
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError('inspect_file 需要 Windows 文件路径 path')
+    fetched = _node_download(nodes, alias, args, workspace, timeout, idempotent=True)
+    parsed = inspect(fetched['path'])
+    parsed.update(remote_path=path, local_copy=fetched['path'],
+                  basis='以下为文件真实内容 (服务端解析), 汇报里的数字/文字以此为准, 不以截图/OCR 为准')
+    return parsed
 
 
 def _uuid():
@@ -182,11 +200,13 @@ def execute(args, workspace):
             return {**_node_upload(nodes, args['alias'], args, workspace, timeout), 'alias': args['alias'], 'action': action}
         if action == 'download':
             return {**_node_download(nodes, args['alias'], args, workspace, timeout), 'alias': args['alias'], 'action': action}
+        if action == 'inspect_file':
+            return {**_node_inspect(nodes, args['alias'], args, workspace, timeout), 'alias': args['alias'], 'action': action}
         request = desktop_request(args, workspace)
         result = _run_node_job(nodes, args['alias'], action, request, timeout, idempotent=action in IDEMPOTENT_ACTIONS)
         result.update(alias=args['alias'], action=action)
         return result
-    if action in ('run_powershell', 'upload', 'download'):
+    if action in ('run_powershell', 'upload', 'download', 'inspect_file'):
         raise ValueError('该动作仅支持已开启能力的主动回连节点，SSH 别名不可用')
     request = desktop_request(args, workspace)
     conn, error = _conn(args)

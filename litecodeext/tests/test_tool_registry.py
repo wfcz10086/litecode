@@ -15,7 +15,8 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 2026-10-16: ssh_exec / ssh_save_host 加 key_file / alias / jump (密钥登录 + 跳板); 其余 ssh_* / docker_remote_* 同步支持 key_file / alias / jump
 # 2026-10-16: 新增 windows_desktop 初始化、截图及微信登录状态工具。
 # 2026-10-17: windows_desktop 增 launch_app/window_state/compress 及新快捷键; 新增 windows_system 工具 (系统运维 + 文件传输 + 受控 run_powershell)。
-TOOL_DEFS_SHA256 = "e92dffe96a434a6d791582cc8bcfcb12bc0a82079b59bbe76ae0191a26d33c22"   # 2026-10-17: windows_desktop 加 double_click 与选择、格式快捷键
+# 2026-10-17: windows_desktop 加 double_click 与选择、格式快捷键。
+TOOL_DEFS_SHA256 = "746998cd5ae05be8a9fe70882add1501a24592f1bc131067badcbe8d7b565e1b"   # 2026-10-17: windows_system 加 inspect_file 回读核对; windows_desktop 描述加回读要求
 
 READ_ONLY_21 = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",

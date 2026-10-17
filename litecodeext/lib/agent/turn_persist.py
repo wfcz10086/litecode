@@ -13,6 +13,23 @@ from lib.config import mem_get as _mem_get
 from lib.config import smart_auto_memory as _smart_auto_memory
 from lib.session import save_history as _save_history
 from lib.turn_context import strip as _turn_strip
+import re as _re
+
+# 与 web_ui._SYS_INJECT_RE 同一约定: LiteCode 自注入的 role=user 伪消息以 "[SYSTEM" 开头
+# ([SYSTEM-EXEC-GATE] / [SYSTEM-READBACK] / [SYSTEM] ...), 是给模型的内部指令, 不是用户原话。
+_SYS_INJECT_RE = _re.compile(r'^\[SYSTEM[-\]]')
+
+
+def _is_sys_inject(msg) -> bool:
+    if not isinstance(msg, dict):
+        return False
+    c = msg.get("content")
+    return msg.get("role") == "user" and isinstance(c, str) and bool(_SYS_INJECT_RE.match(c.lstrip()))
+
+
+def memory_input(base_history, new_msgs):
+    """记忆提取的输入: 剥掉 <context> 段, 并去掉 [SYSTEM...] 自注入伪 user 消息 (只看用户原话)。"""
+    return [m for m in _turn_strip(base_history) + list(new_msgs) if not _is_sys_inject(m)]
 
 
 def _turn_persist(_ctx, _test_state, _pm_state, _batch_state):
@@ -20,7 +37,7 @@ def _turn_persist(_ctx, _test_state, _pm_state, _batch_state):
     原 agent_stream finally 段的 try 体; 外层 try/except/finally (清中断标记+释放会话锁) 留在原处。"""
     if _ctx.session_id and _ctx.new_msgs:
         _save_history(_ctx.session_id, _ctx.base_history, _ctx.new_msgs)
-        all_msgs = _turn_strip(_ctx.base_history) + _ctx.new_msgs   # 记忆提取只看用户原话
+        all_msgs = memory_input(_ctx.base_history, _ctx.new_msgs)   # 记忆提取只看用户原话
         if HAS_MEMORY:
             # [v1.0] 所有 memory 压缩/更新都放后台线程
             # 之前: check_and_compact 同步调 httpx.post(timeout=180) 压缩

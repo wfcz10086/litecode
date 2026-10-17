@@ -6,12 +6,15 @@ from lib.config import WORKSPACE
 from lib.config import log
 from lib.agent.tool_names import _WRITE_TOOL_NAMES_STR
 from lib.config import CFG
+from lib.agent import readback_gate as _readback
 _AGT = CFG.get("agent", {})
 
 
 def _after_tool_batch(_ctx, _guard_stats, _iteration, _iter_write_success, _misc_state, _pm_state, _test_state, _webtest_state, _batch_state, tool_call_list, tool_results):
     """一批工具调用执行完之后: 写入追踪、PROJECT_MAP/测试/收尾验证提醒、批量写入/只读/规划闸。
     原 agent_stream 主循环内联段 (无 yield/await/段外跳转), 状态经各 state 对象原地改写。"""
+    # ── [READBACK] 记录 Windows 界面改动 / 回读动作, 供收尾前回读闸判定 (lib/agent/readback_gate.py) ──
+    _readback.observe(_ctx, tool_call_list, tool_results)
     # ── [PROJECT_MAP + TEST] 追踪写入文件 ──
     _SRC_EXTS = {".py", ".js", ".ts", ".sh", ".bash", ".go", ".rs", ".java"}
     _SKIP_NAMES = {"__init__", "config", "settings", "constants", "conftest",

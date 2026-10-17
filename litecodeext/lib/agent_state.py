@@ -161,6 +161,7 @@ class TurnContext:
     turn_context: str = ""      # 本轮挂在 user 消息前的动态上下文 (lib/turn_context.py), 随 new_msgs 持久化
     disabled_tools: frozenset = frozenset()   # 本次请求禁用的工具 (lib/tool_filter.py), 评测断网用
     failure: Optional[dict] = None   # 本轮失败出口打标 {kind, stuck_at, detail} (lib/agent/failure_loop.py)
+    readback: Any = None             # [READBACK] 收尾前回读闸状态 (lib/agent/readback_gate.py), 首次观测时创建
 
 
 @dataclass

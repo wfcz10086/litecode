@@ -47,9 +47,40 @@
 | `list_dir` | 列目录（名称/大小/修改时间/是否目录），最多 500 项 |
 | `download` | 把 Windows 文件（≤50MB）取回服务端工作区 `uploads/` 并登记为产出物，返回服务端路径 |
 | `upload` | 把服务端工作区内的文件（`source` 必须在工作区内，≤50MB）发到 Windows 的 `%USERPROFILE%\Downloads\LiteCode\`，文件名清洗防穿越、同名自动加序号不覆盖 |
+| `inspect_file` | **回读核对**：把 Windows 文件（≤50MB，路径支持 `%USERPROFILE%` 等环境变量）取回服务端并解析真实内容，见下文「回读核对」 |
 | `run_powershell` | 执行 PowerShell：**默认关闭**，支持 `cwd`、返回 `exit_code`/`stdout`/`stderr`/`duration_ms`，输出各截断 8000 字符，`timeout` 默认 60 秒上限 300 秒 |
 
-`kill_process`/`upload`/`download`/`run_powershell` 是有副作用动作，执行后应回读（再 `list_dir`/`processes`/`system_info` 或截图）确认，不盲目重试。幂等只读动作（`system_info`/`processes`/`list_dir`/`services`/截图）遇网络类错误服务端自动重试 1-2 次；点击/输入/结束/传输类绝不自动重试。
+`kill_process`/`upload`/`download`/`run_powershell` 是有副作用动作，执行后应回读（再 `list_dir`/`processes`/`system_info` 或截图）确认，不盲目重试。幂等只读动作（`system_info`/`processes`/`list_dir`/`services`/`inspect_file`/截图）遇网络类错误服务端自动重试 1-2 次；点击/输入/结束/传输类绝不自动重试。
+
+### 回读核对（inspect_file + 收尾前回读闸）
+
+真机案例（2026-10-17，gpu-vm）：模型用 WPS 表格做销售表，文件里 `D5=SUM(D2:D4)` 真实值 **1964**，它却从截图/OCR 读错数，汇报「合计 **4163** ✓ 已验证」。截图/OCR 不是文件真值，验收必须以文件为准。两层机制：
+
+**第 1 层：`windows_system inspect_file path=...`**
+
+- 服务端编排：复用 `download` 把文件分块取回服务端 `uploads/Node-Download-<id>-<名>`（副本**保留**以便事后审计，返回 `local_copy`；不登记为对话产出物），再在服务端用 `lib/doc_inspect.py` 解析。**节点端无新代码**，不涉及代理升级；版本门禁按 `download` 能力把关（`inspect_file` 在 `NEW_ACTIONS` 里，落后代理收到明确的「代理版本过低」）。SSH 别名不支持。
+- 解析只用标准库 `zipfile` + `xml.etree`（不依赖 openpyxl/python-docx）：
+  - **xlsx/xlsm**：各 sheet 名（workbook.xml + rels）、每个非空单元格的地址/公式（`<f>`，共享公式指回主单元格）/缓存值（`<v>`，共享字符串已解引用，布尔/内联字符串均处理），每 sheet 最多 200 格；另给 `formulas` 列表（sheet/地址/公式/缓存值）。公式无缓存值时标注「文件未重算保存」。
+  - **docx**：`word/document.xml` 段落文本（按 `<w:p>` 拼 `<w:t>`），段落数、非空段落数、字数（中文按字计，英文/数字按词计）。
+  - **pptx**：按 `ppt/presentation.xml` 的 `sldIdLst` 顺序（经 rels 解析到 slideN.xml，**不按文件名排序**）输出每页文字与页数。
+  - **txt/csv/tsv/md/json/log**：UTF-8 解码失败回退 GBK，返回前 8000 字。
+  - **其他**（含 .xls/.et/.pdf）：只返回大小/sha256/类型，说明不解析。
+  - 安全：成员数上限 5000、单成员解压后 20MB 上限（实际读取再限一次）、声明总量上限、拒绝带 DTD/实体声明的 XML；损坏文件返回 `{"ok": false, "error": "..."}` 而非异常栈。
+- 只读：在 `IDEMPOTENT_ACTIONS`（网络错误可重试）和循环守卫 `_GUI_OBSERVE`（反复核对不计循环）里。
+- 工具描述要求：界面改过/保存过的文件，汇报前必须 `inspect_file` 回读；数字、文字以其结果为准，不以截图为准。
+
+**第 2 层：收尾前回读闸（`lib/agent/readback_gate.py`，开关 `agent.readback_gate`，默认 true）**
+
+- 追踪本回合工具调用（`after_tools` 每批之后观测，同批内按调用顺序）：
+  - **文件改动类**（才会触发）：快捷键 `ctrl+s`/`ctrl+shift+s`/`f12`（保存、另存为）、`ctrl+v`/`ctrl+x`（粘贴、剪切）、`delete`、`f2`（重命名），`drag` 拖拽，以及 `click_text` 点中「保存/另存/粘贴/剪切/删除/重命名」等字样。纯打字、回车、普通点击（如在微信里发消息）不产出文件，**不触发**。按坐标点击工具栏保存图标识别不了，靠工具描述里"改过文件必须 inspect_file"兜底。
+  - **回读类**：`windows_system` 的 `inspect_file`/`list_dir`/`run_powershell`/`download`，且结果不是 `ERROR`/被守卫拦截。
+- 模型给出最终文本回复（无 tool_calls）时：本回合用过 `windows_desktop`、有改动、且**最后一次改动之后没有成功的回读** → 不结束回合，注入一次：
+
+  > [SYSTEM-READBACK] 你在界面上修改/保存过文件, 但之后没有回读核对。请用 windows_system 的 inspect_file (或 list_dir/run_powershell) 读取实际文件内容, 用真实数据核对你将要汇报的结论 (尤其是数字), 再给出最终总结; 若确实没有产出文件, 说明原因后直接总结。
+
+- 每回合最多一次，第二次总结直接放行（不死循环）。开关关闭时 observe/check 都是空操作，零行为变化。
+- 注入走 `[SYSTEM-...]` 约定：Web 会话转换（`web_ui._is_sys_inject_text`）不显示；记忆提取输入（`turn_persist.memory_input`）剥掉 `[SYSTEM...]` 伪 user 消息。
+- 已知局限：被拦下的第一版总结已经流式发给用户，用户会先看到它、再看到回读后的更正版；子代理（spawn_agent）内部循环不经过本闸。
 
 ### 命令行能力开关（run_powershell）
 

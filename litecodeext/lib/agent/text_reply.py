@@ -6,6 +6,7 @@ from lib.sse import sse_content
 from lib.agent.tool_names import _WRITE_TOOL_NAMES_STR
 from lib.config import CFG
 from lib.agent.failure_loop import mark as _fl_mark
+from lib.agent import readback_gate as _readback
 _AGT = CFG.get("agent", {})
 
 
@@ -76,6 +77,24 @@ async def _handle_text_reply(_ctx, _batch_state, _st, full_text, _full_reasoning
                 _consecutive_empty = 0  # [v1.0] 有产出, 清零
                 _st.action = "continue"
                 return  # 不 break, 继续 agent loop
+
+            # ── [READBACK] 收尾前回读闸: Windows 界面改过文件却没回读真值 → 拦一次, 要求先核对再总结
+            # (真机案例: 文件 D5 实际 1964, 模型按截图汇报 4163 "已验证")。每回合最多一次, 第二次放行。
+            _readback_inject = _readback.check(_ctx)
+            if _readback_inject:
+                log.info(f"  \033[35m[READBACK]\033[0m [{_ctx.sid_tag}] 界面改动后未回读, "
+                         f"收尾前注入回读提醒 (iter={_iteration})")
+                _ctx.tracer.iteration_end("ITER_OK", "readback reminder injected")
+                _asst_rb = {"role": "assistant", "content": full_text}
+                if _full_reasoning and _full_reasoning.strip():
+                    _asst_rb["reasoning_content"] = _full_reasoning
+                _ctx.new_msgs.append(_asst_rb)
+                _ctx.messages.append(_asst_rb)
+                _ctx.messages.append({"role": "user", "content": _readback_inject})
+                _ctx.new_msgs.append({"role": "user", "content": _readback_inject})
+                _consecutive_empty = 0
+                _st.action = "continue"
+                return  # 不 break, 多给一轮回读机会
 
             # ── [EXEC-GATE] 收尾闸: 本轮此刻无 tool_call、模型即将给出最终回复。
             # 若本回合已经有过 ≥N 轮工具调用、却从未调用过写类工具 → 说明规划/验证

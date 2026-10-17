@@ -38,7 +38,8 @@ WRITE_TOOLS = frozenset({"write_file", "patch_file", "create_file", "apply_block
 # 远程桌面/节点工具: 界面每一步都在变, 同一个按键/点击在不同界面重复出现是常态 (2026-10-17 真机:
 # 回车、Alt+F4 被整轮累计计数误拦 6 次)。纯观察动作 (截图/OCR/列窗口) 不计; 其余只拦"连续"相同调用。
 GUI_TOOLS = frozenset({"windows_desktop", "windows_system"})
-_GUI_OBSERVE = frozenset({"screenshot", "ocr", "windows", "wechat_status", "system_info", "processes", "services"})
+_GUI_OBSERVE = frozenset({"screenshot", "ocr", "windows", "wechat_status", "system_info", "processes", "services",
+                          "inspect_file"})   # inspect_file: 回读核对文件真值, 只读, 反复核对不算循环
 
 # shell 里改文件的写法: 和 write_file 一样算"状态变了"
 _SHELL_WRITE = _re.compile(

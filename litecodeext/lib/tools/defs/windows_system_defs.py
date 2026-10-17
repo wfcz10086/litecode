@@ -17,18 +17,23 @@ WINDOWS_SYSTEM_DEFS = [{
             'run_powershell 执行 PowerShell：默认关闭，只有用户经 Web/CLI 为该节点开启后可用，模型不能自行开启；'
             '支持 cwd 工作目录，返回 exit_code/stdout/stderr/duration_ms，输出按 UTF-8 解码（失败回退 GBK），'
             '输出各截断 8000 字符，timeout 默认 60 秒上限 300 秒。'
+            'inspect_file 回读核对：把 Windows 上的文件（≤50MB，路径支持 %USERPROFILE% 等环境变量）取回服务端并解析真实内容——'
+            'xlsx 返回各 sheet 单元格的地址/公式/缓存值与公式清单，docx 返回段落文本与字数，pptx 按页序返回每页文字，'
+            'txt/csv/md/json/log 返回前 8000 字，其他类型只返回大小与 sha256。'
+            '凡是用界面操作（windows_desktop 输入/粘贴/点击/快捷键）改过或保存过的文件，汇报结论前必须用 inspect_file 回读；'
+            '汇报里的数字、文字以 inspect_file 结果为准，不以截图/OCR 为准，截图与文件不一致时以文件为准并如实说明。'
             'kill_process、upload、download、run_powershell 为有副作用动作，执行后应回读（list_dir/processes/system_info 或再截图）确认结果，不要盲目重试。'
             '仅支持已接入且代理为最新版本的回连节点；版本过低会提示等待自动更新。'),
         'parameters': {'type': 'object', 'properties': {
             'alias': {'type': 'string', 'description': '回连节点别名'},
             'action': {'type': 'string', 'enum': ['system_info', 'processes', 'kill_process', 'services',
-                                                  'list_dir', 'download', 'upload', 'run_powershell']},
+                                                  'list_dir', 'download', 'upload', 'run_powershell', 'inspect_file']},
             'sort': {'type': 'string', 'enum': ['cpu', 'memory'], 'default': 'memory', 'description': 'processes 排序维度'},
             'top': {'type': 'integer', 'minimum': 1, 'maximum': 100, 'default': 15, 'description': 'processes 返回条数'},
             'name': {'type': 'string', 'description': 'processes/services 过滤关键词，或 kill_process 的精确进程名'},
             'pid': {'type': 'integer', 'minimum': 1, 'description': 'kill_process 目标进程号（与 name 二选一）'},
             'force': {'type': 'boolean', 'default': False, 'description': 'kill_process 结束 explorer 等受保护进程时必须为 true'},
-            'path': {'type': 'string', 'description': 'list_dir 的目录，或 download 的 Windows 文件路径'},
+            'path': {'type': 'string', 'description': 'list_dir 的目录，或 download / inspect_file 的 Windows 文件路径（支持 %USERPROFILE% 等环境变量）'},
             'source': {'type': 'string', 'description': 'upload 必填：服务端工作区内的源文件路径（必须位于工作区内）'},
             'dest_name': {'type': 'string', 'description': 'upload 可选：落地到 Windows 的文件名，默认取源文件名；会清洗并防穿越'},
             'script': {'type': 'string', 'description': 'run_powershell 必填：要执行的 PowerShell 脚本'},
