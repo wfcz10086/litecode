@@ -1,6 +1,7 @@
 # 纯净 Windows 节点接入：仅主动访问 LiteCode Web，不安装 SSH 或开放监听端口。
+# 安装命令已先核对本脚本的 sha256 再执行; -KeyFingerprint 为控制端签名公钥指纹 (同样来自带外复制的安装命令)。
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code)
+param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code, [string]$KeyFingerprint = '')
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -9,6 +10,45 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
     throw '请在要接入的用户桌面，以管理员身份打开 PowerShell 后执行。'
 }
 $Server = $Server.TrimEnd('/')
+function Get-Sha256Hex([byte[]]$Data) {
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($hasher.ComputeHash($Data))).Replace('-','').ToLower() } finally { $hasher.Dispose() }
+}
+function Get-Bytes([string]$Uri, $Headers) {
+    $response = Invoke-WebRequest $Uri -Headers $Headers -UseBasicParsing
+    return ,[byte[]]$response.RawContentStream.ToArray()
+}
+$signingKey = $null
+if ($KeyFingerprint) {
+    # 消费接入码之前先确认签名公钥与安装命令中的指纹一致, 不一致就停止, 不改动本机任何东西
+    $signingKey = (Invoke-RestMethod "$Server/api/windows/signing-key").key
+    $actual = Get-Sha256Hex ([Text.Encoding]::UTF8.GetBytes([string]$signingKey.alg + ':' + $signingKey.n + ':' + $signingKey.e))
+    if ($signingKey.alg -ne 'RSA-PKCS1v15-SHA256' -or $actual -ne $KeyFingerprint.ToLower()) {
+        throw '签名公钥校验失败：控制端返回的公钥与安装命令中的指纹不一致，可能在网络途中被替换。已停止安装，请让管理员重新生成安装命令。'
+    }
+}
+function Assert-SignedFiles($Published, [hashtable]$Files) {
+    # 用安装命令锚定的公钥验签清单, 再逐个核对下载内容的 sha256; 任一不符即停止, 不写入任何代理文件
+    $signed = $Published.signed_manifest
+    if (-not $signed) { throw '组件签名校验失败：控制端未提供签名清单。已停止安装。' }
+    $manifestBytes = [Convert]::FromBase64String($signed.manifest)
+    $rsa = New-Object Security.Cryptography.RSACryptoServiceProvider
+    $parameters = New-Object Security.Cryptography.RSAParameters
+    $parameters.Modulus = [Convert]::FromBase64String($signingKey.n)
+    $parameters.Exponent = [Convert]::FromBase64String($signingKey.e)
+    $rsa.ImportParameters($parameters)
+    if (-not $rsa.VerifyData($manifestBytes, 'SHA256', [Convert]::FromBase64String($signed.signature))) {
+        throw '组件签名校验失败：清单签名无效，可能在网络途中被替换。已停止安装。'
+    }
+    $manifest = [Text.Encoding]::UTF8.GetString($manifestBytes) | ConvertFrom-Json
+    if ($manifest.format -ne 'litecode-windows-manifest-v1') { throw '组件签名校验失败：清单格式不受支持。已停止安装。' }
+    foreach ($name in $Files.Keys) {
+        if ((Get-Sha256Hex $Files[$name]) -ne $manifest.files.$name) {
+            throw ('组件签名校验失败：' + $name + ' 与签名清单不符，可能在网络途中被替换。已停止安装。')
+        }
+    }
+    return $manifest
+}
 Add-Type -AssemblyName System.Security
 $sha = [Security.Cryptography.SHA256]::Create()
 $localId = ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($Code)))).Replace('-','').ToLower()
@@ -106,8 +146,21 @@ try {
     & $python -m pip install --no-cache-dir --disable-pip-version-check mss pillow uiautomation pywin32 pyautogui pyperclip winocr psutil -i https://pypi.tuna.tsinghua.edu.cn/simple
     if ($LASTEXITCODE -ne 0) { throw '桌面依赖安装失败，请检查网络后重试' }
     Report-Stage 'agent'
-    Invoke-WebRequest "$device/assets/agent.py" -Headers $headers -OutFile (Join-Path $root 'agent.py') -UseBasicParsing
-    Invoke-RestMethod "$device/assets/uninstall.ps1" -Headers $headers | Set-Content -Encoding UTF8 (Join-Path $root 'uninstall.ps1')
+    $agentBytes = Get-Bytes "$device/assets/agent.py" $headers
+    $uninstallBytes = Get-Bytes "$device/assets/uninstall.ps1" $headers
+    $manifest = $null
+    if ($signingKey) {
+        $manifest = Assert-SignedFiles (Invoke-RestMethod "$device/versions" -Headers $headers) @{
+            'windows_node_agent.py'=$agentBytes; 'windows_node_uninstall.ps1'=$uninstallBytes }
+    }
+    [IO.File]::WriteAllBytes((Join-Path $root 'agent.py'), $agentBytes)
+    # PowerShell 5.1 按 ANSI 读无 BOM 脚本, 中文会乱码: 落盘补 UTF-8 BOM (哈希按下发字节)
+    [IO.File]::WriteAllBytes((Join-Path $root 'uninstall.ps1'), [byte[]](@(0xEF,0xBB,0xBF) + $uninstallBytes))
+    if ($manifest) {
+        # 固定签名公钥, 代理之后的每次自动更新都要求验签通过
+        @{key=@{alg=$signingKey.alg;n=$signingKey.n;e=$signingKey.e};fingerprint=$KeyFingerprint.ToLower();pinned_by='install';last_issued=$manifest.issued} |
+            ConvertTo-Json -Compress | Set-Content -Encoding UTF8 (Join-Path $root 'trust.json')
+    }
     $pythonw = Join-Path (Split-Path $python) 'pythonw.exe'
     # 指定工作目录, 否则代理 cwd 为 C:\Windows\system32, 它拉起的应用"另存为"会默认跳到 System32
     $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"'+(Join-Path $root 'agent.py')+'" "'+$root+'"') -WorkingDirectory $root

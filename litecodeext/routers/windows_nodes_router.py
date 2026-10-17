@@ -190,18 +190,50 @@ async def asset(node_id: str, asset: str, request: Request):
                              headers={'Cache-Control': 'no-store'})
 
 
-def _versions_payload():
+def _versions_payload(workspace):
     from lib.windows_nodes import asset_hashes, component_versions
+    from lib import windows_node_signing as signing
     # asset_hashes 是新增字段: 新代理逐个校验下载的组件, 旧代理忽略。
-    return {'versions': component_versions(), 'asset_hashes': asset_hashes()}
+    # signed_manifest: 控制端私钥签名的清单 (版本 + 各文件 sha256); 已固定公钥的节点只认它, 旧代理忽略。
+    payload = {'versions': component_versions(), 'asset_hashes': asset_hashes()}
+    if signing.available():
+        payload['signed_manifest'] = signing.signed_manifest(workspace)
+    return payload
+
+
+def _signing_key(workspace):
+    from lib import windows_node_signing as signing
+    if not signing.available():
+        raise HTTPException(503, '控制端未启用代码签名 (缺少 cryptography)')
+    return signing.public_key_info(workspace)
+
+
+@router.get('/api/windows/signing-key')
+async def signing_key():
+    """签名公钥 (公开信息, 不含私钥)。安装命令里带指纹, 引导脚本下载后核对指纹再使用。"""
+    return await asyncio.to_thread(_signing_key, manager().workspace)
+
+
+@router.get('/api/windows/device/{node_id}/signing-key')
+async def device_signing_key(node_id: str, request: Request):
+    """已上线旧节点升级到新代理后经设备通道取公钥并固定 (首次信任), 之后的更新都要求验签。"""
+    nodes = manager()
+    try:
+        await asyncio.to_thread(nodes.authenticate, node_id, credential(request))
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('signing-key', exc)
+    return await asyncio.to_thread(_signing_key, nodes.workspace)
 
 
 @router.get('/api/windows/device/{node_id}/versions')
 async def versions(node_id: str, request: Request):
     """代理启动时先取目标版本与逐文件哈希, 下载组件后全部校验通过才替换。"""
     try:
-        await asyncio.to_thread(manager().authenticate, node_id, credential(request))
-        return await asyncio.to_thread(_versions_payload)
+        nodes = manager()
+        await asyncio.to_thread(nodes.authenticate, node_id, credential(request))
+        return await asyncio.to_thread(_versions_payload, nodes.workspace)
     except AuthError:
         raise auth_failed()
     except Exception as exc:
@@ -239,7 +271,7 @@ async def uninstalled(node_id: str, request: Request):
 
 def _poll_reply(nodes, node_id, job):
     # capabilities 走已认证通道下发, 供设备对 run_powershell 做本地二次校验; 旧代理忽略新增字段。
-    return {'job': job, **_versions_payload(), 'capabilities': nodes.node_capabilities(node_id)}
+    return {'job': job, **_versions_payload(nodes.workspace), 'capabilities': nodes.node_capabilities(node_id)}
 
 
 @router.get('/api/windows/device/{node_id}/poll')

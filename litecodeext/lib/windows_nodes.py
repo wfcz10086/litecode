@@ -14,6 +14,8 @@ import time
 from urllib.parse import urlsplit
 import uuid
 
+from lib.windows_node_signing import agent_sha256, uninstall_sha256
+
 log = logging.getLogger(__name__)
 
 
@@ -90,6 +92,27 @@ def _task(node, job, state):
 
 def _command(body):
     return 'powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ' + base64.b64encode(body.encode('utf-16le')).decode()
+
+
+# 安装/更新/卸载命令由管理员带外复制给用户, 不经过节点与控制端之间的网络通道, 因此命令里的指纹是可信锚点。
+# 函数名不能用 H/B 这类短名: PowerShell 内置别名 (h=Get-History) 优先于函数, 会让校验根本不执行 (2026-10-17 真机发现)
+_SHA_HEX = ("function LcSha256([byte[]]$d){$x=[Security.Cryptography.SHA256]::Create(); "
+            "([BitConverter]::ToString($x.ComputeHash($d))).Replace('-','').ToLower()}; ")
+_GET_BYTES = "function LcGetBytes($u,$hd){$r=Invoke-WebRequest $u -Headers $hd -UseBasicParsing; ,[byte[]]$r.RawContentStream.ToArray()}; "
+
+
+def install_body(base_url, code, key_fingerprint=''):
+    """先下载引导脚本并核对安装命令里的 sha256, 一致才执行; 公钥指纹交给引导脚本校验签名公钥。"""
+    from lib.windows_node_signing import bootstrap_sha256
+    body = ("$ErrorActionPreference='Stop'; $s='" + base_url + "'; $h='" + bootstrap_sha256() + "'; " + _SHA_HEX + _GET_BYTES +
+            "$raw=LcGetBytes ($s+'/api/windows/bootstrap.ps1') @{}; "
+            "if((LcSha256 $raw) -ne $h){throw '安装脚本校验失败：下载到的 bootstrap.ps1 与安装命令中的 sha256 不一致，"
+            "可能在网络途中被替换，或控制端已升级。已停止，未执行任何安装步骤；请让管理员重新生成安装命令。'}; "
+            "$b=[Text.Encoding]::UTF8.GetString($raw); "
+            "& ([scriptblock]::Create($b)) -Server $s -Code '" + code + "'")
+    if key_fingerprint:
+        body += " -KeyFingerprint '" + key_fingerprint + "'"
+    return body
 
 
 def _write(path, value):
@@ -188,10 +211,16 @@ class Nodes:
                            'server_url': base_url, 'encrypted_transport': base_url.startswith('https://'),
                            'capabilities': {'shell': False}}
             node_id = data[alias]['id']
-        body = ("$s='" + base_url + "'; $b=Invoke-RestMethod ($s+'/api/windows/bootstrap.ps1'); "
-                "& ([scriptblock]::Create($b)) -Server $s -Code '" + code + "'")
-        command = _command(body)
+        command = _command(install_body(base_url, code, self.key_fingerprint()))
         return {'alias': alias, 'id': node_id, 'expires_in': 600, 'command': command, 'state': 'awaiting_join'}
+
+    def key_fingerprint(self):
+        """签名公钥指纹 (首次调用生成密钥); 控制端缺少 cryptography 时返回空串, 安装命令只带脚本 sha256。"""
+        from lib import windows_node_signing as signing
+        if not signing.available():
+            log.warning('控制端未安装 cryptography, Windows 节点代码下发暂无签名')
+            return ''
+        return signing.public_key_info(self.workspace)['fingerprint']
 
     def redeem(self, code, metadata):
         token = secrets.token_urlsafe(48)
@@ -405,7 +434,10 @@ class Nodes:
                 "if($dirs.Count -ne 1){throw '请使用安装时的 Windows 用户，当前用户下未发现唯一节点'}; "
                 "$p=Join-Path $dirs[0].FullName 'uninstall.ps1'; "
                 "if(Test-Path $p){ & $p -Root $dirs[0].FullName -Schedule } "
-                "else { $b=Invoke-RestMethod ($s+'/api/windows/uninstall.ps1'); & ([scriptblock]::Create($b)) -NodeId $id -Schedule }")
+                "else { " + _SHA_HEX + _GET_BYTES + "$raw=LcGetBytes ($s+'/api/windows/uninstall.ps1') @{}; "
+                "if((LcSha256 $raw) -ne '" + uninstall_sha256() + "'){throw '卸载脚本校验失败：下载内容与命令中的 sha256 不一致，"
+                "可能在网络途中被替换或控制端已升级，请重新复制本机卸载命令。'}; "
+                "$b=[Text.Encoding]::UTF8.GetString($raw); & ([scriptblock]::Create($b)) -NodeId $id -Schedule }")
         return {'command': _command(body)}
 
     def update_command(self, node_id):
@@ -416,7 +448,8 @@ class Nodes:
         if node['state'] not in ('online', 'offline', 'error'):
             raise ValueError('只有已接入的电脑可以更新代理')
         base = server_url(node['server_url'])
-        body = ("$ErrorActionPreference='Stop'; $id='" + node_id + "'; $s='" + base + "'; "
+        fp = self.key_fingerprint()
+        body = ("$ErrorActionPreference='Stop'; $id='" + node_id + "'; $s='" + base + "'; " + _SHA_HEX + _GET_BYTES +
                 "$dirs=@(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'LiteCodeNodes') -Directory -ErrorAction SilentlyContinue | "
                 "Where-Object { $f=Join-Path $_.FullName 'node.json'; (Test-Path $f) -and ((Get-Content $f -Raw | ConvertFrom-Json).id -eq $id) }); "
                 "if($dirs.Count -ne 1){throw '请使用安装时的 Windows 用户，当前用户下未发现唯一节点'}; "
@@ -424,11 +457,21 @@ class Nodes:
                 "$c=Get-Content (Join-Path $root 'node.json') -Raw | ConvertFrom-Json; "
                 "$t=[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect("
                 "[Convert]::FromBase64String($c.token_dpapi), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser)); "
-                "$new=Join-Path $root 'agent.py.new'; "
-                "Invoke-WebRequest ($s+'/api/windows/device/'+$id+'/assets/agent.py') -Headers @{Authorization=('Bearer '+$t)} -OutFile $new -UseBasicParsing; "
-                "$task='LiteCode-Node-'+$id; Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue; "
-                "Move-Item -Force $new (Join-Path $root 'agent.py'); Start-ScheduledTask -TaskName $task; "
-                "Write-Host '代理已更新并重启，请在 LiteCode Web 查看运行版本。'")
+                "$raw=LcGetBytes ($s+'/api/windows/device/'+$id+'/assets/agent.py') @{Authorization=('Bearer '+$t)}; "
+                # 命令带外复制, 其中的代理 sha256 可信: 下载内容不符就不替换
+                "if((LcSha256 $raw) -ne '" + agent_sha256() + "'){throw '代理校验失败：下载内容与命令中的 sha256 不一致，"
+                "可能在网络途中被替换或控制端已升级，请重新复制本机更新命令。'}; ")
+        if fp:
+            # 同时固定签名公钥 (指纹来自命令), 之后的自动更新都要求验签, 不再走首次信任
+            body += ("$sk=Invoke-RestMethod ($s+'/api/windows/signing-key'); $k=$sk.key; "
+                     "if((LcSha256 ([Text.Encoding]::UTF8.GetBytes($k.alg+':'+$k.n+':'+$k.e))) -ne '" + fp + "'){"
+                     "throw '签名公钥校验失败：与命令中的指纹不一致，可能在网络途中被替换，请重新复制本机更新命令。'}; "
+                     "@{key=@{alg=$k.alg;n=$k.n;e=$k.e};fingerprint='" + fp + "';pinned_by='update_command';last_issued=0} | "
+                     "ConvertTo-Json -Compress | Set-Content -Encoding UTF8 (Join-Path $root 'trust.json'); ")
+        body += ("$new=Join-Path $root 'agent.py.new'; [IO.File]::WriteAllBytes($new, $raw); "
+                 "$task='LiteCode-Node-'+$id; Stop-ScheduledTask -TaskName $task -ErrorAction SilentlyContinue; "
+                 "Move-Item -Force $new (Join-Path $root 'agent.py'); Start-ScheduledTask -TaskName $task; "
+                 "Write-Host '代理已更新并重启，请在 LiteCode Web 查看运行版本。'")
         return {'command': _command(body)}
 
     def uninstalled(self, node_id, token):

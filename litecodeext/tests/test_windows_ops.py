@@ -3,6 +3,7 @@
 Windows 专属库 (ctypes.windll / pyautogui / mss / psutil / subprocess) 在 Linux 不可真跑，
 这里用 sys.modules 注入假模块或 mock 测纯逻辑。
 """
+import os
 import base64
 import io
 import json
@@ -252,6 +253,8 @@ def _fake_popen_module(stdout, captured=None):
         def __init__(self, cmd, **kwargs):
             if captured is not None:
                 captured['cmd'], captured['cwd'] = cmd, kwargs.get('cwd')
+                if '-File' in cmd:     # 脚本走临时文件: 运行时读出内容供断言 (运行后文件即删除)
+                    captured['script'] = open(cmd[cmd.index('-File') + 1], encoding='utf-8-sig').read()
             kwargs['stdout'].write(stdout)
             kwargs['stdout'].flush()
 
@@ -268,8 +271,9 @@ def test_run_powershell_sets_encoding_prefix_cwd_and_decodes_gbk(tmp_path, monke
     out = wsa.run_powershell({'script': 'Get-ChildItem', 'cwd': str(tmp_path)})
     assert out['ok'] and out['exit_code'] == 0 and out['stdout'] == '目录列表'
     assert isinstance(out['duration_ms'], int) and out['cwd'] == str(tmp_path)
-    assert captured['cmd'][-1].startswith(wsa.PS_ENCODING_PREFIX)
-    assert 'Get-ChildItem' in captured['cmd'][-1]
+    assert '-Command' not in captured['cmd'] and captured['cmd'][-2] == '-File'   # 不经命令行传脚本 (防 Defender 误判)
+    assert captured['script'].startswith(wsa.PS_ENCODING_PREFIX) and 'Get-ChildItem' in captured['script']
+    assert not os.path.exists(captured['cmd'][-1])                                  # 临时脚本已删除
     assert captured['cwd'] == str(tmp_path)
 
 

@@ -241,9 +241,24 @@ def run_powershell(args):
             raise ValueError('cwd 目录不存在')
         cwd = str(Path(cwd).expanduser())
     started = time.perf_counter()
-    command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-               '-Command', PS_ENCODING_PREFIX + script]
-    code, raw_out, raw_err, timed_out = run_bounded(command, timeout, cwd=cwd)
+    # 脚本写进临时 .ps1 再 -File 运行, 不放进 -Command 命令行: 2026-10-17 真机 Windows Defender 把命令行里带
+    # 长 base64 + 密码学调用的正常脚本判成 Trojan:Win32/Injuke.C!MTB 并阻止进程启动 (WinError 5),
+    # 改 -File 后同一脚本 0 拦截。UTF-8 带 BOM: PowerShell 5.1 读无 BOM 文件按系统 ANSI (GBK) 解析会让中文乱码。
+    import tempfile
+    import os
+    fd, path = tempfile.mkstemp(prefix='lc_ps_', suffix='.ps1')
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8-sig') as f:
+            # 末行保持 -Command 的退出码语义: 最后一条命令失败 → 1, 原生程序非零退出 → 其退出码
+            f.write(PS_ENCODING_PREFIX + '\n' + script +
+                    '\nif (-not $?) { if ($LASTEXITCODE) { exit $LASTEXITCODE } else { exit 1 } }\n')
+        command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path]
+        code, raw_out, raw_err, timed_out = run_bounded(command, timeout, cwd=cwd)
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
     out, err = _decode(raw_out), _decode(raw_err)
     result = {'ok': code == 0 and not timed_out, 'state': 'run_powershell_timeout' if timed_out else 'run_powershell',
               'returncode': code, 'exit_code': code, 'cwd': cwd, 'timed_out': timed_out,
