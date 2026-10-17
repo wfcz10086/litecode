@@ -10,8 +10,13 @@
      成功则删工作树与分支, 冲突则 abort 并保留, 交主代理用 agent_worktree 工具处理。
 元数据落盘 <WORKSPACE>/.agent_worktrees/_meta/<id>.json, 供 agent_worktree list/merge/diff/discard。
 
-路径映射局限: execute_shell 命令里只做绝对路径的字符串前缀替换, 拼接出来的路径
-(如 "$ROOT/x"、cd .. 后再访问、脚本内部写死的路径) 映射不到; 子代理提示词里已告知工作目录。
+execute_shell: 默认 cwd 设为工作树中的 workdir (调用方给的 cwd 在主工作区内 → 映射到工作树对应子目录,
+相对 cwd 以工作树 workdir 为基准), 命令里的原仓库绝对路径仍做前缀替换。这样相对路径、os.getcwd()/
+os.path.join 拼出来的路径都落在工作树里; 仍映射不到的只有脚本内部写死的原仓库绝对路径、或先 cd 到仓库外再拼回来。
+
+saved DAG (run_dag 工具 / DAG 编辑器 dag_state): wrap_saved_dag 用同一判定 (互不为祖先的并发写步 + workdir
+在 git 仓库) 与合并流程; 成功合并不改步骤输出 (保护 when 条件 / JSON 传值), 冲突/未合并时在该步输出末尾
+与 DAG 运行记录 (job["worktrees"] + exec_log) 标出冲突文件与保留的分支/工作树。
 """
 from __future__ import annotations
 
@@ -20,7 +25,6 @@ import contextvars
 import json
 import os
 import re
-import shlex
 import subprocess
 import time
 import uuid
@@ -40,6 +44,8 @@ _ABORT_PREFIXES = ("[子代理超时]", "[子代理已中断]", "[子代理异�
 
 _ACTIVE: contextvars.ContextVar[Optional["WorktreeCtx"]] = contextvars.ContextVar(
     "subagent_worktree", default=None)
+# saved DAG: 当前步骤 id (dag_state / run_dag 的 step_begin 回调里设置, 同一步骤任务内可见), 用于把工作树报告归到步骤
+_DAG_STEP: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar("subagent_worktree_dag_step", default=None)
 _LOCKS: Dict[tuple, asyncio.Lock] = {}
 
 # 测试可覆盖: None = 用 lib.config.WORKSPACE
@@ -188,14 +194,19 @@ class WorktreeCtx:
         return np_
 
     def map_command(self, cmd: str) -> str:
-        """execute_shell: 原仓库绝对路径做前缀替换, 并前置 cd 到工作树中的 workdir。"""
+        """execute_shell 命令串: 原仓库绝对路径做前缀替换 (工作目录由 map_cwd 经 cwd 参数给出)。"""
         wt = str(self.wt_root)
         skip = WORKTREE_DIRNAME
         for r in self._roots():
             pat = re.compile(r"(?<![\w./-])" + re.escape(r.rstrip("/")) +
                              r"(?=$|[/\s'\";:)|&>]|`)(?!/" + re.escape(skip) + r"(?:/|$))")
             cmd = pat.sub(lambda _m: wt, cmd)
-        return f"cd {shlex.quote(str(self.wt_workdir))} && {cmd}"
+        return cmd
+
+    def map_cwd(self, raw) -> str:
+        """execute_shell 的 cwd: 未给 → 工作树中的 workdir; 主工作区内 → 工作树对应子目录;
+        相对路径 → 以工作树 workdir 为基准; 仓库外的绝对路径 (调用方显式指定) 原样保留。"""
+        return self.map_path(str(raw or "").strip(), empty_to_workdir=True)
 
 
 _FILEPATH_TOOLS = {"read_file", "write_file", "patch_file", "edit_symbol", "locate_symbol"}
@@ -225,6 +236,7 @@ def rewrite_tool_args(fn_name: str, fn_args: dict) -> dict:
             lambda m: ctx.map_path(m.group(1).strip()) + m.group(2), a["blocks"])
     elif fn_name == "execute_shell" and a.get("command"):
         a["command"] = ctx.map_command(a["command"])
+        a["cwd"] = ctx.map_cwd(a.get("cwd"))
     return a
 
 
@@ -292,6 +304,21 @@ class IsolationPlan:
     repo_root: Optional[Path] = None
     notes: List[str] = field(default_factory=list)
     reports: List[dict] = field(default_factory=list)
+    quiet: bool = False                       # saved DAG: 成功合并/无改动不改步骤输出
+    on_report: Optional[Callable] = None      # saved DAG: 每个工作树收尾后回调 (写 DAG 运行记录)
+
+    def _record(self, rep: dict) -> None:
+        step = _DAG_STEP.get()
+        if step and not rep.get("step_id"):
+            rep["step_id"] = step
+            _save_meta(rep)
+        self.reports.append(rep)
+        _note_evidence(rep)
+        if self.on_report is not None:
+            try:
+                self.on_report(rep)
+            except Exception:
+                pass
 
     def wrap(self, run_fn: Callable) -> Callable:
         if not self.enabled:
@@ -319,16 +346,19 @@ class IsolationPlan:
                 rep.update(status="committed" if rep.get("commit") else "running",
                            note="子代理被取消/超时/异常, 现有改动已提交但未合并, 工作树保留")
                 _save_meta(rep)
-                plan.reports.append(rep)
-                _note_evidence(rep)
+                plan._record(rep)
                 raise
             _ACTIVE.reset(token)
             aborted = isinstance(out, str) and out.startswith(_ABORT_PREFIXES)
             rep = await finalize_worktree(ctx, task, merge=not aborted)
-            plan.reports.append(rep)
-            _note_evidence(rep)
+            plan._record(rep)
+            if plan.quiet and rep.get("status") in _DONE_STATUSES:
+                return out
             return f"{out}\n\n{format_report(rep, short=True)}"
         return _isolated
+
+    def unmerged(self) -> List[dict]:
+        return [r for r in self.reports if r.get("status") not in _DONE_STATUSES]
 
     def summary(self) -> str:
         if not self.notes and not self.reports:
@@ -382,6 +412,75 @@ def plan_isolation(args: dict, single: bool = False) -> IsolationPlan:
             f"主工作区 {root} 有 {len(dirty)} 个未提交改动 ({', '.join(dirty[:5])}): "
             "工作树基于 HEAD, 不含这些改动; 结束后不会自动合并, 请先提交/暂存后用 agent_worktree merge")
     return plan
+
+
+# ═══════════════════════════ saved DAG (run_dag / dag_state) ═══════════════════════════
+
+def mark_dag_step(step_id) -> None:
+    """saved DAG 的 step_begin 回调里调用: 本步骤任务内的工作树报告归到该步骤。"""
+    _DAG_STEP.set(str(step_id) if step_id else None)
+
+
+def plan_saved_dag_isolation(plan: dict, workspace=None) -> IsolationPlan:
+    """saved DAG 的步骤 → 与 spawn_agent dag_tasks 同一判定 (互不为祖先的并发写步 + workdir 在 git 仓库)。
+
+    DAG 顶层可写 workdir (默认 workspace) 与 isolation (auto|worktree|none, 默认 auto)。
+    """
+    steps = [s for s in (plan or {}).get("steps") or [] if isinstance(s, dict)]
+    args = {
+        "dag_tasks": [{"step_id": s.get("id") or f"step_{i+1}",
+                       "depends_on": list(s.get("depends_on") or []),
+                       "agent_type": s.get("agent_type", "coder")} for i, s in enumerate(steps)],
+        "workdir": str((plan or {}).get("workdir") or workspace or ""),
+        "isolation": (plan or {}).get("isolation") or "auto",
+    }
+    iso = plan_isolation(args)
+    iso.quiet = True
+    return iso
+
+
+def _slim(rep: dict) -> dict:
+    keys = ("id", "step_id", "agent_type", "status", "branch", "path", "commit", "merge_commit",
+            "files", "conflicts", "note")
+    out = {k: rep.get(k) for k in keys if rep.get(k) not in (None, "", [])}
+    out["status_cn"] = _STATUS_CN.get(rep.get("status"), rep.get("status"))
+    return out
+
+
+def record_dag_report(job: dict, rep: dict) -> None:
+    """工作树收尾结果写进 DAG 运行记录: job["worktrees"] + exec_log; 未合并的另进 job["worktree_unmerged"]。"""
+    row = _slim(rep)
+    ws = job.setdefault("worktrees", [])
+    ws[:] = [w for w in ws if w.get("id") != row.get("id")] + [row]
+    job["worktree_unmerged"] = [w for w in ws if w.get("status") not in _DONE_STATUSES]
+    job.setdefault("exec_log", []).append(
+        {"t": time.time(), "event": "worktree", "step_id": row.get("step_id", ""),
+         "status": row.get("status"), "worktree": row.get("id"), "branch": row.get("branch", ""),
+         "conflicts": row.get("conflicts", []), "note": (row.get("note") or "")[:200]})
+
+
+def wrap_saved_dag(run_fn: Callable, plan: dict, workspace=None, job: Optional[dict] = None,
+                   save_fn: Optional[Callable] = None):
+    """给 saved DAG 的 run_subagent_fn 套工作树隔离。返回 (包装后的 run_fn, IsolationPlan)。
+
+    单写步 / 非 git / isolation=none: run_fn 原样返回 (行为不变), 非 git 等说明只记入 job["worktree_notes"]。
+    """
+    iso = plan_saved_dag_isolation(plan, workspace)
+    if job is not None:
+        if iso.notes:
+            job["worktree_notes"] = list(iso.notes)
+
+        def _on(rep):
+            record_dag_report(job, rep)
+            if save_fn is not None:
+                save_fn()
+        iso.on_report = _on
+    return iso.wrap(run_fn), iso
+
+
+def dag_unmerged_summary(iso: IsolationPlan) -> str:
+    """DAG 结束后: 有未合并工作树时给 final_output 追加的说明 (全部合并则空串)。"""
+    return iso.summary() if iso.unmerged() else ""
 
 
 # ═══════════════════════════ 创建 / 收尾 ═══════════════════════════
@@ -520,7 +619,11 @@ def format_report(m: dict, short: bool = False) -> str:
     st = m.get("status", "?")
     head = f"[工作树 {m.get('id')}] {_STATUS_CN.get(st, st)}"
     if short:
-        return head + (f" 冲突文件: {', '.join(m.get('conflicts') or [])}" if st == "conflict" else "")
+        if st == "conflict":
+            head += f" 冲突文件: {', '.join(m.get('conflicts') or [])}"
+        if st not in _DONE_STATUSES and m.get("branch"):
+            head += f" (保留分支 {m['branch']}, 工作树 {m.get('path', '-')}; 用 agent_worktree diff/merge/discard 处理)"
+        return head
     parts = [head, f"  分支: {m.get('branch')}  提交: {(m.get('commit') or '-')[:12]}"]
     if m.get("files"):
         parts.append(f"  改动文件: {', '.join(m['files'][:20])}" + (" ..." if len(m['files']) > 20 else ""))

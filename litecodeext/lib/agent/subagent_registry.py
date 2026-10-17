@@ -17,6 +17,9 @@
   信箱    agent_control send 投递补充指令 (≤2000 字); 子代理每轮迭代开始前 (tick) 取出, 作为 user 消息
           注入 (前缀 [来自主代理的补充指令]) 并记日志。子代理内部消息不进会话历史, 不经 SSE 推给前端,
           因此不进用户可见内容与记忆提取。准备收尾时信箱里还有指令 → 多跑一轮把它处理掉。
+          已送达指令的原文记在 rec.instructions: 子代理滚动摘要后由 pin_instructions 按原文重新附上
+          (去重 + 总长上限, 见 subagent_instr), 不会被摘要截断/挤掉。send 时子代理正在跑工具 →
+          返回里说明"当前工具调用 X 已运行 N 秒, 指令在其结束后生效" (不强行中断工具)。
   停止    agent_control stop 置标记, 子代理在下一轮迭代开始时以 "[子代理已中断]" 结束 → 状态 stopped;
           证据判定按非正常结束处理 (未验证), 工作树只提交不合并 (subagent_worktree 对中断前缀的既有逻辑)。
   回合    主回合结束时还有后台子代理在跑 → 不强杀, 在最终回复后追加一条简短备注 (用户可见);
@@ -82,6 +85,9 @@ class AgentRecord:
     future: Optional[asyncio.Future] = None
     restored: bool = False            # 来源标记: 从磁盘恢复 (服务重启前的结果)
     result_truncated: bool = False    # 落盘时 result 曾被截断
+    instructions: List[str] = field(default_factory=list)   # 已送达的补充指令原文 (历史压缩后据此重新附上)
+    tool_running: str = ""            # 正在执行的工具调用 (tool_begin 置, note_tool 清)
+    tool_started: Optional[float] = None
 
     @property
     def brief(self) -> str:
@@ -395,13 +401,14 @@ def tick(messages: list, it: int, max_iter: int, agent_type: str) -> Optional[st
         else:
             messages.append({"role": "user", "content": msg})
         rec.delivered += 1
+        rec.instructions.append(text)
         _log().info(f"  [subagent:{agent_type}] {rec.id} 收到主代理补充指令 @iter={it + 1}: {text[:120]}")
     return None
 
 
 def stop_session(sid: Optional[str], reason: str = "用户在界面点了停止") -> int:
     """用户中断会话时一并停止该会话所有运行中的后台子代理 (下一轮迭代开始时结束)。返回停止的个数。
-    后台子代理没有前端面板, 不随"停止"一起停的话用户无从叫停, 跑偏了只能干等占着模型。"""
+    用户点"停止"通常就是想全部停下; 单个叫停另见 Web 子代理面板 (gateway/subagents.py)。"""
     n = 0
     for rec in running_background(sid):
         if not rec.stop_requested:
@@ -418,15 +425,43 @@ def pending() -> bool:
     return bool(r and r.inbox and not r.stop_requested)
 
 
+def _tool_label(fn_name: str, fn_args) -> str:
+    a = fn_args if isinstance(fn_args, dict) else {}
+    key = (a.get("filepath") or a.get("path") or a.get("command") or a.get("query") or a.get("pattern") or a.get("url")
+           or a.get("action") or "")
+    return f"{fn_name}({' '.join(str(key).split())[:60]})" if key else fn_name
+
+
+def tool_begin(fn_name: str, fn_args) -> None:
+    """子代理开始执行一个工具调用 (send 时据此告诉主代理: 指令要等这个调用结束后才生效)。"""
+    r = _CURRENT.get()
+    if r is not None:
+        r.tool_running, r.tool_started = _tool_label(fn_name, fn_args), time.time()
+
+
 def note_tool(fn_name: str, fn_args) -> None:
     r = _CURRENT.get()
     if r is None:
         return
     r.tool_calls += 1
-    a = fn_args if isinstance(fn_args, dict) else {}
-    key = (a.get("filepath") or a.get("path") or a.get("command") or a.get("query") or a.get("pattern") or a.get("url")
-           or a.get("action") or "")
-    r.last_tool = f"{fn_name}({' '.join(str(key).split())[:60]})" if key else fn_name
+    r.last_tool = _tool_label(fn_name, fn_args)
+    r.tool_running, r.tool_started = "", None
+
+
+def pin_instructions(messages: list) -> list:
+    """子代理历史滚动摘要之后调用: 把仍有效的补充指令按原文重新附上 (见 subagent_instr)。"""
+    r = _CURRENT.get()
+    if r is None or not r.instructions:
+        return messages
+    from .subagent_instr import pin
+    return pin(messages, r.instructions, INSTR_PREFIX)
+
+
+def _running_tool(r: AgentRecord) -> str:
+    """正在执行的工具调用描述 (无则空串)。"""
+    if r.status != "running" or not r.tool_running or r.tool_started is None:
+        return ""
+    return f"{r.tool_running} 已运行 {int(time.time() - r.tool_started)} 秒"
 
 
 # ═══════════════════════════ 派发侧 ═══════════════════════════
@@ -543,6 +578,8 @@ def _progress(r: AgentRecord) -> str:
          f"{'后台' if r.background else '阻塞'} 已运行 {r.elapsed()}s 迭代 {it} "
          f"工具调用 {r.tool_calls} 次 最近: {r.last_tool or '无'}")
     if r.status == "running":
+        if _running_tool(r):
+            s += f" 正在执行 {_running_tool(r)}"
         if r.inbox:
             s += f" 信箱待送 {len(r.inbox)} 条"
         if r.stop_requested:
@@ -552,6 +589,21 @@ def _progress(r: AgentRecord) -> str:
     if r.delivered:
         s += f" 已送达补充指令 {r.delivered} 条"
     return s
+
+
+def public_view(r: AgentRecord, with_result: bool = False) -> dict:
+    """给 Web 子代理面板的只读快照 (gateway/subagents.py)。不含 sid / 信箱原文;
+    带 result 时只读不标 fetched —— 用户在界面看过结果, 主代理下一轮仍会收到 [SYSTEM-AGENTS] 提示。"""
+    d = {"id": r.id, "agent_type": r.agent_type, "brief": r.brief, "task": str(r.task)[:2000],
+         "status": r.status, "status_cn": _STATUS_CN.get(r.status, r.status), "background": r.background,
+         "started": r.started, "ended": r.ended, "elapsed": r.elapsed(), "iteration": r.iteration,
+         "max_iter": r.max_iter, "tool_calls": r.tool_calls, "last_tool": r.last_tool,
+         "inbox": len(r.inbox), "delivered": r.delivered, "stop_requested": r.stop_requested,
+         "fetched": r.fetched, "restored": r.restored, "has_result": bool(r.result), "progress": _progress(r)}
+    if with_result:
+        d["result"] = r.result or ""
+        d["result_truncated"] = r.result_truncated
+    return d
 
 
 def _take(r: AgentRecord) -> str:
@@ -622,8 +674,11 @@ async def agent_control_tool(sid: Optional[str], args: dict) -> str:
         return f"ERROR: 子代理 {r.id} 已被请求停止, 不再接收补充指令。"
     r.inbox.append(msg)
     _log().info(f"  [agent-control] {r.id} 投递补充指令 ({len(msg)} 字): {msg[:80]}")
+    busy = _running_tool(r)
+    when = (f"当前工具调用 {busy}, 指令将在本轮工具调用结束后、下一轮迭代开始前生效 (不会强行中断工具)"
+            if busy else "正在执行的工具/模型调用不会被打断")
     return (f"已投递给 {r.id} ({r.agent_type}): 它会在下一轮迭代开始前收到 (当前迭代 {r.iteration}, "
-            f"信箱待送 {len(r.inbox)} 条)。正在执行的工具/模型调用不会被打断。")
+            f"信箱待送 {len(r.inbox)} 条)。{when}。")
 
 
 async def _wait(sid: Optional[str], rid: str, timeout) -> str:

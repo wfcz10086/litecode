@@ -21,7 +21,8 @@ SHELL_DEFS = [
                     "timeout":    {"type": "integer", "description": "Seconds, 0=unlimited. 非 background 模式强制 ≤900s"},
                     "background": {"type": "boolean", "description": "nohup mode for long-lived processes"},
                     "health_url": {"type": "string",  "description": "URL to poll when background=true"},
-                    "keep_alive": {"type": "boolean", "description": "True=session 结束也保留此进程（用户明确要求长跑的服务）。默认 False=session 结束自动清理"}
+                    "keep_alive": {"type": "boolean", "description": "True=session 结束也保留此进程（用户明确要求长跑的服务）。默认 False=session 结束自动清理"},
+                    "cwd":        {"type": "string",  "description": "工作目录 (可选, 相对路径以工作区为基准); 默认工作区"}
                 },
                 "required": ["command"]
             }

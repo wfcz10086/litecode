@@ -20,6 +20,11 @@
     - 操作员调用 windows 工具时 alias 与分配的不一致 → 直接拒绝; 未填 alias → 自动补成分配的 alias。
     - 子代理 sid 唯一 (subagent_operator_<hex>), handlers/windows_desktop 的 _LAST_SHOT 以 (sid, alias) 为 key,
       各子代理的最近截图互不串用; 拿锁时清掉其他会话对该 alias 的旧截图 (画面即将被改), 结束时清掉本 sid 的截图。
+
+  产出物 (截图 / 下载):
+    - handler 以子代理 sid 调 tool_dispatch._add_artifact (子代理 sid 没有会话, 本身登记不上), 经 note_artifact
+      先记在本模块; 子代理结束时 (含超时/取消) flush_artifacts 登记到**父会话**: 最后 MAX_SHOTS 张截图 + 全部下载,
+      按文件路径去重 (同一路径只留最后一条), 记录带 source=operator / alias; 结果末尾附一行登记清单。
 """
 from __future__ import annotations
 
@@ -213,6 +218,63 @@ def prepare_spawn_args(args: dict) -> Tuple[dict, Optional[str]]:
     return new, None
 
 
+# ═══════════════════════════ 产出物登记到父会话 ═══════════════════════════
+
+MAX_SHOTS = 6                          # 每个操作员最多登记最后 6 张截图; 下载全部登记
+_ARTS: Dict[str, List[dict]] = {}      # operator sid -> 运行期间 handler 登记的产出物 (按时间顺序)
+
+
+def note_artifact(sid: str, record) -> None:
+    """tool_dispatch._add_artifact 的旁路: 只收集正在运行的操作员子代理的产出物。"""
+    lst = _ARTS.get(sid or "")
+    if lst is not None and isinstance(record, dict) and isinstance(record.get("filepath"), str):
+        lst.append(dict(record))
+
+
+def select_artifacts(records: List[dict], max_shots: Optional[int] = None) -> List[dict]:
+    """去重 (同路径留最后一条) + 截图只留最后 max_shots (默认 MAX_SHOTS) 张 + 下载/其它全部; 保持时间顺序。"""
+    max_shots = MAX_SHOTS if max_shots is None else max_shots
+    last: Dict[str, int] = {}
+    for i, r in enumerate(records):
+        last[r["filepath"]] = i
+    uniq = [records[i] for i in sorted(last.values())]
+    shots = [r for r in uniq if r.get("op") == "screenshot"]
+    keep_shots = {id(r) for r in shots[-max_shots:]} if max_shots > 0 else set()
+    return [r for r in uniq if r.get("op") != "screenshot" or id(r) in keep_shots]
+
+
+def flush_artifacts(sid: str, parent_sid: Optional[str], alias: Optional[str]) -> List[dict]:
+    """把操作员 sid 收集到的产出物登记到父会话; 返回已登记的记录 (无父会话时只丢弃)。幂等: 只生效一次。"""
+    recs = _ARTS.pop(sid, None)
+    if not recs or not parent_sid:
+        return []
+    picked = select_artifacts(recs)
+    try:
+        from core import tool_dispatch
+    except Exception:
+        return []
+    out = []
+    for r in picked:
+        rec = {"filepath": r["filepath"], "op": r.get("op") or "file", "source": "operator",
+               "alias": alias or "", "subagent": sid}
+        try:
+            tool_dispatch._add_artifact(parent_sid, rec)
+            out.append(rec)
+        except Exception:
+            continue
+    return out
+
+
+def artifacts_note(regs: List[dict]) -> str:
+    if not regs:
+        return ""
+    shots = [r for r in regs if r["op"] == "screenshot"]
+    others = [r for r in regs if r["op"] != "screenshot"]
+    head = f"[产出物已登记到主会话: 截图 {len(shots)} 张" + (f" (最近 {MAX_SHOTS} 张)" if len(shots) >= MAX_SHOTS else "")
+    head += f", 下载/文件 {len(others)} 个]"
+    return head + "".join(f"\n- {r['op']}: {r['filepath']}" for r in others + shots)
+
+
 # ═══════════════════════════ 运行期独占 ═══════════════════════════
 
 _LOCKS: Dict[str, Tuple[asyncio.Lock, object]] = {}
@@ -312,8 +374,14 @@ async def run_as_operator(core_fn: Callable, task: str, agent_type: str, context
         if time.time() - t0 > 1:
             log.info(f"  [operator] {alias} 等锁 {time.time() - t0:.1f}s 后获得")
         log.info(f"  [operator] {sid} 独占 {alias}")
-        return await core_fn(task, agent_type, context, sse_emit, parent_sid, sid)
+        _ARTS[sid] = []
+        out = await core_fn(task, agent_type, context, sse_emit, parent_sid, sid)
+        regs = flush_artifacts(sid, parent_sid, alias)
+        if regs and isinstance(out, str):
+            out = f"{out}\n\n{artifacts_note(regs)}"
+        return out
     finally:
+        flush_artifacts(sid, parent_sid, alias)      # 超时/取消/异常: 已产生的截图与下载照样登记
         _SID_ALIAS.pop(sid, None)
         if (_OWNER.get(alias) or {}).get("sid") == sid:
             _OWNER.pop(alias, None)

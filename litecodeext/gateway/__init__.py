@@ -20,12 +20,14 @@ from . import model_mgmt as _model_mgmt
 from . import observability as _observability
 from . import openai_compat as _openai_compat
 from . import sessions as _sessions
+from . import subagents as _subagents
 
 
 def mount(app: FastAPI) -> None:
     """把网关所有 router 挂到 app. 幂等."""
     app.include_router(_openai_compat.router)
     app.include_router(_sessions.router)
+    app.include_router(_subagents.router)   # Web 后台子代理面板 (见 routers/subagents_router.py)
     app.include_router(_memory.router)
     app.include_router(_model_mgmt.router)
     app.include_router(_observability.router)

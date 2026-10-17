@@ -217,6 +217,11 @@ async def _start_dag_internal(name: str) -> dict:
             if not job:
                 return
             sid = getattr(spec, "step_id", None) or getattr(spec, "id", None) or label
+            try:   # [worktree-iso] 本步骤任务内的工作树报告归到该步
+                from lib.agent.subagent_worktree import mark_dag_step
+                mark_dag_step(sid)
+            except Exception:
+                pass
             ags = job.setdefault("agents", [])
             if not any(a.get("step_id") == sid for a in ags):
                 ags.append({"label": label, "agent_type": getattr(spec, "agent_type", ""),
@@ -266,8 +271,14 @@ async def _start_dag_internal(name: str) -> dict:
         except Exception:
             _dag_tracer = None  # 造不出就退回 None, 下游 NullTracer 兜底, 不影响主流
 
+        # [worktree-iso 2026-10-18] 互不为祖先的并发写步 + workdir 在 git 仓库 → 各步独立工作树, 结束串行合并;
+        # 冲突/未合并写进该步输出与 job["worktrees"]/exec_log。单写步/非 git: _run_fn 就是 _run_subagent。
         try:
-            orch = MultiAgentOrchestrator(run_subagent_fn=_run_subagent, workspace=ws,
+            from lib.agent.subagent_worktree import wrap_saved_dag, dag_unmerged_summary
+            _run_fn, _iso = await asyncio.to_thread(
+                wrap_saved_dag, _run_subagent, plan, ws, _DAG_JOBS.get(job_id),
+                lambda: _dag_job_save(job_id))
+            orch = MultiAgentOrchestrator(run_subagent_fn=_run_fn, workspace=ws,
                                           pause_check_fn=_pause_check,
                                           step_done_cb=_step_done,
                                           step_begin_cb=_step_begin,
@@ -286,7 +297,7 @@ async def _start_dag_internal(name: str) -> dict:
                                 # [P54+] 加大节点输出窗口: 300 → 8000 字符, 让 modal 真有日志可看
                                 "output_preview": (r.output or "")[:8000],
                                 "step_id": getattr(r, "step_id", None) or r.label} for r in res.agents],
-                    "final_output": (res.final_output or "")[:4000],
+                    "final_output": (res.final_output or "")[:4000] + dag_unmerged_summary(_iso),
                 })
                 _dag_job_save(job_id)
         except asyncio.CancelledError:

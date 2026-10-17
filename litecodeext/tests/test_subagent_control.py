@@ -442,3 +442,149 @@ def test_user_interrupt_stops_background_agents():
         clear_interrupt("sess-a")
         with reg._LOCK:
             reg._RECORDS.pop(a.id, None); reg._RECORDS.pop(b.id, None)
+
+
+# ═══════════ 待跟进修复: 补充指令不被滚动摘要吞掉 / send 告知正在跑的工具 / 后台任务跨回合存活 ═══════════
+
+# ── 端到端: 长补充指令在第 8、16 轮滚动摘要之后仍按原文完整出现在子代理上下文里 (只出现一次) ──
+def test_instruction_survives_rolling_summary(env):
+    t = "长跑探索"
+    long_msg = "改用 B 方案, 注意: " + "边界条件逐个核对; " * 30 + "结尾标记 XYZ-END"
+
+    async def fn(messages, i):
+        if i >= 17:
+            return ("text", "完成")
+        await asyncio.sleep(0.005)
+        return ("tool", "search_code", {"pattern": f"P{i}"})
+    env.behaviors[t] = fn
+
+    async def go():
+        (rid,) = _ids(await _dispatch({"task": t, "agent_type": "explorer", "background": True}, "sid-R"))
+        rec = reg.get("sid-R", rid)
+        await _until(lambda: rec.iteration >= 2)
+        assert (await _ctl("sid-R", action="send", id=rid, message=long_msg)).startswith("已投递")
+        return rid, await _ctl("sid-R", action="wait", id=rid, timeout=20)
+    rid, w = asyncio.run(go())
+    assert "完成" in w, w
+    hist = env.seen[t]
+    assert len(hist) == 18
+    for i in (9, 12, 16, 17):              # 第 8 轮、第 16 轮摘要之后
+        blob = "\n".join(str(m.get("content")) for m in hist[i])
+        assert blob.count(long_msg) == 1, (i, blob[:600])          # 原文完整且不重复
+        assert "以下是前几轮操作的摘要" in blob and "仍然有效的主代理补充指令" in blob
+        assert f"[User] {reg.INSTR_PREFIX}" not in blob              # 截断的摘要行已去掉
+    assert reg.get("sid-R", rid).instructions == [long_msg]
+
+
+# ── pin 单元: 去重 / 已在最近消息里不重复 / 总长上限 / 重复压缩不叠加 / 无摘要时插在 system 之后 ──
+def test_pin_instructions_unit():
+    from lib.agent import subagent_instr as si
+    P = reg.INSTR_PREFIX
+    summary = {"role": "user", "content": si.SUMMARY_HEAD + "...]\n\n[User] " + P + " 旧指令前八十字\n[Action] x"}
+    msgs = [{"role": "system", "content": "sys"}, summary,
+            {"role": "assistant", "content": "a"}, {"role": "user", "content": f"{P} 最近的指令 C"}]
+    out = si.pin(msgs, ["指令 A", "指令 B", "指令 A", "最近的指令 C"], P)
+    s = out[1]["content"]
+    assert s.startswith(si.SUMMARY_HEAD) and "[User] " + P not in s
+    blk = s.split(si.PIN_HEAD, 1)[1]
+    assert blk.count("指令 A") == 1 and "指令 B" in blk and "最近的指令 C" not in blk   # 去重 + 已在最近消息里不附
+    assert blk.index("指令 B") < blk.index("指令 A")                                     # 时间顺序 (A 以最近一次为准)
+    assert msgs[1] is summary and si.PIN_HEAD not in summary["content"]                  # 不改入参
+    again = si.pin(out, ["指令 A", "指令 B", "指令 A", "最近的指令 C"], P)
+    assert again[1]["content"].count(si.PIN_HEAD) == 1                                   # 重复压缩不叠加
+    # 总长上限: 最新优先, 较早的只记条数
+    big = [f"{k}" * 1500 for k in "123"]
+    blk2 = si.build_block(big, "", limit=3200)
+    assert "3" * 1500 in blk2 and "2" * 1500 in blk2 and "1" * 1500 not in blk2 and "较早的 1 条" in blk2
+    # 没有摘要消息 → 作为 user 消息插在 system 之后; 没有指令 → 原样返回
+    plain = [{"role": "system", "content": "sys"}, {"role": "assistant", "content": "a"}]
+    out3 = si.pin(plain, ["指令 Z"], P)
+    assert out3[1]["role"] == "user" and out3[1]["content"].startswith(si.PIN_HEAD) and len(out3) == 3
+    assert si.pin(plain, [], P) is plain
+    assert reg.pin_instructions(plain) is plain                                          # 非子代理上下文: 不动
+
+
+# ── send 时子代理正在跑长工具调用: 返回里说明工具名与已运行秒数, 不中断工具, 结束后指令生效 ──
+def test_send_reports_running_tool(env, monkeypatch):
+    t = "长工具"
+    gate = {}
+    base_exec = sa.execute_tool
+
+    async def slow_exec(name, args, sid):
+        if args.get("pattern") == "SLOW":
+            gate["in"].set()
+            await gate["go"].wait()
+        return await base_exec(name, args, sid)
+    monkeypatch.setattr(sa, "execute_tool", slow_exec)
+
+    async def fn(messages, i):
+        if any(reg.INSTR_PREFIX in str(m.get("content")) for m in messages):
+            return ("text", "按指令收尾")
+        return ("tool", "search_code", {"pattern": "SLOW"})
+    env.behaviors[t] = fn
+
+    async def go():
+        gate["in"], gate["go"] = asyncio.Event(), asyncio.Event()
+        (rid,) = _ids(await _dispatch({"task": t, "agent_type": "explorer", "background": True}, "sid-L"))
+        await gate["in"].wait()
+        reg.get("sid-L", rid).tool_started -= 7              # 假装已跑 7 秒
+        st = await _ctl("sid-L", action="status", id=rid)
+        s = await _ctl("sid-L", action="send", id=rid, message="跑完这个就收尾")
+        assert reg.get("sid-L", rid).status == "running"     # 工具没被打断
+        gate["go"].set()
+        w = await _ctl("sid-L", action="wait", id=rid, timeout=5)
+        return rid, st, s, w, await _ctl("sid-L", action="status", id=rid)
+    rid, st, s, w, st2 = asyncio.run(go())
+    assert "正在执行 search_code(SLOW) 已运行 7 秒" in st, st
+    assert s.startswith(f"已投递给 {rid}") and "当前工具调用 search_code(SLOW) 已运行 7 秒" in s, s
+    assert "指令将在本轮工具调用结束后" in s and "不会强行中断工具" in s, s
+    assert "按指令收尾" in w and "正在执行" not in st2
+
+
+# ── 后台任务跨回合存活: 服务端 (uvicorn) 是常驻事件循环, 每轮请求是独立 task;
+#    派发那一轮的请求 task 结束甚至被取消 (客户端断开/CLI Ctrl-C) 都不影响后台子代理, 下一轮能 wait 到结果 ──
+def test_background_survives_request_task_on_persistent_loop(env):
+    t = "跨回合"
+
+    async def fn(messages, i):
+        await env.go.wait()
+        return ("text", "跨回合完成")
+    env.behaviors[t] = fn
+
+    async def go():
+        env.go = asyncio.Event()
+        box = {}
+
+        async def turn1():                     # 第一轮请求: 派发后客户端断开
+            box["res"] = await _dispatch({"task": t, "agent_type": "explorer", "background": True}, "sid-X")
+            await asyncio.sleep(10)
+        req = asyncio.ensure_future(turn1())
+        await _until(lambda: "res" in box)
+        req.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await req
+        (rid,) = _ids(box["res"])
+        assert reg.get("sid-X", rid).status == "running"
+        env.go.set()
+        turn2 = asyncio.ensure_future(_ctl("sid-X", action="wait", id=rid, timeout=5))   # 第二轮请求
+        return rid, await turn2
+    rid, w = asyncio.run(go())
+    assert "跨回合完成" in w and reg.get("sid-X", rid).status == "done"
+
+
+# ── 每轮各自 asyncio.run (事件循环随轮次关闭) 的情形: 后台子代理会被取消, 但必须明确记成 stopped 并给出原因,
+#    不能永远显示"运行中"; 且 CLI 走 HTTP 调常驻服务, 自身不在进程内跑 agent 循环 (守住这个前提) ──
+def test_loop_close_marks_stopped_and_cli_is_http_client(env):
+    t = "随循环关闭"
+
+    async def fn(messages, i):
+        await asyncio.sleep(30)
+        return ("text", "不会到这")
+    env.behaviors[t] = fn
+    res = asyncio.run(_dispatch({"task": t, "agent_type": "explorer", "background": True}, "sid-Y"))
+    (rid,) = _ids(res)
+    rec = reg.get("sid-Y", rid)
+    assert rec.status == "stopped" and "后台任务被取消" in rec.result, (rec.status, rec.result)
+    for f in ("cli.py", "litecli.py", "litecode.py"):
+        src = (ROOT / f).read_text("utf-8")
+        assert "asyncio.run(" not in src and "agent_stream" not in src and "import litecode_server" not in src, f

@@ -1,0 +1,80 @@
+"""subagents_router.py — Web 后台子代理面板接口 (前端 web_assets/subagent_panel.js)。
+
+  GET  /api/sessions/{sid}/subagents              本会话子代理列表 (+ 运行中数量)
+  GET  /api/sessions/{sid}/subagents/{id}         单个子代理详情 + 结果 (只读, 不标"已取走")
+  POST /api/sessions/{sid}/subagents/{id}/stop    叫停运行中的子代理
+  POST /api/sessions/{sid}/subagents/{id}/send    给运行中的子代理发补充指令 {"message": "..."}
+
+子代理登记表在 litecode_server 进程, 本 router 只做 登录鉴权 (require_auth) + 会话归属校验
+(require_owner, 与 sessions_router 一致), 然后经 S.aproxy 转发到 gateway/subagents.py。
+会话隔离在 server 侧按路径 sid 做: 别的会话的子代理 id 一律 404。
+"""
+from urllib.parse import quote
+
+from fastapi import APIRouter, HTTPException, Request
+
+from routers.auth_router import require_auth
+from routers.state import S
+from lib.owner import require_owner
+
+router = APIRouter()
+ORDER = 105  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
+
+SEND_MAX = 2000   # 与 subagent_registry.SEND_MAX 一致; 真正的校验在 server 侧 agent_control, 这里只挡超大请求体
+
+
+def _wui():
+    """Lazy import web_ui 主模块, 避免循环 import (同 sessions_router)。"""
+    import web_ui  # type: ignore
+    return web_ui
+
+
+def _guard(sid: str, request: Request) -> None:
+    require_auth(request)
+    require_owner(_wui().load_session(sid), request)
+
+
+def _p(sid: str, rid: str = "", tail: str = "") -> str:
+    base = f"/v1/sessions/{quote(sid, safe='')}/subagents"
+    return base + (f"/{quote(rid, safe='')}" if rid else "") + tail
+
+
+async def _upstream(path: str, method: str = "GET", **kw) -> dict:
+    d = await S.aproxy(path, method, **kw)
+    if not isinstance(d, dict):
+        raise HTTPException(502, "upstream: bad response")
+    if "error" in d and "ok" not in d:   # aproxy 的失败形态: {"error", "status"?}
+        st = d.get("status")
+        raise HTTPException(st if isinstance(st, int) and 400 <= st < 600 else 502, d["error"])
+    return d
+
+
+@router.get("/api/sessions/{sid}/subagents")
+async def api_subagents(sid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid))
+
+
+@router.get("/api/sessions/{sid}/subagents/{rid}")
+async def api_subagent_detail(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid))
+
+
+@router.post("/api/sessions/{sid}/subagents/{rid}/stop")
+async def api_subagent_stop(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid, "/stop"), "POST")
+
+
+@router.post("/api/sessions/{sid}/subagents/{rid}/send")
+async def api_subagent_send(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    msg = str((body or {}).get("message") or "") if isinstance(body, dict) else ""
+    if len(msg) > SEND_MAX * 4:
+        raise HTTPException(413, f"补充指令过长 ({len(msg)} 字), 上限 {SEND_MAX} 字")
+    return await _upstream(_p(sid, rid, "/send"), "POST", json={"message": msg})

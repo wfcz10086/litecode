@@ -45,6 +45,7 @@ TOOLS = [
                 "background": {"type": "boolean", "description": "起后台服务"},
                 "health_url": {"type": "string",  "description": "background=true 时, 起后轮询该 URL 判断服务就绪"},
                 "keep_alive": {"type": "boolean", "description": "session 结束不清理"},
+                "cwd":        {"type": "string",  "description": "工作目录 (可选, 相对路径以工作区为基准)"},
             },
             "required": ["command"],
         },

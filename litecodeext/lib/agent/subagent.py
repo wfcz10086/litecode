@@ -584,7 +584,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
 
         # v1.0: 滚动摘要 — 每 8 轮压缩
         if _iter > 0 and _iter % 8 == 0:
-            messages = _rolling_summary(messages, keep_recent=6)
+            messages = _reg.pin_instructions(_rolling_summary(messages, keep_recent=6))   # 补充指令不随摘要丢失
 
         # 清理旧 tool result
         if _iter > 0 and _iter % 4 == 0:
@@ -747,6 +747,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 _win_err = f"ERROR: operator 不能调用 {fn_name} (只允许 {', '.join(sorted(allowed))}), 不得改动服务器"
             elif _op:
                 fn_args, _win_err = _win_guard(_subagent_sid, fn_name, fn_args)
+            _reg.tool_begin(fn_name, fn_args)   # [agent-control] send 时可告知主代理"当前工具已运行 N 秒"
             # v1.0: 黑板工具特殊处理
             if fn_name == "update_global_context" and _active_blackboard:
                 key = fn_args.get("key", "")

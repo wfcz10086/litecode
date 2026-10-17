@@ -25,6 +25,9 @@ import lib.config as _lcfg  # noqa: E402
 from core.tools.handlers import windows_desktop as wd  # noqa: E402
 from core.tools.handlers.windows_desktop import h_windows_desktop  # noqa: E402
 from core.tools.handlers.windows_system import h_windows_system  # noqa: E402
+import core.tool_dispatch as _td_mod  # noqa: E402
+
+_ORIG_ADD_ARTIFACT = _td_mod._add_artifact      # fixture 会把它打成 no-op, 产出物用例要用真实实现
 
 
 def _t(name):
@@ -325,3 +328,92 @@ def test_repeated_screenshots_not_loop_and_dispatch_path(env):
             pass
     asyncio.run(drive())
     assert res["result"].startswith("ERROR: spawn_agent 拒绝派发")
+
+
+# ═══════════════ 2026-10-18: 操作员截图/下载登记为父会话产出物 ═══════════════
+
+@pytest.fixture
+def arts(env, monkeypatch):
+    """恢复真实 _add_artifact (fixture 把它打成了 no-op), 记录器替代 lib.session.add_artifact; download 返回真文件。"""
+    import core.tool_dispatch as _td
+    import lib.windows_desktop as _lwd
+    rec = []
+    monkeypatch.setattr(_td, "_add_artifact", _ORIG_ADD_ARTIFACT)
+    monkeypatch.setattr(_td, "_add_artifact_fn", lambda sid, data: rec.append((sid, dict(data))))
+    prev = _lwd.execute
+
+    def fake(args, workspace):
+        if args.get("action") == "download":
+            p = env.ws / "uploads" / Path(str(args.get("path", "x.txt")).replace("\\", "/")).name
+            p.write_text("dl")
+            env.node_calls.append(dict(args))
+            return {"ok": True, "alias": args.get("alias"), "action": "download", "path": str(p)}
+        return prev(args, workspace)
+    monkeypatch.setattr(_lwd, "execute", fake)
+    return rec
+
+
+def test_operator_artifacts_registered_to_parent(env, arts, monkeypatch):
+    monkeypatch.setattr(op, "MAX_SHOTS", 2)        # 默认 6; 调小以免脚本长到触发子代理上下文压缩
+    t = _t("截图下载登记")
+    shot = ("tool", "windows_desktop", {"alias": "vm-a", "action": "screenshot"})
+    env.scripts[t] = ([shot] * 4 + [
+        ("tool", "windows_system", {"alias": "vm-a", "action": "download", "path": "C:/r/报表.xlsx"}),
+        ("tool", "windows_system", {"alias": "vm-a", "action": "download", "path": "C:/r/报表.xlsx"}),   # 同一文件再取一次
+        ("tool", "windows_system", {"alias": "vm-a", "action": "download", "path": "C:/r/log.txt"}),
+        ("tool", "windows_system", {"alias": "vm-a", "action": "inspect_file", "path": "C:/r/log.txt"}),
+        ("text", "下载完成并已核对")])
+    out = _spawn({"agent_type": "operator", "alias": "vm-a", "task": t}, sid="parent-sess")
+    parent = [r for s, r in arts if s == "parent-sess"]
+    shots = [r for r in parent if r["op"] == "screenshot"]
+    dls = [r for r in parent if r["op"] == "download"]
+    assert len([c for c in env.node_calls if c.get("action") == "screenshot"]) == 4
+    # 截图只登记最后 MAX_SHOTS 张 (按时间顺序), 下载全部登记且按路径去重
+    assert len(shots) == 2, parent
+    produced = sorted((p for p in (env.ws / "uploads").glob("shot_vm-a_*.png")),
+                      key=lambda p: int(p.stem.rsplit("_", 1)[1]))
+    assert [Path(r["filepath"]).name for r in shots] == [p.name for p in produced[-2:]]
+    assert sorted(Path(r["filepath"]).name for r in dls) == ["log.txt", "报表.xlsx"]
+    assert len({r["filepath"] for r in parent}) == len(parent)                  # 去重
+    assert all(r["source"] == "operator" and r["alias"] == "vm-a" and r["subagent"].startswith("subagent_operator_")
+               for r in parent)
+    assert "[产出物已登记到主会话: 截图 2 张 (最近 2 张), 下载/文件 2 个]" in out, out
+    assert "- download: " in out and "报表.xlsx" in out
+    assert not op._ARTS
+    assert op.MAX_SHOTS == 2 and len(op.select_artifacts(
+        [{"filepath": f"/{i}", "op": "screenshot"} for i in range(9)], max_shots=6)) == 6
+
+
+def test_operator_artifacts_registered_on_timeout_and_no_parent(env, arts):
+    t = _t("超时也登记")
+    env.scripts[t] = [("tool", "windows_desktop", {"alias": "vm-a", "action": "screenshot"}), ("text", "不会到这")]
+
+    async def hang():
+        await asyncio.sleep(5)
+    env.hooks[(t, 2)] = hang                                    # 截图之后的第 2 轮 LLM 调用卡住
+
+    async def run():
+        with pytest.raises(asyncio.TimeoutError):
+            await asyncio.wait_for(sa._run_subagent(f"{t}\n\n{op.marker('vm-a')}", "operator",
+                                                    parent_sid="p2"), timeout=1.0)
+    asyncio.run(run())
+    p2 = [r for s, r in arts if s == "p2"]
+    assert len(p2) == 1 and p2[0]["op"] == "screenshot" and not op._ARTS
+    # 没有父会话 (DAG 运行时等): 不登记, 结果不加说明
+    t2 = _t("无父会话")
+    env.scripts[t2] = [("tool", "windows_desktop", {"alias": "vm-a", "action": "screenshot"}), ("text", "看完")]
+    n = len(arts)
+    r = asyncio.run(sa._run_subagent(f"{t2}\n\n{op.marker('vm-a')}", "operator"))
+    assert r == "看完"
+    assert not [x for x in arts[n:] if x[1].get("source") == "operator"] and not op._ARTS
+
+
+def test_select_artifacts_unit():
+    recs = [{"filepath": f"/s{i}.png", "op": "screenshot"} for i in range(10)]
+    recs += [{"filepath": "/d.txt", "op": "download"}, {"filepath": "/s9.png", "op": "screenshot"},
+             {"filepath": "/d.txt", "op": "download"}]
+    got = op.select_artifacts(recs)
+    assert [r["filepath"] for r in got] == ["/s4.png", "/s5.png", "/s6.png", "/s7.png", "/s8.png", "/s9.png", "/d.txt"]
+    assert op.select_artifacts([]) == []
+    op.note_artifact("not-running", {"filepath": "/x", "op": "screenshot"})   # 非运行中的操作员 sid: 忽略
+    assert "not-running" not in op._ARTS

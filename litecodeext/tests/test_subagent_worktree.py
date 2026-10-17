@@ -64,7 +64,8 @@ def env(tmp_path, monkeypatch):
             p.write_text(args["content"])
             return f"wrote {p}", None
         if name == "execute_shell":
-            r = subprocess.run(args["command"], shell=True, capture_output=True, text=True, cwd=str(ws))
+            r = subprocess.run(args["command"], shell=True, capture_output=True, text=True,
+                               cwd=str(args.get("cwd") or ws))      # 与 tool_dispatch 一致: 尊重 cwd
             return (r.stdout + r.stderr).strip() or "(exit 0)", None
         return f"fake {name}", None
 
@@ -113,8 +114,8 @@ def test_parallel_different_files_both_merged(env):
     # 写入路径被映射进工作树 (绝对路径 + 相对路径), shell 前置 cd 到工作树
     writes = [a["filepath"] for n, a in env["calls"] if n == "write_file"]
     assert all("/.agent_worktrees/" in w for w in writes), writes
-    shell = [a["command"] for n, a in env["calls"] if n == "execute_shell"][0]
-    assert shell.startswith("cd ") and "/.agent_worktrees/coder-" in shell
+    shell = [a for n, a in env["calls"] if n == "execute_shell"][0]
+    assert shell["command"] == "pwd" and "/.agent_worktrees/coder-" in shell["cwd"]   # 默认 cwd = 工作树
     # 主工作区干净 (工作树目录已写进 info/exclude 或不在仓库内)
     assert _git(repo, "status", "--porcelain") == ""
     assert "合并子代理" in _git(repo, "log", "--oneline", "-5")
@@ -178,7 +179,7 @@ def test_path_mapping_units(env):
     assert ctx.map_path(w + "/a.py") == w + "/a.py"                 # 已在工作树不重复映射
     assert ctx.map_path(str(repo) + "x/a.py") == str(repo) + "x/a.py"  # 前缀相同的兄弟目录不误伤
     cmd = ctx.map_command(f"python {repo}/a.py && cat '{repo}/b.py' {repo}x/c")
-    assert cmd.startswith(f"cd {w}/sub && ")
+    assert not cmd.startswith("cd ")                                # 工作目录改由 cwd 参数给出
     assert f"python {w}/a.py" in cmd and f"'{w}/b.py'" in cmd and f"{repo}x/c" in cmd
     token = wt._ACTIVE.set(ctx)
     try:
@@ -322,3 +323,212 @@ def test_main_loop_dispatch_path(env):
     res = asyncio.run(_go())
     assert _summary(res).count("] 已合并") == 2, res
     assert (repo / "a.py").read_text() == "x = 'm'\n" and (repo / "b.py").read_text() == "y = 'm'\n"
+
+
+# ═══════════════ 2026-10-18: saved DAG 接入隔离 + execute_shell cwd 映射 ═══════════════
+
+@pytest.fixture
+def dagenv(env, tmp_path, monkeypatch):
+    """saved DAG 运行环境: DAG 存在 ws/dags, job 记录落 tmp, 不连 itrace。"""
+    import dag_state
+    from lib.config import CFG
+    monkeypatch.setitem(CFG, "paths", {**(CFG.get("paths") or {}), "workspace_base": str(env["ws"])})
+    monkeypatch.setitem(CFG, "iteration_trace", {"enabled": False})
+    (tmp_path / "dag_jobs").mkdir()
+    monkeypatch.setattr(dag_state, "_DAG_JOBS_DIR", tmp_path / "dag_jobs")
+    return env
+
+
+def _save(env, body):
+    from lib.dag_schema import save_dag
+    name = f"wt_{uuid.uuid4().hex[:8]}"
+    save_dag(env["ws"], name, body)
+    return name
+
+
+def _run_saved(env, body):
+    """经 DAG 编辑器的运行入口 dag_state._start_dag_internal 跑完, 返回 job 记录。"""
+    import dag_state
+    name = _save(env, body)
+
+    async def _go():
+        r = await dag_state._start_dag_internal(name)
+        assert r["ok"], r
+        await dag_state._DAG_JOBS[r["job_id"]]["_task"]
+        return dag_state._DAG_JOBS[r["job_id"]]
+    return asyncio.run(_go())
+
+
+def _two_coders(ta, tb, **extra):
+    return dict({"steps": [{"id": "s1", "task": ta, "agent_type": "coder", "max_retries": 0},
+                           {"id": "s2", "task": tb, "agent_type": "coder", "max_retries": 0}]}, **extra)
+
+
+def _rows(job):
+    return {a["step_id"]: a for a in job["agents"]}
+
+
+# ── saved DAG 两个并发 coder 改不同文件: 各自工作树, 都合并; 步骤输出不被改动 (when/JSON 传值安全) ──
+def test_saved_dag_concurrent_coders_isolated(dagenv):
+    env, repo = dagenv, dagenv["repo"]
+    nonce = uuid.uuid4().hex[:8]       # checkpoint 按 plan_id (步骤内容哈希) 缓存, 塞 nonce 防 instant-restore
+    ta, tb = f"saved a {nonce}", f"saved b {nonce}"
+    env["scripts"][ta] = [("write_file", {"filepath": "a.py", "content": "x = 'saved'\n"})]
+    env["scripts"][tb] = [("write_file", {"filepath": str(repo / "b.py"), "content": "y = 'saved'\n"})]
+    job = _run_saved(env, _two_coders(ta, tb, workdir=str(repo)))
+    assert job["status"] == "done", job
+    assert (repo / "a.py").read_text() == "x = 'saved'\n" and (repo / "b.py").read_text() == "y = 'saved'\n"
+    writes = [a["filepath"] for n, a in env["calls"] if n == "write_file"]
+    assert len(writes) == 2 and all("/.agent_worktrees/" in w for w in writes), writes
+    rows = _rows(job)
+    assert rows["s1"]["output_preview"] == f"done: {ta}" and rows["s2"]["output_preview"] == f"done: {tb}"
+    wts = {w["step_id"]: w for w in job["worktrees"]}
+    assert set(wts) == {"s1", "s2"} and all(w["status"] == "merged" for w in wts.values()), job["worktrees"]
+    assert job["worktree_unmerged"] == [] and "子代理工作树隔离" not in job["final_output"]
+    assert sum(1 for e in job["exec_log"] if e["event"] == "worktree") == 2
+    assert _lc_branches(repo) == [] and _wt_dirs(env["ws"]) == []
+    assert _git(repo, "status", "--porcelain") == ""
+
+
+# ── saved DAG 同行冲突: 不静默 —— 冲突步输出与 job 记录都标出冲突文件与保留分支, 另一步正常合并 ──
+def test_saved_dag_conflict_marked_in_step_and_job(dagenv):
+    env, repo = dagenv, dagenv["repo"]
+    nonce = uuid.uuid4().hex[:8]
+    ta, tb = f"conflict a {nonce}", f"conflict b {nonce}"
+    env["scripts"][ta] = [("write_file", {"filepath": "a.py", "content": "x = 'A'\n"})]
+    env["scripts"][tb] = [("write_file", {"filepath": "a.py", "content": "x = 'B'\n"})]
+    job = _run_saved(env, _two_coders(ta, tb, workdir=str(repo)))
+    assert job["status"] == "done"
+    assert len(job["worktree_unmerged"]) == 1, job["worktrees"]
+    bad = job["worktree_unmerged"][0]
+    assert bad["status"] == "conflict" and bad["conflicts"] == ["a.py"] and bad["branch"].startswith("lc-agent/")
+    good_step = ({"s1", "s2"} - {bad["step_id"]}).pop()
+    rows = _rows(job)
+    out_bad = rows[bad["step_id"]]["output_preview"]
+    assert "合并冲突 冲突文件: a.py" in out_bad and f"保留分支 {bad['branch']}" in out_bad, out_bad
+    assert rows[good_step]["output_preview"].startswith("done: ") and "[工作树" not in rows[good_step]["output_preview"]
+    ev = [e for e in job["exec_log"] if e["event"] == "worktree" and e["status"] == "conflict"]
+    assert ev and ev[0]["step_id"] == bad["step_id"] and ev[0]["branch"] == bad["branch"]
+    assert "子代理工作树隔离" in job["final_output"] and bad["branch"] in job["final_output"]
+    # 记录已落盘 (刷新页面也能看到)
+    import dag_state
+    disk = [json.loads(p.read_text()) for p in dag_state._DAG_JOBS_DIR.glob("*.json")]
+    assert any(d.get("worktree_unmerged") for d in disk)
+    assert _lc_branches(repo) == [bad["branch"]] and _git(repo, "status", "--porcelain") == ""
+    res = asyncio.run(wt.agent_worktree_tool({"action": "discard", "id": bad["id"]}))
+    assert "已丢弃" in res and _lc_branches(repo) == []
+
+
+# ── saved DAG 单写步 (另一步只读) / 有依赖串行 / 非 git: 行为不变, 不建工作树 ──
+def test_saved_dag_single_writer_and_non_git_unchanged(dagenv):
+    env, repo = dagenv, dagenv["repo"]
+    nonce = uuid.uuid4().hex[:8]
+    ta, tb = f"single a {nonce}", f"single b {nonce}"
+    env["scripts"][ta] = [("write_file", {"filepath": str(repo / "a.py"), "content": "x = 's'\n"})]
+    job = _run_saved(env, {"workdir": str(repo), "steps": [
+        {"id": "s1", "task": ta, "agent_type": "coder", "max_retries": 0},
+        {"id": "s2", "task": tb, "agent_type": "explorer", "max_retries": 0}]})
+    assert job["status"] == "done" and "worktrees" not in job and "worktree_notes" not in job
+    assert "a.py" in _git(repo, "status", "--porcelain")            # 直接改在主工作区 (旧行为)
+    _git(repo, "checkout", "--", "a.py")
+    # 两个写步但有依赖 → 串行, 不隔离
+    tc, td = f"seq c {nonce}", f"seq d {nonce}"
+    env["scripts"][tc] = [("write_file", {"filepath": str(repo / "a.py"), "content": "x = 'c'\n"})]
+    job = _run_saved(env, {"workdir": str(repo), "steps": [
+        {"id": "c", "task": tc, "agent_type": "coder", "max_retries": 0},
+        {"id": "d", "task": td, "agent_type": "coder", "depends_on": ["c"], "max_retries": 0}]})
+    assert "worktrees" not in job and (repo / "a.py").read_text() == "x = 'c'\n"
+    _git(repo, "checkout", "--", "a.py")
+    # 非 git workdir: 两个并发写步照旧共用目录, 说明只进 job 记录, 步骤输出不变
+    plain = env["ws"] / "plain_dag"
+    plain.mkdir()
+    te, tf = f"plain e {nonce}", f"plain f {nonce}"
+    env["scripts"][te] = [("write_file", {"filepath": str(plain / "e.txt"), "content": "e"})]
+    env["scripts"][tf] = [("write_file", {"filepath": str(plain / "f.txt"), "content": "f"})]
+    job = _run_saved(env, _two_coders(te, tf, workdir=str(plain)))
+    assert (plain / "e.txt").exists() and (plain / "f.txt").exists()
+    assert "不是 git 仓库" in " ".join(job["worktree_notes"]) and "worktrees" not in job
+    assert _rows(job)["s1"]["output_preview"] == f"done: {te}"
+    assert _wt_dirs(env["ws"]) == []
+
+
+# ── run_dag 工具 (主代理调用) 同样隔离 + 冲突写进 job 记录 ──
+def test_run_dag_tool_isolated(dagenv, monkeypatch):
+    import re
+    from types import SimpleNamespace
+    from core.tools.handlers.dag import h_run_dag
+    env, repo = dagenv, dagenv["repo"]
+    jobs = {}
+    monkeypatch.setitem(sys.modules, "web_ui", SimpleNamespace(_DAG_JOBS=jobs))
+    nonce = uuid.uuid4().hex[:8]
+    ta, tb = f"tool a {nonce}", f"tool b {nonce}"
+    env["scripts"][ta] = [("write_file", {"filepath": "a.py", "content": "x = 'T'\n"})]
+    env["scripts"][tb] = [("write_file", {"filepath": "a.py", "content": "x = 'U'\n"})]
+    name = _save(env, _two_coders(ta, tb, workdir=str(repo)))
+
+    async def _go():
+        out, _ = await h_run_dag("", {"name": name})
+        jid = re.search(r"job_id=(\w+)", out).group(1)
+        for _ in range(1000):
+            if jobs[jid]["status"] != "running":
+                break
+            await asyncio.sleep(0.02)
+        return jobs[jid]
+    job = asyncio.run(_go())
+    assert job["status"] == "done", job
+    st = sorted(w["status"] for w in job["worktrees"])
+    assert st == ["conflict", "merged"] and {w["step_id"] for w in job["worktrees"]} == {"s1", "s2"}
+    assert "合并冲突" in " ".join(a["output_preview"] for a in job["agents"])
+    assert "子代理工作树隔离" in job["final_output"]
+    asyncio.run(wt.agent_worktree_tool({"action": "discard", "id": job["worktree_unmerged"][0]["id"]}))
+
+
+# ── execute_shell: 默认 cwd = 工作树; 主工作区内的 cwd 映射到工作树子目录; 相对/拼接路径落在工作树 ──
+def test_execute_shell_cwd_mapping(env):
+    repo, ws = env["repo"], env["ws"]
+    (repo / "sub").mkdir()
+    (repo / "sub" / "keep.txt").write_text("k\n")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-qm", "sub")
+    gen = "python3 -c \"import os; open(os.path.join(os.getcwd(), 'gen.txt'), 'w').write('g')\""
+    env["scripts"]["sh1"] = [("execute_shell", {"command": "mkdir -p out && echo hi > out/rel.txt"})]
+    env["scripts"]["sh2"] = [("execute_shell", {"command": gen, "cwd": str(repo / "sub")})]
+    out = _spawn({"parallel_tasks": [{"task": "sh1", "agent_type": "coder"},
+                                     {"task": "sh2", "agent_type": "coder"}],
+                  "workdir": str(repo)})
+    assert _summary(out).count("] 已合并") == 2, out
+    assert (repo / "out" / "rel.txt").read_text() == "hi\n"
+    assert (repo / "sub" / "gen.txt").read_text() == "g"
+    cwds = [a["cwd"] for n, a in env["calls"] if n == "execute_shell"]
+    assert len(cwds) == 2 and all("/.agent_worktrees/coder-" in c for c in cwds), cwds
+    assert any(c.endswith("/sub") for c in cwds)
+    assert _git(repo, "status", "--porcelain") == "" and _wt_dirs(ws) == []
+    # 单元: 未给 / 仓库内绝对 / 相对 / 仓库外绝对; 命令里绝对路径前缀替换保留
+    ctx = wt.WorktreeCtx("coder-y", "coder", repo, ws / ".agent_worktrees" / "coder-y",
+                         repo, "lc-agent/coder-y", "HEAD")
+    w = str(ws / ".agent_worktrees" / "coder-y")
+    token = wt._ACTIVE.set(ctx)
+    try:
+        a = wt.rewrite_tool_args("execute_shell", {"command": f"cat {repo}/a.py"})
+        assert a == {"command": f"cat {w}/a.py", "cwd": w}
+        assert wt.rewrite_tool_args("execute_shell", {"command": "ls", "cwd": str(repo / "sub")})["cwd"] == w + "/sub"
+        assert wt.rewrite_tool_args("execute_shell", {"command": "ls", "cwd": "sub"})["cwd"] == w + "/sub"
+        assert wt.rewrite_tool_args("execute_shell", {"command": "ls", "cwd": "/tmp"})["cwd"] == "/tmp"
+    finally:
+        wt._ACTIVE.reset(token)
+    assert wt.rewrite_tool_args("execute_shell", {"command": "ls"}) == {"command": "ls"}   # 未挂工作树不动
+
+
+# ── tool_dispatch 真实 execute_shell 尊重 cwd (绝对 / 相对工作区 / 不存在报错 / 默认工作区) ──
+def test_tool_dispatch_execute_shell_honors_cwd(tmp_path, monkeypatch):
+    from core import tool_dispatch as td
+    monkeypatch.setattr(td, "WORKSPACE", tmp_path)
+    (tmp_path / "d1").mkdir()
+    r, _ = asyncio.run(td.execute_tool("execute_shell", {"command": "pwd", "cwd": str(tmp_path / "d1")}, ""))
+    assert r.strip().endswith("/d1"), r
+    r, _ = asyncio.run(td.execute_tool("execute_shell", {"command": "pwd", "cwd": "d1"}, ""))
+    assert r.strip().endswith("/d1"), r
+    r, _ = asyncio.run(td.execute_tool("execute_shell", {"command": "pwd", "cwd": "nope"}, ""))
+    assert r.startswith("ERROR: execute_shell cwd 不存在"), r
+    r, _ = asyncio.run(td.execute_tool("execute_shell", {"command": "pwd"}, ""))
+    assert r.strip() in (str(tmp_path), str(tmp_path.resolve())), r

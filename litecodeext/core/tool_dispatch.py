@@ -211,6 +211,12 @@ def get_skill_usage_summary() -> str:
 
 
 def _add_artifact(sid, data):
+    # [operator 2026-10-18] 操作员子代理的截图/下载先旁路记下, 子代理结束时登记到父会话
+    try:
+        from lib.agent.subagent_operator import note_artifact
+        note_artifact(sid, data)
+    except Exception:
+        pass
     if _add_artifact_fn and sid:
         _add_artifact_fn(sid, data)
 
@@ -354,8 +360,16 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
         background = args.get("background", False)
         health_url = args.get("health_url")
         keep_alive = args.get("keep_alive", False)  # [v1.0] True=session 结束也保留
+        # [worktree-iso 2026-10-18] cwd: 相对路径以 WORKSPACE 为基准; 挂了工作树的子代理由 rewrite_tool_args 映射到工作树
+        _cwd_raw = str(args.get("cwd") or "").strip()
+        cwd = None
+        if _cwd_raw:
+            _cp = Path(os.path.expanduser(_cwd_raw))
+            cwd = _cp if _cp.is_absolute() else WORKSPACE / _cp
+            if not cwd.is_dir():
+                return f"ERROR: execute_shell cwd 不存在或不是目录: {cwd}", None
         if background:
-            return await _exec_bg(cmd, health_url, sid=sid, keep=keep_alive), None
+            return await _exec_bg(cmd, health_url, sid=sid, keep=keep_alive, cwd=cwd), None
         # [v1.0] 非 background 的硬上限 - 防止误用启动服务挂死主循环
         _FOREGROUND_HARD_LIMIT = 900  # 15 分钟
         _inferred = _infer_timeout(cmd)
@@ -364,7 +378,7 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
             # 旧版 forcing 900s timeout → 用户卡 15 分钟 (用户报 'http.server & 卡死')
             # 改: 直接帮 AI 转 bg pool 跑, 不让任务卡死.
             log.warning(f"  [execute_shell] long-service cmd 无 background=True, 自动转 bg pool: {cmd[:80]}")
-            r_msg = await _exec_bg(cmd, health_url, sid=sid, keep=keep_alive)
+            r_msg = await _exec_bg(cmd, health_url, sid=sid, keep=keep_alive, cwd=cwd)
             return (r_msg + "\n[AUTO-BG] 该命令疑似长服务 (含 http.server / uvicorn / & 等), "
                             "已自动以 background=True 跑. 下次起服务请直接传 background=true."), None
         else:
@@ -372,7 +386,8 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
             t = min(t, _FOREGROUND_HARD_LIMIT)  # 用户给的 timeout 也受硬上限约束
             _misuse_hint = ""
         if HAS_EXECUTOR:
-            result = await execute_shell_async(cmd, timeout=t, workspace=WORKSPACE)
+            result = await execute_shell_async(cmd, timeout=t, cwd=str(cwd) if cwd else None,
+                                               workspace=WORKSPACE)
         else:
             # 用 run_in_executor 包裹同步 subprocess，避免阻塞 asyncio event loop
             import subprocess as _sp
@@ -380,7 +395,7 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
             def _fallback_run():
                 try:
                     r = _sp.run(cmd, shell=True, capture_output=True, text=True,
-                                timeout=t, cwd=str(WORKSPACE), start_new_session=True)
+                                timeout=t, cwd=str(cwd or WORKSPACE), start_new_session=True)
                     out, err = r.stdout.strip(), r.stderr.strip()
                     if r.returncode == 0:
                         result = out

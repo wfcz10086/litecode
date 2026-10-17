@@ -20,8 +20,11 @@
      (VS 卡片左边是上一场讲过的数, 本场旁白只念了右边 —— 有出处, 不算矛盾。)
      本场旁白没说这类数字、整片和 facts 也没有 → 只提示 "画面数字没出处"。
   4. 没带单位的大数字 (hook.number / counter.to 没 prefix/suffix): 本场旁白有数却全对不上, 又无出处 → 矛盾。
+  5. 口语相对量: 三成 / 七成五 / 五成以上 / 一半 / 过半 → 百分比, 翻一番 ×2 / 翻两番 ×4 / 增长一倍 ×2, 打八折 = 80% (或降 20%)。
+  6. 画面自相矛盾: 同场 counter.to / hook.number (带单位) ↔ 同场 note/caption/副标题里的同量纲数字对不上 → 矛盾。
 豁免: 场景里写 "numcheck_ignore": ["画面上那段文字的片段", ...] —— 包含这些片段的画面字段不查。
 """
+import copy
 import json
 import math
 import re
@@ -124,7 +127,7 @@ TOKEN = re.compile(
 DATE = re.compile(r"(?<!\d)(1[5-9]\d\d|20\d\d)[./-](\d{1,2})[./-](\d{1,2})(?!\d)")
 PRE_APPROX = ("大约", "大概", "差不多", "约莫", "约", "左右")
 PRE_MORE = ("超过", "多达", "高达", "足有", "足足", "逾", "超")
-PRE_LESS = ("将近", "接近", "不到", "不足", "近")
+PRE_LESS = ("将近", "接近", "不到", "不足", "几乎", "近")
 PER_BEFORE = re.compile(r"(?:(每|一)(秒钟?|个?小时|分钟)|(时速|秒速))(?=[^，。！？；,.!?\d]{0,6}$)")
 MONEY_OK_NEXT = set("钱的吧啊呀了呢就都，。！？；、,.!? \n")
 
@@ -142,9 +145,15 @@ class Q:
     arabic: bool = False
     unit: str = ""
     extra: dict = field(default_factory=dict)
+    alts: list = field(default_factory=list)   # 同一说法的另一种读法 (打八折 = 80% 价格 / 降 20%)
 
-    def range(self):
-        v = self.value
+    def ranges(self):
+        return [self.range(v) for v in [self.value] + self.alts]
+
+    def range(self, v=None):
+        v = self.value if v is None else v
+        if "lohi" in self.extra and v == self.value:
+            return self.extra["lohi"]
         if self.dim == "year":
             return v, v
         if self.mode == "approx":
@@ -187,6 +196,100 @@ def _mode(text, start, end, post):
     return "exact"
 
 
+# ---------------------------------------------------------------- 相对 / 口语量词
+# 三成 / 七成五 / 七八成 / 五成以上 → 百分比; 一半 / 半数 / 过半 → 50%; 打八折 → 80% (另一读法: 降 20%);
+# 翻了一番 / 翻倍 → ×2, 翻两番 → ×4 (中文 "翻 N 番" = 2^N); 增长一倍 → ×2, 增长两倍 → 2~3 倍 (口语有歧义, 取区间)
+_CNALL = "零〇一二两三四五六七八九十百千万亿"
+_D = r"(?:[零〇一二两三四五六七八九]|\d)"
+CHENG = re.compile(rf"(?<![{_CNALL}\d.第])(?P<a>十|{_D})(?P<b>{_D})?成(?P<c>{_D}(?![{_CNALL}\d成]))?")
+# "八成是忘了" (=大概) / 一成不变 / 成员 成本 成功 …: 这些 "N成" 不是比例
+CHENG_NOT_NEXT = tuple("是会要就又也在没不得能想已都还可怕估") + (
+    "员", "本", "交", "功", "为", "长", "立", "熟", "年", "品", "果", "绩", "型", "分", "千", "百", "群", "双", "对",
+    "语", "都", "形", "片", "团", "套", "批", "倍")
+ZHE = re.compile(rf"(?<![{_CNALL}\d.波])(?P<da>打了?)?(?P<n>对|{_D}(?:\.\d)?{_D}?)折(?!扣|腾|磨|叠|射|服|合|算|返|线|中|纸|页|痕)")
+FAN = re.compile(rf"翻了?(?P<n>{_D})番|翻了?番|翻了?一?倍")
+GROW = re.compile(rf"(?:增长|增加|上涨|提高|提升|涨|增)了?(?P<n>{CN}|\d+(?:\.\d+)?)倍")
+HALF = re.compile(r"(?<![另多大])(?P<w>超过一半|超过半数|超半数|一大半|过半数?|半数|一半)")
+REL_POST = ("以上", "以下", "左右", "上下", "出头", "多")
+
+
+def _d(c: str) -> float:
+    return float(c) if c.isdigit() else float(CN_DIG[c])
+
+
+def _relative(text: str) -> list:
+    """口语相对量 → [Q] (dim = percent / times); 调用方把这些片段让出来, 不再当裸数字解析"""
+    out = []
+
+    def add(dim, v, m, step=0.0, mode=None, alts=None, start=None):
+        s = m.start() if start is None else start
+        e = m.end()
+        post = next((w for w in REL_POST if text.startswith(w, e)), None)
+        if post:
+            e += len(post)
+        md = mode or _mode(text, s, e, post)
+        if md == "more" and not step:
+            step = (100 - v) if dim == "percent" else v * .5     # 五成以上: 50%~100%
+        q = Q(dim, v, text[s:e], s, e, spoken=v, mode=md, step=step, unit="rel")
+        q.alts = list(alts or [])
+        out.append(q)
+
+    for m in CHENG.finditer(text):
+        nxt = text[m.end():m.end() + 1]
+        if nxt and (nxt in CHENG_NOT_NEXT or text.startswith(("不变",), m.end())):
+            continue
+        a, b, c = m.group("a"), m.group("b"), m.group("c")
+        if a == "十":
+            if b:
+                continue
+            add("percent", 100.0, m)
+        elif b:                                                  # 七八成 → 70%~80%
+            lo, hi = sorted((_d(a) * 10, _d(b) * 10))
+            if hi - lo != 10:
+                continue
+            add("percent", lo, m, step=10.0, mode="more")
+        else:
+            add("percent", _d(a) * 10 + (_d(c) if c else 0), m)
+    for m in ZHE.finditer(text):
+        n = m.group("n")
+        if n == "对":
+            if not m.group("da"):
+                continue                                         # "对折" 单说是折叠
+            v = 50.0
+        elif "." in n:
+            v = float(n) * 10                                    # 8.5折
+        else:
+            ds = [_d(c) for c in n]
+            v = ds[0] * 10 + (ds[1] if len(ds) > 1 else 0)
+        if 0 < v < 100:
+            add("percent", v, m, alts=[100 - v])
+    for m in FAN.finditer(text):
+        n = m.group("n")
+        add("times", 2.0 ** _d(n) if n else 2.0, m)
+    for m in GROW.finditer(text):
+        try:
+            n = _num(m.group("n"))
+        except (ValueError, KeyError):
+            continue
+        if n == 1:
+            add("times", 2.0, m)                                 # 增长一倍 = 原来的 2 倍
+        elif n > 1:
+            add("times", n, m, step=1.0, mode="more")            # 增长两倍: 严格说 3 倍, 口语常指 2 倍 → 2~3 倍都算
+    for m in HALF.finditer(text):
+        w = m.group("w")
+        if w in ("一半", "半数"):
+            add("percent", 50.0, m)
+        else:
+            add("percent", 50.0, m, step=50.0, mode="more")      # 过半 / 超过一半: 下限 50%
+    out.sort(key=lambda q: q.start)
+    keep = []
+    for q in out:                                                # 重叠时留先出现的
+        if keep and q.start < keep[-1].end:
+            continue
+        keep.append(q)
+    return keep
+
+
 def parse(text: str) -> list:
     """一段文字里的全部数值 → [Q] (时长组合已合并, 速度已识别, 序数/日期月日已去掉)"""
     text = str(text or "")
@@ -194,6 +297,11 @@ def parse(text: str) -> list:
     for m in DATE.finditer(text):                                # 1929.10.24 → 年份 1929
         out.append(Q("year", float(m.group(1)), m.group(), m.start(), m.end(), spoken=float(m.group(1)), arabic=True))
         taken.append((m.start(), m.end()))
+    for q in _relative(text):                                    # 三成 / 翻一番 / 一半 / 打八折 …
+        if any(a <= q.start < b for a, b in taken):
+            continue
+        out.append(q)
+        taken.append((q.start, q.end))
     raw = []
     pos = 0
     while pos < len(text):
@@ -391,10 +499,12 @@ def screen_fields(scene) -> list:
 
 # ---------------------------------------------------------------- 对账
 def _match(a: Q, b: Q) -> bool:
-    lo1, hi1 = a.range()
-    lo2, hi2 = b.range()
-    eps = 1e-9 * max(abs(hi1), abs(hi2), 1)
-    return lo1 <= hi2 + eps and lo2 <= hi1 + eps
+    for lo1, hi1 in a.ranges():
+        for lo2, hi2 in b.ranges():
+            eps = 1e-9 * max(abs(hi1), abs(hi2), 1)
+            if lo1 <= hi2 + eps and lo2 <= hi1 + eps:
+                return True
+    return False
 
 
 def _match_bare(x: Q, b: Q) -> bool:
@@ -455,8 +565,65 @@ def _nearest(qs, v):
     return min(qs, key=lambda q: abs(math.log(q.value / v)) if q.value > 0 and v > 0 else 1e9)
 
 
+# ---------------------------------------------------------------- 画面字段互相对账
+BIG_KEYS = {"number", "to", "value", "target", "total", "count", "amount"}   # hook.number / counter.to / 自定义版式顶层大数字
+DELTA_BEFORE = ("比", "多了", "少了", "快了", "慢了", "增", "减", "涨", "跌", "降", "提升", "提高", "下降", "差", "剩",
+                "还有", "再", "相差", "领先", "落后")
+
+
+def _is_delta(txt: str, q: Q) -> bool:
+    """「比去年多 30 秒」「降 20%」这类写的是差值 / 变化量, 不是同一个数, 不拿来对账"""
+    if txt[q.start:q.start + 1] in "+-−":
+        return True
+    before = txt[max(0, q.start - 6):q.start]
+    return any(w in before for w in DELTA_BEFORE)
+
+
+def _param_tolerance(sq: Q) -> Q:
+    """数字参数在画面上被四舍五入成整数 (7.5 圈 → 8圈): 容差放宽到 ±0.5 个念出来的单位"""
+    if sq.spoken:
+        f = sq.value / sq.spoken
+        lo, hi = sq.range()
+        sq.extra["lohi"] = (min(lo, (sq.spoken - .5) * f), max(hi, (sq.spoken + .5) * f))
+    return sq
+
+
+def cross_check(s: dict, shown: list, skip_fields: set, sourced) -> list:
+    """同一场里, 大数字 (hook.number / counter.to …, 带单位) ↔ 同场 note/caption/副标题等文字里写出的同量纲数字。
+    只在同量纲、两边都明确解析出数值时判定; 文字里写的是差值 (比…多 / 降 …) 不算; 一个大数字只报一次。"""
+    sid, typ = s.get("id", "?"), s.get("type", "")
+    custom = typ not in TEXT_KEYS
+    errs = []
+    bigs = [(f, t, q) for f, t, is_param, q in shown if is_param and f in BIG_KEYS and q.dim not in ("bare", "year")
+            and f not in skip_fields]
+    texts = [(f, t, q) for f, t, is_param, q in shown if not is_param and f != "act"
+             and f not in skip_fields and not (custom and ("." in f or "[" in f))
+             and q.dim not in ("bare", "year") and not _is_delta(t, q)]
+    for bf, bt, bq in bigs:
+        bq = copy.copy(bq)
+        bq.extra = dict(bq.extra)                                # 别改到原对象
+        _param_tolerance(bq)
+        by_field = {}
+        for tf, tt, tq in texts:
+            if tq.dim == bq.dim:
+                by_field.setdefault((tf, tt), []).append(tq)
+        for (tf, tt), qs in by_field.items():
+            if any(_match(bq, q) for q in qs):
+                continue
+            near = _nearest(qs, bq.value)
+            kind = _dim_cn(bq.dim)
+            diff = abs(near.value - bq.value) / max(near.value, bq.value) * 100
+            ok_b, ok_t = sourced(bq), sourced(near)
+            hint = ("大数字有出处 (旁白/facts), 改文字" if ok_b and not ok_t else
+                    "文字这个数有出处 (旁白/facts), 改大数字" if ok_t and not ok_b else "以 facts 为准把两处统一")
+            errs.append(f"{sid}: 画面 {typ}.{bf}「{bt}」= {_fmt(bq)}, 同场画面 {typ}.{tf}「{tt}」写的是「{_say(near)}」≈ {_fmt(near)}"
+                        f" —— 画面自相{kind}矛盾 (差 {diff:.0f}%); {hint}")
+            break
+    return errs
+
+
 def check(sj: dict):
-    """→ (errors, warnings). errors = 画面与旁白矛盾 (硬闸); warnings = 画面数字没有出处 (提示)"""
+    """→ (errors, warnings). errors = 画面与旁白矛盾 / 同场画面字段互相矛盾 (硬闸); warnings = 画面数字没有出处 (提示)"""
     scenes = sj.get("scenes") or []
     narr = [parse(s.get("text", "")) for s in scenes]
     facts = facts_quantities(sj)
@@ -469,6 +636,7 @@ def check(sj: dict):
         shown = [(fname, txt, is_param, sq) for fname, txt, is_param in screen_fields(s)
                  if not any(x in txt for x in ignore) for sq in parse(txt) if sq.value != 0]
         blamed = set()                                               # 同一句旁白只报一次
+        bad = set()                                                  # 已经因旁白矛盾报过错的画面字段 (互相对账不再重复报)
         for fname, txt, is_param, sq in shown:
             where = f"{sid}: 画面 {s.get('type', '')}.{fname}「{txt}」"
             if sq.dim == "bare":
@@ -477,6 +645,7 @@ def check(sj: dict):
                 if any(_match_bare(sq, q) for q in mine + support):
                     continue
                 if is_param and any(q.dim != "bare" for q in mine):
+                    bad.add(fname)
                     near = ", ".join(f"「{_say(q)}」" for q in mine if q.dim != "bare")
                     errs.append(f"{where} 的大数字 {sq.value:,.6g} 跟本场旁白的 {near} 都对不上, facts 里也没有 —— "
                                 f"以 facts 为准改画面或旁白 (这个数有单位就写进 prefix/suffix)")
@@ -499,12 +668,15 @@ def check(sj: dict):
                                 f"{kind}矛盾; 画面的数有出处, 旁白这个数 facts 里没有, 改旁白")
                 continue
             if same:
+                bad.add(fname)
                 near = _nearest(same, sq.value)
                 diff = abs(near.value - sq.value) / max(near.value, sq.value) * 100
                 errs.append(f"{where} = {_fmt(sq)}, 本场旁白「{_say(near)}」≈ {_fmt(near)} —— {kind}矛盾 (差 {diff:.0f}%),"
                             f" 画面这个数 facts 里也没有; 以 facts 为准改画面或旁白")
             else:
                 warns.append(f"{where} = {_fmt(sq)}: 旁白没说这个{kind}, facts 里也没有 —— 补 facts (带 source) 或改画面")
+        pool = mine + support
+        errs += cross_check(s, shown, bad, lambda q: any(x.dim == q.dim and _match(q, x) for x in pool))
     return errs, warns
 
 

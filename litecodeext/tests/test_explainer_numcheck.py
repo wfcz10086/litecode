@@ -164,6 +164,140 @@ class TestScreenVsNarration(unittest.TestCase):
         self.assertEqual(N.check(sj), ([], []))
 
 
+def scene(params, text="", typ="counter", **kw):
+    return {"facts": [], "scenes": [dict({"id": "x", "type": typ, "params": params, "text": text}, **kw)]}
+
+
+class TestRelativeQuantities(unittest.TestCase):
+    """旁白的相对 / 口语量词: 三成 / 翻一番 / 一半 / 打八折 …"""
+
+    def test_parse_relative(self):
+        cases = [("三成的人", "percent", 30), ("七成五", "percent", 75), ("九成九", "percent", 99), ("两成", "percent", 20),
+                 ("百分之三十", "percent", 30), ("一半的人", "percent", 50), ("半数", "percent", 50),
+                 ("翻了一番", "times", 2), ("翻一番", "times", 2), ("翻两番", "times", 4), ("翻了三番", "times", 8),
+                 ("翻番", "times", 2), ("翻倍", "times", 2), ("增长一倍", "times", 2), ("增加了一倍", "times", 2),
+                 ("打八折", "percent", 80), ("八五折", "percent", 85), ("8.5折", "percent", 85), ("打对折", "percent", 50)]
+        for s, dim, v in cases:
+            q = one(s)
+            self.assertEqual((q.dim, q.value), (dim, v), s)
+
+    def test_relative_ranges(self):
+        self.assertEqual(one("五成以上").range(), (50, 100))         # 以上 = 下限
+        self.assertEqual(one("过半").range(), (50, 100))
+        self.assertEqual(one("超过一半").range(), (50, 100))
+        self.assertEqual(one("七八成").range(), (70, 80))
+        lo, hi = one("几乎翻倍").range()
+        self.assertEqual(hi, 2); self.assertLess(lo, 2)
+        lo, hi = one("不到三成").range()
+        self.assertEqual(hi, 30); self.assertLess(lo, 30)
+        self.assertEqual(one("增长了两倍").range(), (2, 3))          # 口语歧义: 2~3 倍都算
+        q = one("打八折")
+        self.assertEqual(q.alts, [20])                               # 也可读成 "降 20%"
+
+    def test_ambiguous_not_relative(self):
+        for s in ("这件事十分重要", "他八成是忘了", "一成不变", "你的另一半", "一波三折", "把纸对折一下",
+                  "公司成员", "第三成", "七成员工"):
+            self.assertFalse([q for q in N.parse(s) if q.dim in ("percent", "times")], s)
+
+    def test_relative_vs_screen(self):
+        ok = [({"left": {"name": "原价", "value": "原价"}, "right": {"name": "降幅", "value": "-30%"}}, "这一波直接降了三成。"),
+              ({"left": {"name": "十年前", "value": "基准"}, "right": {"name": "现在", "value": "4倍"}}, "十年里产量翻了两番。"),
+              ({"left": {"name": "去年", "value": "基准"}, "right": {"name": "今年", "value": "2 倍"}}, "今年销量增长一倍。"),
+              ({"left": {"name": "A", "value": "62%"}, "right": {"name": "B", "value": "其他"}}, "五成以上的人选了 A。"),
+              ({"left": {"name": "原价", "value": "原价"}, "right": {"name": "降价", "value": "-20%"}}, "双十一打八折。"),
+              ({"left": {"name": "现价", "value": "八折"}, "right": {"name": "B", "value": "其他"}}, "现在降了百分之二十。"),
+              ({"left": {"name": "过半", "value": "56%"}, "right": {"name": "B", "value": "其他"}}, "过半的网友支持。"),
+              ({"left": {"name": "A", "value": "1.9倍"}, "right": {"name": "B", "value": "其他"}}, "几乎翻倍。")]
+        for params, text in ok:
+            self.assertEqual(N.check(scene(params, text, "versus"))[0], [], text)
+        bad = [({"left": {"name": "原价", "value": "原价"}, "right": {"name": "降幅", "value": "-30%"}}, "这一波直接降了两成。", "百分比矛盾"),
+               ({"left": {"name": "十年前", "value": "基准"}, "right": {"name": "现在", "value": "2倍"}}, "十年里产量翻了两番。", "倍数矛盾"),
+               ({"left": {"name": "原价", "value": "原价"}, "right": {"name": "降价", "value": "-30%"}}, "双十一打八折。", "百分比矛盾"),
+               ({"left": {"name": "A", "value": "40%"}, "right": {"name": "B", "value": "其他"}}, "过半的网友支持。", "百分比矛盾"),
+               ({"left": {"name": "A", "value": "3倍"}, "right": {"name": "B", "value": "其他"}}, "几乎翻倍。", "倍数矛盾")]
+        for params, text, kind in bad:
+            errs = N.check(scene(params, text, "versus"))[0]
+            self.assertEqual(len(errs), 1, (text, errs)); self.assertIn(kind, errs[0])
+
+    def test_counter_big_number_vs_relative(self):
+        self.assertEqual(N.check(scene({"label": "支持率", "to": 30, "suffix": "%"}, "大约三成的人支持。"))[0], [])
+        errs = N.check(scene({"label": "支持率", "to": 30, "suffix": "%"}, "七成的人支持。"))[0]
+        self.assertEqual(len(errs), 1); self.assertIn("百分比矛盾", errs[0])
+        self.assertEqual(N.check(scene({"label": "产量", "to": 4, "suffix": " 倍"}, "十年翻了两番。"))[0], [])
+
+
+class TestScreenVsScreen(unittest.TestCase):
+    """同一场的大数字 (counter.to / hook.number) ↔ 同场 note / caption / 副标题里写出的同量纲数字"""
+
+    def test_counter_to_vs_note(self):
+        errs = N.check(scene({"label": "阳光到达地球", "to": 428, "suffix": " 秒", "note": "约 500 秒"}, "阳光要走很久才到。"))[0]
+        self.assertEqual(len(errs), 1, errs)
+        self.assertIn("counter.to", errs[0]); self.assertIn("counter.note", errs[0]); self.assertIn("自相时长矛盾", errs[0])
+        errs = N.check(scene({"label": "阳光到达地球", "to": 428, "suffix": " 秒", "note": "约八分二十秒"}, "阳光要走很久。"))[0]
+        self.assertEqual(len(errs), 1, errs)
+        self.assertEqual(N.check(scene({"label": "阳光", "to": 499, "suffix": " 秒", "note": "约八分二十秒"}, "很久。"))[0], [])
+
+    def test_hint_points_at_unsourced_side(self):
+        sj = scene({"label": "阳光", "to": 499, "suffix": " 秒", "note": "约 600 秒"}, "阳光要走很久。")
+        sj["facts"] = [{"fact": "日光到地球约 499 秒", "source": "NASA"}]
+        errs = N.check(sj)[0]
+        self.assertEqual(len(errs), 1, errs); self.assertIn("改文字", errs[0])
+        sj["scenes"][0]["params"].update(to=600, note="约 499 秒")
+        errs = N.check(sj)[0]
+        self.assertEqual(len(errs), 1, errs); self.assertIn("改大数字", errs[0])
+        # 旁白念对了, note 写错: 旁白闸报 note, 互相对账不重复报
+        errs = N.check(scene({"label": "阳光", "to": 499, "suffix": " 秒", "note": "约 600 秒"}, "阳光要走四百九十九秒。"))[0]
+        self.assertEqual(len(errs), 1, errs); self.assertIn("counter.note", errs[0])
+        errs = N.check(scene({"label": "阳光", "to": 428, "suffix": " 秒", "note": "约 500 秒"}, "阳光要走约五百秒。"))[0]
+        self.assertEqual(len(errs), 1, errs)                         # 旁白已经报了 counter.to, 不重复报
+        self.assertIn("本场旁白", errs[0])
+
+    def test_hook_number_vs_title_relative(self):
+        errs = N.check(scene({"number": 2, "suffix": "倍", "title": "十年翻两番"}, "", "hook"))[0]
+        self.assertEqual(len(errs), 1, errs); self.assertIn("倍数矛盾", errs[0]); self.assertIn("hook.title", errs[0])
+        self.assertEqual(N.check(scene({"number": 4, "suffix": "倍", "title": "十年翻两番"}, "", "hook"))[0], [])
+        self.assertEqual(N.check(scene({"to": 30, "suffix": "%", "note": "三成用户"}, ""))[0], [])
+        self.assertEqual(len(N.check(scene({"to": 30, "suffix": "%", "note": "七成用户"}, ""))[0]), 1)
+
+    def test_no_false_positive(self):
+        cases = [{"to": 428, "suffix": " 秒", "note": "比去年多 120 秒"},          # 差值不对账
+                 {"to": 30, "suffix": "%", "note": "降 20%"},
+                 {"to": 428, "note": "约 500 秒"},                                  # 大数字没单位 → 量纲不明不判
+                 {"to": 428, "suffix": " 秒", "note": "约 500 米"},                 # 不同量纲
+                 {"to": 7.5, "suffix": " 圈", "note": "七圈半"},                     # 画面四舍五入成 8 圈
+                 {"from": 600, "to": 0, "suffix": " 秒", "note": "约 500 秒"},     # from 不是终值
+                 {"to": 1929, "suffix": "", "label": "1929 年"}]
+        for p in cases:
+            self.assertEqual(N.check(scene(p, ""))[0], [], p)
+
+    def test_numcheck_ignore_applies(self):
+        p = {"to": 428, "suffix": " 秒", "note": "约 500 秒"}
+        self.assertEqual(N.check(scene(p, "", numcheck_ignore=["约 500 秒"]))[0], [])
+        self.assertEqual(N.check(scene(p, "", numcheck_ignore=["428"]))[0], [])
+        self.assertEqual(N.check(scene({"left": {"name": "A", "value": "-30%"}, "right": {"name": "B", "value": "x"}},
+                                       "打八折。", "versus", numcheck_ignore=["-30%"]))[0], [])
+
+    def test_custom_layout_top_level_only(self):
+        self.assertEqual(len(N.check(scene({"value": 428, "suffix": " 秒", "caption": "约 500 秒"}, "", "sunbeam"))[0]), 1)
+        self.assertEqual(N.check(scene({"value": 428, "suffix": " 秒", "items": [{"caption": "约 500 秒"}]}, "", "sunbeam"))[0], [])
+
+    def test_other_samples_still_clean(self):
+        # 样片 b_newspaper / c_sakura (没有数字的版式) + deepsea + livermore: 新规则下仍零误报
+        news = {"facts": [], "scenes": [
+            {"id": "s0", "type": "hook", "params": {"title": "泥巴印书", "tape": "活字印刷 · 梦溪笔谈"}, "text": "一小团泥巴，曾经让印书变得又快又省。"},
+            {"id": "s1", "type": "headline", "params": {"kicker": "北宋", "title": "平民工匠毕昇", "lines": ["胶泥刻字", "火烧变硬", "按需排版"]},
+             "text": "北宋时，平民工匠毕昇用胶泥刻字，再用火烧硬，这就是泥活字。"},
+            {"id": "s2", "type": "stamps", "params": {"title": "活字三步", "stamps": ["刻字", "排版", "拆版"]},
+             "text": "要印什么，就把字排在铁板上，印完拆下来，还能反复使用。"}]}
+        cat = {"facts": [], "scenes": [
+            {"id": "s0", "type": "hook", "params": {"title": "猫咪踩奶之谜", "tape": "踩奶警报 · 踩奶警报"}, "text": "你家猫是不是总在你身上踩来踩去，还一脸陶醉？"},
+            {"id": "s1", "type": "versus", "params": {"left": {"name": "踩奶", "value": "放松 信任"}, "right": {"name": "哈气", "value": "别惹我"}},
+             "text": "长大了还踩，说明它觉得老安全了，把你当亲妈了。"}]}
+        livermore = json.load(open(os.path.join(SK, "examples", "livermore", "script.json"), encoding="utf-8"))
+        for sj in (news, cat, LIGHT, livermore):
+            self.assertEqual(N.check(sj), ([], []))
+
+
 class TestWiring(unittest.TestCase):
     def test_factcheck_includes_numcheck(self):
         sj = copy.deepcopy(LIGHT)

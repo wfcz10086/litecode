@@ -5,21 +5,22 @@
         "token": "CHANGE_ME"
     },
     "model": {
-        "id": "huihui_ai/Qwen3.8-abliterated:latest",
+        "id": "Qwen3.8-Flash-Next",
         "provider": "qwen",
-        "deployment": "ollama",
+        "deployment": "vllm",
+        "served_model_name": "Qwen3.8-Flash-Next",
         "backend_type": "openai",
-        "backend_url": "http://your-host-a.example:11434/v1",
+        "backend_url": "http://your-gpu-host.example:26000/v1",
         "api_key": "CHANGE_ME",
         "api_format": "openai-chat",
-        "context_window": 64000,
+        "context_window": 131072,
         "max_tokens": 8192,
         "enable_thinking": true,
         "thinking_budget": 4096,
         "supports_vision": true,
-        "_note": "ollama 27.3B Q4_K_M, 原生 262k ctx, tools+vision+thinking; 冷 prefill ~236 tok/s (51k=216s), prefix cache 命中后秒回"
+        "_note": "2026-10-13 新增: 同 qwen3.8-flash-next-local 模型, 新部署 max_model_len 131072, 思考/工具调用已开。"
     },
-    "default_model_id": "huihui_ai/Qwen3.8-abliterated:latest",
+    "default_model_id": "Qwen3.8-Flash-Next",
     "models": [
         {
             "id": "deepseek-v4-pro",

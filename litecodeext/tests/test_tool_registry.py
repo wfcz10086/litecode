@@ -18,7 +18,8 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 2026-10-17: windows_desktop 加 double_click 与选择、格式快捷键。
 # 2026-10-17: windows_system 加 inspect_file 回读核对; windows_desktop 描述加回读要求。
 # 2026-10-17: spawn_agent 加 operator 角色 + alias 字段 (顶层与 parallel/pipeline/dag 每项)。
-TOOL_DEFS_SHA256 = "6bb3a294406d6b838e210d1ba8b3a0fcc098e4dca8eb4a57feda3f658878e18b"   # 2026-10-17: 命令行开关边界
+# 2026-10-17: 命令行开关边界。
+TOOL_DEFS_SHA256 = "64ff3c78a2b14427122f1ca1b4d1ba8042621ba74b018913cf49b38cff2e6e8f"   # 2026-10-18: execute_shell 加可选 cwd (子代理工作树默认 cwd)
 
 READ_ONLY_21 = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",

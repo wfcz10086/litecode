@@ -171,7 +171,8 @@ async def _check_pid_alive(pid: str) -> bool:
         return True   # 查不到就假设还活着，防止误杀
 
 
-async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool = False) -> str:
+async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool = False,
+                   cwd=None) -> str:
     """
     Launch a long-lived background process via nohup.
 
@@ -198,7 +199,7 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
             bg_cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
-            cwd=str(WORKSPACE),
+            cwd=str(cwd or WORKSPACE),   # [worktree-iso] 调用方给的 cwd (子代理工作树)
             start_new_session=True,
         )
         # 只读一行 (PID), 5s 内一般立即 echo $!

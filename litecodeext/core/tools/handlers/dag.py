@@ -203,7 +203,15 @@ async def h_run_dag(sid: str, args: dict) -> tuple[str, Any]:
 
         async def _bg_run():
             try:
-                orch = MultiAgentOrchestrator(run_subagent_fn=_run_subagent, workspace=ws)
+                # [worktree-iso 2026-10-18] 并发写步 + git 仓库 → 独立工作树 + 串行合并; 冲突记入步骤输出与 job
+                from lib.agent.subagent_worktree import wrap_saved_dag, mark_dag_step, dag_unmerged_summary
+                _run_fn, _iso = await _asyncio.to_thread(wrap_saved_dag, _run_subagent, plan, ws,
+                                                         _DAG_JOBS[job_id])
+
+                def _step_begin(spec, label):
+                    mark_dag_step(getattr(spec, "id", None) or label)
+                orch = MultiAgentOrchestrator(run_subagent_fn=_run_fn, workspace=ws,
+                                              step_begin_cb=_step_begin)
                 res = await orch.run(AgentMode.DAG, specs, auto_critic=bool(plan.get("auto_critic")))
                 _DAG_JOBS[job_id].update({
                     "status": "done",
@@ -212,7 +220,7 @@ async def h_run_dag(sid: str, args: dict) -> tuple[str, Any]:
                                 "success": r.success, "elapsed": r.elapsed,
                                 "error": r.error[:200] if r.error else "",
                                 "output_preview": (r.output or "")[:300]} for r in res.agents],
-                    "final_output": (res.final_output or "")[:2000],
+                    "final_output": (res.final_output or "")[:2000] + dag_unmerged_summary(_iso),
                 })
             except Exception as _e:
                 _DAG_JOBS[job_id].update({
