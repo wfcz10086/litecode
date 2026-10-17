@@ -20,7 +20,7 @@
 | `click` / `drag` | 使用最新 `reference_image`、模型所见图片宽高及起止坐标，点击图标或拖动滚动条；自动换算物理像素，屏幕尺寸变化或截图超时拒绝操作 |
 | `type_secret` | 用仓库外凭据引用 `credential` 和 `field` 输入，避免在参数中传密码 |
 | `focus_window` / `close_window` | `title` 完整标题或最新 `window_handle` 唯一定位，支持同名窗口；普通关闭保留未保存提示，拒绝请求或仍可见不会误报已关闭 |
-| `launch_app` | `name` 启动应用：内置 notepad/explorer/calc/mspaint/edge/chrome，未知名称走开始菜单搜索（Win→输入→回车），结果靠截图验收；cmd/PowerShell 属 shell 能力不在此启动 |
+| `launch_app` | `name` 启动应用：内置 notepad/explorer/calc/mspaint/paint/edge/chrome；未知名称仅在节点开启 shell 能力后走开始菜单搜索（Win→输入→回车），关闭时拒绝；结果靠截图验收；cmd/PowerShell 属 shell 能力不在此启动 |
 | `window_state` | 对 `title`/`window_handle` 定位的窗口 `window_state_mode` 最大化 / 最小化 / 还原 |
 | `wechat_login` / `wechat_status` | 打开微信供扫码 / 按界面证据判断登录状态 |
 
@@ -46,7 +46,7 @@
 | `services` | 只读列出服务及状态（代理普通用户权限，不做启停）；可 `name` 过滤 |
 | `list_dir` | 列目录（名称/大小/修改时间/是否目录），最多 500 项 |
 | `download` | 把 Windows 文件（≤50MB）取回服务端工作区 `uploads/` 并登记为产出物，返回服务端路径 |
-| `upload` | 把服务端工作区内的文件（`source` 必须在工作区内，≤50MB）发到 Windows 的 `%USERPROFILE%\Downloads\LiteCode\`，文件名清洗防穿越、同名自动加序号不覆盖 |
+| `upload` | 把服务端 `uploads/` 里的文件（`source` **必须**位于工作区 `uploads/` 目录内，≤50MB）发到 Windows 的 `%USERPROFILE%\Downloads\LiteCode\`，文件名清洗防穿越、同名自动加序号不覆盖 |
 | `inspect_file` | **回读核对**：把 Windows 文件（≤50MB，路径支持 `%USERPROFILE%` 等环境变量）取回服务端并解析真实内容，见下文「回读核对」 |
 | `run_powershell` | 执行 PowerShell：**默认关闭**，支持 `cwd`、返回 `exit_code`/`stdout`/`stderr`/`duration_ms`/`timed_out`，输出各截断 8000 字符，`timeout` 默认 60 秒上限 300 秒；超时用 `taskkill /T /F` 结束整个进程树，输出经临时文件收集，保证 timeout+15 秒内返回 |
 
@@ -112,11 +112,25 @@ spawn_agent(parallel_tasks=[
 - **输出中文正确**：固定前缀设 `[Console]::OutputEncoding=[Text.Encoding]::UTF8`（中文 Windows 默认 GBK/OEM 会乱码），Python 侧按 UTF-8 解码、失败回退 GBK。
 - 仅对开启了 shell 能力的回连节点可用；SSH 别名不支持（SSH 本身已是 shell）。
 
+#### 开关的真实边界（2026-10-17 加固）
+
+- **开关状态带签名，文件写入类工具改不动**：节点记录 `nodes.json` 位于工作区 `.secrets/windows_nodes/`，而模型的 `write_file`/`patch_file`/`apply_blocks` 能写任意路径（没有路径白名单），所以只“挪位置”挡不住。现做法是完整性校验：`shell=true` 只有带上有效 HMAC-SHA256 签名（`capabilities_sig`，绑定节点 id）才算开启，签名密钥 `capability.key.bin` 只由管理员开关接口（`set_capability`）生成；缺签名/签名不符/密钥缺失或损坏一律按**关闭**处理（失败即关闭）。密钥文件是以 NUL 开头的二进制 `.bin`，`read_file` 按二进制拒读；**每次开关都换新密钥并按旧密钥核验后全部重签**，开启时抄下的旧记录在关闭后回写（重放）也无效，被篡改的记录在下一次开关时归零。服务端派发校验、轮询下发给节点的 `capabilities`、Web/CLI 列表看到的都是校验后的值，列表不返回签名字段。
+  - 选它而不是“挪位置”的理由：同一进程用户下没有模型写不到的目录；签名只需改 `lib/windows_nodes.py` 一处，开关仍只有管理员接口一个写入口。
+  - **升级影响**：升级前已开启、没有签名的节点会读成关闭，需管理员在 Web/CLI 重新开启一次。
+  - **不在此边界内**：能在服务器上执行任意代码的工具（如 `execute_shell`）本就可以直接调用管理代码或改源码，开关无法防它；该边界针对的是文件写入类工具。
+- **开关关闭时桌面动作不能旁路启动命令行**：
+  - `launch_app` 只接受内置白名单（notepad/explorer/calc/mspaint/paint/edge/chrome），**不再用开始菜单搜索任意名称兜底**；cmd/PowerShell/终端名称无论开关如何都拒绝（请用 `run_powershell`）。
+  - 直接打开“运行”对话框的快捷键 `win+r` 不可用。
+  - 开关打开后放开：未知名称恢复开始菜单搜索，`win+r` 可用。
+  - 双层校验：服务端派发前按校验后的开关拦（SSH 别名没有开关，按关闭处理）；节点代理按已认证轮询拿到的能力，在请求里**覆盖写入** `shell_allowed`，桌面组件据此再拦一次（服务端组装请求从不带该字段，模型也无法经工具参数注入）。
+  - 兼容：旧代理不认识 `shell_allowed`、只拿到新组件时按关闭处理（只会更严，不会放宽）；旧组件收不到被禁止的请求，因为服务端先拦。`launch_app` 本就只下发给最新代理。
+  - 残余：这条边界是“动作层”的，不等于 GUI 级隔离——用白名单里的资源管理器地址栏、任务管理器“运行新任务”、或点开始菜单再输入，仍可能经点击/输入拉起命令行。需要硬隔离的电脑应在 Windows 侧用组策略（禁用命令提示符/AppLocker）兜底。
+
 ### 文件传输分块协议
 
 传输走现有任务通道。单块原始 4MB（base64 后约 5.3MB，远低于请求体 24MB 上限），整体 sha256 校验：
 
-- **upload**：服务端把工作区文件按 4MB 切块，逐块下发；节点追加写到 `Downloads\LiteCode` 下的 `.part-<transfer_id>` 临时文件，最后一块校验整体 sha256 后改名为唯一文件名。源文件相对路径先拼到工作区再 `resolve()`（不按服务进程当前目录解析），必须落在工作区内，杜绝把服务器任意文件发出去。中断的上传会留下 `.part-*`：节点在每次新上传开始（第 0 块）时清理修改时间超过 1 小时的 `.part-*`（进行中的传输每块都会刷新 mtime，不会误删）。服务端失败时不额外下发清理任务——旧代理不认识新的清理动作，且清理只差下一次上传，取舍为只做节点端清理。
+- **upload**：服务端把 `uploads/` 里的文件按 4MB 切块，逐块下发；节点追加写到 `Downloads\LiteCode` 下的 `.part-<transfer_id>` 临时文件，最后一块校验整体 sha256 后改名为唯一文件名。源文件**只允许工作区 `uploads/` 目录内**（相对路径按 `uploads/` 解析，不按服务进程当前目录；`resolve()` 真实路径后判断，挡住 `../` 穿越与指向 `uploads/` 外的符号链接逃逸）——工作区根目录下还放着 `.secrets/`（Windows 凭据）、`sessions/`（会话）、`logs/`、`telemetry/` 等内部目录，收紧到 `uploads/` 后这些文件无法被 upload 外泄到 Windows 节点。`download`/`inspect_file` 的落地目录本就是 `uploads/`，不受该限制影响。中断的上传会留下 `.part-*`：节点在每次新上传开始（第 0 块）时清理修改时间超过 1 小时的 `.part-*`（进行中的传输每块都会刷新 mtime，不会误删）。服务端失败时不额外下发清理任务——旧代理不认识新的清理动作，且清理只差下一次上传，取舍为只做节点端清理。
 - **download**：节点无状态（任务目录每次执行后删除），先回元数据（size/chunks/sha256/name），再按偏移逐块重读回传；服务端重组并校验 sha256 后落到 `uploads/`。
 
 ## 向后兼容与版本门禁

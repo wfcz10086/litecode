@@ -135,3 +135,21 @@ def test_router_is_auto_discovered():
     from routers import discover
     paths = {getattr(r, 'path', '') for router in discover() for r in router.routes}
     assert '/api/thumb' in paths
+
+
+def test_evict_cache_keeps_under_cap(tmp_path):
+    """缓存超上限时按最旧淘汰, 降到上限 90% 以下; 未超上限不动。"""
+    import os, time
+    from routers.thumb_router import evict_cache
+    files = []
+    for i in range(10):
+        f = tmp_path / f"t{i}.webp"
+        f.write_bytes(b"x" * 1000)
+        t = time.time() - (100 - i)            # i 越小越旧
+        os.utime(f, (t, t))
+        files.append(f)
+    evict_cache(tmp_path, cap=20000)           # 总 10000 < 20000, 不淘汰
+    assert all(f.exists() for f in files)
+    evict_cache(tmp_path, cap=5000)            # 超上限: 降到 4500 以下 → 只留最新的 4 个
+    kept = sorted(f.name for f in tmp_path.iterdir())
+    assert kept == ["t6.webp", "t7.webp", "t8.webp", "t9.webp"]

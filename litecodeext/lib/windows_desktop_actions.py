@@ -41,6 +41,22 @@ LAUNCH_APPS = {
     'edge': ['cmd', '/c', 'start', 'msedge'], 'chrome': ['cmd', '/c', 'start', 'chrome'],
 }
 SHELL_APPS = {'cmd', 'powershell', 'pwsh', 'terminal', 'wt', 'cmd.exe', 'powershell.exe'}
+# shell 能力关闭时不可用的快捷键: 直接打开"运行"对话框, 可借此启动 cmd/PowerShell。
+RUN_DIALOG_HOTKEYS = {'win+r'}
+
+
+def shell_guard(action, args, shell_allowed):
+    """shell 能力关闭时, 桌面动作不得成为启动命令行解释器的旁路。服务端派发前与节点执行前各校验一次。
+    shell_allowed 由节点代理按已认证轮询下发的能力写入请求 (服务端组装请求时从不带此字段)。"""
+    if shell_allowed:
+        return
+    if action == 'launch_app':
+        key = str(args.get('name', '')).strip().lower()
+        if key not in LAUNCH_APPS:
+            raise ValueError('该节点未开启 shell 能力，launch_app 只接受内置应用：'
+                             + '/'.join(sorted(LAUNCH_APPS)) + '；其他应用请用户开启 shell 能力后再启动')
+    elif action == 'hotkey' and str(args.get('keys', '')).lower() in RUN_DIALOG_HOTKEYS:
+        raise ValueError('该节点未开启 shell 能力，不可使用打开"运行"对话框的快捷键')
 WINDOW_STATES = {'maximize': 3, 'minimize': 6, 'restore': 9}
 
 
@@ -250,7 +266,8 @@ def documents_dir():
 
 
 def launch_app(args):
-    """按名称启动应用。内置常用映射；未知名称回退到开始菜单搜索（Win→输入→回车），结果靠截图验收。"""
+    """按名称启动应用。内置常用映射；shell 能力开启时未知名称才回退到开始菜单搜索（Win→输入→回车），
+    关闭时只接受内置映射 (开始菜单搜索可打开任意程序, 含命令行)。结果靠截图验收。"""
     import subprocess
     name = str(args.get('name', '')).strip()
     if not name:
@@ -258,6 +275,7 @@ def launch_app(args):
     key = name.lower()
     if key in SHELL_APPS:
         raise ValueError('cmd/PowerShell/终端窗口属于 shell 能力，请开启 shell 能力后用 run_powershell')
+    shell_guard('launch_app', args, args.get('shell_allowed') is True)
     if key in LAUNCH_APPS:
         command = LAUNCH_APPS[key]
         # 工作目录设为"文档": 代理 cwd 曾是 System32, 记事本/WPS 的"另存为"会默认跳到那里
@@ -313,6 +331,7 @@ def perform(action, folder, args):
         keys = HOTKEYS.get(args.get('keys', '').lower())
         if not keys:
             raise ValueError('不支持的快捷键')
+        shell_guard('hotkey', args, args.get('shell_allowed') is True)
         send_keyboard(hotkey_events(keys), interval=0.08)
     elif action == 'clipboard':
         # 读剪贴板文字: 配合选中 + ctrl+c 拿到原文, 不靠截图转写

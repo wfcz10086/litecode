@@ -68,6 +68,70 @@ def test_resolve_within_rejects_outside_workspace(tmp_path):
         wt.resolve_within(base, tmp_path / 'secret.txt')
 
 
+# ---------------- upload 源文件收紧到 WORKSPACE/uploads/ ----------------
+
+def _mk_workspace_with_uploads(tmp_path):
+    """造一个工作区: uploads/ 放可上传文件, .secrets/ 与 sessions/ 放内部敏感文件。"""
+    ws = tmp_path / 'ws'
+    (ws / 'uploads').mkdir(parents=True)
+    (ws / 'uploads' / 'report.pdf').write_bytes(b'ok-to-send')
+    (ws / '.secrets').mkdir()
+    (ws / '.secrets' / 'windows_credentials.json').write_text('{"pw":"s3cr3t"}')
+    (ws / 'sessions').mkdir()
+    (ws / 'sessions' / 'MEMORY.md').write_text('private')
+    return ws
+
+
+def test_resolve_upload_source_accepts_file_in_uploads(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    got = wt.resolve_upload_source(ws, ws / 'uploads' / 'report.pdf')
+    assert got == (ws / 'uploads' / 'report.pdf').resolve()
+
+
+def test_resolve_upload_source_resolves_relative_against_uploads(tmp_path, monkeypatch):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    monkeypatch.chdir(tmp_path)                 # 进程 cwd 不是工作区/uploads
+    # 相对路径按 uploads/ 解析, 不按 cwd, 也不按工作区根
+    assert wt.resolve_upload_source(ws, 'report.pdf') == (ws / 'uploads' / 'report.pdf').resolve()
+
+
+def test_resolve_upload_source_rejects_workspace_root_file(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    (ws / 'config.json').write_text('{}')
+    with pytest.raises(ValueError, match='uploads'):
+        wt.resolve_upload_source(ws, ws / 'config.json')
+
+
+def test_resolve_upload_source_rejects_internal_subdirs(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    for inside in (ws / '.secrets' / 'windows_credentials.json', ws / 'sessions' / 'MEMORY.md'):
+        with pytest.raises(ValueError, match='uploads'):
+            wt.resolve_upload_source(ws, inside)
+
+
+def test_resolve_upload_source_rejects_outside_absolute(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    outside = tmp_path / 'outside.txt'
+    outside.write_text('x')
+    with pytest.raises(ValueError, match='uploads'):
+        wt.resolve_upload_source(ws, outside)
+
+
+def test_resolve_upload_source_rejects_dotdot_traversal(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    # 从 uploads/ 用 ../ 穿越回工作区根下的敏感文件
+    with pytest.raises(ValueError, match='uploads'):
+        wt.resolve_upload_source(ws, '../.secrets/windows_credentials.json')
+
+
+def test_resolve_upload_source_rejects_symlink_escape(tmp_path):
+    ws = _mk_workspace_with_uploads(tmp_path)
+    link = ws / 'uploads' / 'leak.json'
+    link.symlink_to(ws / '.secrets' / 'windows_credentials.json')   # uploads 内符号链接指向外部
+    with pytest.raises(ValueError, match='uploads'):
+        wt.resolve_upload_source(ws, link)
+
+
 # ---------------- Windows 端文件动作：list_dir 上限、upload 清洗/不覆盖 ----------------
 
 def test_list_dir_caps_at_500(tmp_path):
@@ -300,8 +364,20 @@ def test_upload_source_must_be_in_workspace(tmp_path):
     _enroll_online(nodes, component_versions())
     outside = tmp_path.parent / 'outside.txt'
     outside.write_text('secret')
-    with pytest.raises(ValueError, match='工作区'):
+    with pytest.raises(ValueError, match='uploads'):
         execute({'alias': 'ops', 'action': 'upload', 'source': str(outside)}, str(tmp_path))
+
+
+def test_upload_rejects_workspace_internal_file(tmp_path):
+    """工作区根下的内部敏感文件 (凭据/会话) 不能被 upload 推到 Windows 节点。"""
+    from lib.windows_desktop import execute
+    nodes = Nodes(tmp_path)
+    _enroll_online(nodes, component_versions())
+    (tmp_path / '.secrets').mkdir(exist_ok=True)
+    secret = tmp_path / '.secrets' / 'windows_credentials.json'
+    secret.write_text('{"pw":"s3cr3t"}')
+    with pytest.raises(ValueError, match='uploads'):
+        execute({'alias': 'ops', 'action': 'upload', 'source': str(secret)}, str(tmp_path))
 
 
 def test_set_capability_toggles_and_defaults_off(tmp_path):

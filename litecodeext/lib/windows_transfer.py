@@ -85,12 +85,29 @@ def unique_target(directory, name):
 def resolve_within(base, candidate):
     """校验 candidate 落在 base 目录内（含 base 自身），返回解析后的绝对路径，否则拒绝。
 
-    服务端用它确保上传源文件必须位于工作区内，杜绝把服务器任意文件发出去。
-    相对路径先拼到 base 再 resolve（不按进程当前目录解析，web_ui 的 cwd 不一定是工作区）。
+    通用路径防穿越原语。相对路径先拼到 base 再 resolve（不按进程当前目录解析，
+    web_ui 的 cwd 不一定是工作区）。
     """
     base = Path(base).resolve()
     path = Path(candidate)
     target = (path if path.is_absolute() else base / path).resolve()
     if target != base and base not in target.parents:
         raise ValueError('路径必须位于允许的工作区目录内')
+    return target
+
+
+def resolve_upload_source(workspace, candidate):
+    """校验上传源文件必须位于 WORKSPACE/uploads/ 目录内，返回解析后的真实绝对路径，否则拒绝。
+
+    upload（服务端 → Windows 节点）只允许推送工作区 uploads/ 里的文件：工作区根目录下
+    还放着 .secrets/（Windows 凭据）、sessions/（会话）、logs/、telemetry/ 等内部目录，
+    按"仅校验在工作区内"的旧规则这些文件也能被 upload 外泄，收紧到只认 uploads/。
+    - 相对路径按 uploads/ 解析（不按进程 cwd，web_ui 的 cwd 不一定是工作区）。
+    - resolve 真实路径后判断，挡住 ../ 穿越与指向 uploads/ 外的符号链接逃逸。
+    """
+    uploads = (Path(workspace) / 'uploads').resolve()
+    path = Path(candidate)
+    target = (path if path.is_absolute() else uploads / path).resolve()
+    if target != uploads and uploads not in target.parents:
+        raise ValueError('上传源文件必须位于工作区 uploads/ 目录内，禁止上传工作区根目录或其它内部目录的文件')
     return target

@@ -120,10 +120,10 @@ def _run_node_job(nodes, alias, action, request, timeout, idempotent=False):
 def _node_upload(nodes, alias, args, workspace, timeout):
     """服务端工作区文件 → Windows Downloads\\LiteCode，分块 + sha256 校验。"""
     import base64
-    from lib.windows_transfer import resolve_within, sha256_hex, chunk_count, slice_chunk, sanitize_download_name, CHUNK
-    source = resolve_within(Path(workspace), args.get('source', ''))
+    from lib.windows_transfer import resolve_upload_source, sha256_hex, chunk_count, slice_chunk, sanitize_download_name, CHUNK
+    source = resolve_upload_source(Path(workspace), args.get('source', ''))
     if not source.is_file():
-        raise ValueError('源文件必须是工作区内的已有文件')
+        raise ValueError('上传源文件必须是工作区 uploads/ 目录内的已有文件')
     data = source.read_bytes()
     total = chunk_count(len(data))   # 同时校验 ≤50MB
     digest = sha256_hex(data)
@@ -202,6 +202,7 @@ def wait_until_updated(nodes, alias, node, limit=None):
 
 def execute(args, workspace):
     from core.tools.handlers.remote import _conn, _connect, _close
+    from lib.windows_desktop_actions import shell_guard
     action = args.get('action', 'screenshot')
     if action not in ACTIONS:
         raise ValueError('不支持的操作')
@@ -213,8 +214,11 @@ def execute(args, workspace):
             node = wait_until_updated(nodes, args.get('alias'), node)
         if action in NEW_ACTIONS and node.get('update_state') != 'current':
             raise ValueError('代理版本过低，等待自动更新：该节点运行的仍是旧版代理，暂不支持此动作')
-        if action == 'run_powershell' and not node.get('capabilities', {}).get('shell'):
+        shell_on = node.get('capabilities', {}).get('shell') is True
+        if action == 'run_powershell' and not shell_on:
             raise ValueError('该节点未开启 shell 能力；请管理员在 Web 节点面板或 CLI 执行 nodes shell <alias> on 后再用')
+        # 服务端先拦: 已部署的旧版桌面组件不认识节点端校验, 也不会收到被禁止的请求
+        shell_guard(action, args, shell_on)
         timeout = min(max(int(args.get('timeout', 60)), 10), 120)
         if action == 'run_powershell':
             timeout = min(max(int(args.get('timeout', 60)) + 30, 40), 330)
@@ -230,6 +234,7 @@ def execute(args, workspace):
         return result
     if action in ('run_powershell', 'upload', 'download', 'inspect_file'):
         raise ValueError('该动作仅支持已开启能力的主动回连节点，SSH 别名不可用')
+    shell_guard(action, args, False)   # SSH 路径无能力开关, 桌面组件按关闭处理, 这里提前给出同样的错误
     request = desktop_request(args, workspace)
     conn, error = _conn(args)
     if error:

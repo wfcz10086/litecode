@@ -35,6 +35,39 @@ def cache_dir() -> Path:
     return Path(S.workspace) / ".thumb_cache"
 
 
+CACHE_CAP_BYTES = 500 * 1024 * 1024   # 缩略图缓存总量上限, 超出按最旧 (mtime) 淘汰
+
+
+def evict_cache(cdir: Path, cap: int = CACHE_CAP_BYTES) -> None:
+    """缓存目录超过 cap 时删最旧的文件直到降到 cap 的 90% 以下。只在写入新缩略图 (miss) 后调用。"""
+    try:
+        files = []
+        total = 0
+        for f in cdir.iterdir():
+            if not f.is_file():
+                continue
+            try:
+                st = f.stat()
+            except OSError:
+                continue
+            files.append((st.st_mtime, st.st_size, f))
+            total += st.st_size
+        if total <= cap:
+            return
+        files.sort()                                  # 最旧的在前
+        target = int(cap * 0.9)
+        for _mtime, size, f in files:
+            if total <= target:
+                break
+            try:
+                f.unlink()
+                total -= size
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
 def bucket_width(w: int) -> int:
     for b in WIDTHS:
         if w <= b:
@@ -109,5 +142,6 @@ async def api_thumb(request: Request, path: str = "", w: int = 480):
             raise
         except Exception as e:
             raise HTTPException(422, f"thumbnail failed: {str(e)[:120]}")
+        await run_in_threadpool(evict_cache, cdir)   # 只在新写入后检查容量, 命中不触发
     headers["X-Thumb-Cache"] = "hit" if hit else "miss"
     return FileResponse(dst, media_type=mime, headers=headers)

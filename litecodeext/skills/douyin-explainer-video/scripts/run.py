@@ -13,7 +13,7 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STEPS = [
-    ("fact",   ["factcheck.py"],        "旁白年份/次数/金额对账 facts"),
+    ("fact",   ["factcheck.py"],        "旁白年份/次数/金额对账 facts + 画面数字对旁白 (numcheck)"),
     ("tts",    ["tts.py"],              "配音 + timeline.json"),
     ("check",  ["render.py", "check"],  "版面自检: 文字重叠/出屏"),
     ("render", ["render.py", "all"],    "逐帧渲染 (最慢)"),

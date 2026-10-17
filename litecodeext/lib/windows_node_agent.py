@@ -157,8 +157,11 @@ def run_job(config, root, job, capabilities=None):
         if job['action'] == 'run_powershell' and not (capabilities or {}).get('shell'):
             return {'result': {'ok': False, 'state': 'shell_disabled',
                                'error': '节点未开启 shell 能力，拒绝执行 PowerShell'}, 'images': {}}
+        # 桌面动作按同一份能力决定是否放开 launch_app 任意名称/"运行"对话框快捷键; 总是以本地能力覆盖请求里的同名字段。
+        request = dict(job.get('request') or {})
+        request['shell_allowed'] = (capabilities or {}).get('shell') is True
         # 单进程串行执行，桌面句柄属于登录用户会话。
-        result = run(job['action'], folder, job['request'])
+        result = run(job['action'], folder, request)
         shrink_large_images(folder, result)
         images = {}
         for key in ('image', 'before_image'):

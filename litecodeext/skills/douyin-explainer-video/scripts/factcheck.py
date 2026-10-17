@@ -9,10 +9,16 @@ script.json 需要:
   2. "N年后 / N年前" 按上一个出现的年份推算, 结果年份也必须在 facts 里 (2026-10 原片把 1929→1940 写成"十四年后")
   3. "第N次…" 必须能在某条 fact 里找到同样的说法 (次数类说法各处资料常打架, 逼着先核对)
   4. 金额 (X亿/X万/X百万 美元|元) 必须在 facts 里出现同一个数 —— 只核数字, 不管写法 (一亿 = 1亿)
+  5. 画面数字 ↔ 旁白数字 (numcheck.py): 同一场画面写「428 秒」旁白念「约八分二十秒」这类矛盾直接不过;
+     画面数字旁白没说、facts 也没有 → 只打提示
 """
 import json
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import numcheck  # noqa: E402
 
 CN = {"零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 UNIT = {"十": 10, "百": 100, "千": 1000, "万": 10 ** 4, "亿": 10 ** 8}
@@ -63,8 +69,9 @@ def nums_in(text: str) -> set:
 
 def check(sj: dict) -> list:
     facts = sj.get("facts") or []
+    num_errs = numcheck.check(sj)[0]
     if not facts:
-        return ["script.json 没有 facts —— 先把旁白里的年份/数字/次数核对后写进 facts (见 SKILL.md)"]
+        return ["script.json 没有 facts —— 先把旁白里的年份/数字/次数核对后写进 facts (见 SKILL.md)"] + num_errs
     years = {int(f["year"]) for f in facts if f.get("year")}
     fact_text = " ".join(f"{f.get('year', '')} {f.get('fact', '')}" for f in facts)
     fact_nums = nums_in(fact_text)
@@ -100,7 +107,7 @@ def check(sj: dict) -> list:
                 continue
             if v not in fact_nums:
                 errs.append(f"{sid}: 金额「{m.group()}」在 facts 里没有出现")
-    return errs
+    return errs + num_errs
 
 
 def main():
@@ -108,6 +115,8 @@ def main():
     errs = check(sj)
     for e in errs:
         print("  ✗", e)
+    for w in numcheck.check(sj)[1]:
+        print("  ·", w)
     print("事实闸:", "通过" if not errs else f"{len(errs)} 处要核对 (改旁白, 或补 facts 并写清来源)")
     sys.exit(1 if errs else 0)
 

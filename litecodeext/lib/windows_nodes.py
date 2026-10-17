@@ -2,6 +2,7 @@
 import base64
 from contextlib import contextmanager
 import hashlib
+import hmac
 import ipaddress
 import json
 import logging
@@ -246,8 +247,10 @@ class Nodes:
                     file.unlink(missing_ok=True)
             result = []
             current = component_versions()
+            key = self._capability_key()
             for node in data.values():
-                item = {k: v for k, v in node.items() if k not in ('code_hash', 'token_hash', 'expires')}
+                item = {k: v for k, v in node.items() if k not in ('code_hash', 'token_hash', 'expires', 'capabilities_sig')}
+                item['capabilities'] = self._verified_capabilities(node, key)
                 if item['state'] == 'online' and time.time() - item['last_seen'] > 90:
                     item['state'] = 'offline'
                 if item['state'] == 'awaiting_join' and node['expires'] < time.time():
@@ -260,6 +263,57 @@ class Nodes:
             return result
 
     SHELL_CAPABILITY = 'shell'
+    # 能力开关完整性: nodes.json 位于工作区, 模型的 write_file/patch_file 能改到它, 所以开关值本身不可信,
+    # 只有带有效 HMAC 签名 (密钥只由 set_capability 生成) 的 shell=true 才算开启, 其余一律按关闭处理。
+    # 密钥是带 NUL 前缀的二进制文件 (.bin), 文本类文件工具读不出原字节; 每次开关都换新密钥并重签,
+    # 旧签名 (即使被抄下来回写) 随之失效, 防止"开启时备份、关闭后回写"的重放。
+    _CAP_KEY_FILE = 'capability.key.bin'
+    _CAP_KEY_MAGIC = b'\x00LCCAPK1'
+
+    def _capability_key(self):
+        """读当前签名密钥; 缺失或格式不符返回 None (此时所有开关视为关闭, 由下一次管理员开关重新生成)。"""
+        try:
+            raw = (self.root / self._CAP_KEY_FILE).read_bytes()
+        except OSError:
+            return None
+        if len(raw) != len(self._CAP_KEY_MAGIC) + 32 or not raw.startswith(self._CAP_KEY_MAGIC):
+            return None
+        return raw[len(self._CAP_KEY_MAGIC):]
+
+    def _new_capability_key(self):
+        key = secrets.token_bytes(32)
+        path = self.root / self._CAP_KEY_FILE
+        temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        try:
+            with os.fdopen(fd, 'wb') as stream:
+                stream.write(self._CAP_KEY_MAGIC + key)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            raise
+        return key
+
+    @staticmethod
+    def _capability_sig(key, node, shell):
+        message = json.dumps([node['id'], 'shell', bool(shell)]).encode()
+        return hmac.new(key, message, hashlib.sha256).hexdigest()
+
+    def _verified_capabilities(self, node, key):
+        """节点的可信能力: shell 只有在记录为 true 且签名有效时才为 true (失败即关闭)。"""
+        raw = node.get('capabilities')
+        claimed = isinstance(raw, dict) and raw.get(self.SHELL_CAPABILITY) is True
+        sig = node.get('capabilities_sig')
+        shell = bool(claimed and key and isinstance(sig, str)
+                     and hmac.compare_digest(sig, self._capability_sig(key, node, True)))
+        if claimed and not shell:
+            log.warning('Windows 节点 %s 的 shell 开关签名无效, 按关闭处理 (请管理员重新开启)', node.get('alias'))
+        return {self.SHELL_CAPABILITY: shell}
 
     def set_capability(self, node_id, name, value):
         """开/关节点能力（目前仅 shell）。只由管理接口/CLI 调用，工具层不得调用。"""
@@ -271,16 +325,23 @@ class Nodes:
                 raise ValueError('节点不存在')
             if node['state'] in ('revoked', 'uninstalled'):
                 raise ValueError('节点已撤销或卸载，无法修改能力')
-            node.setdefault('capabilities', {})[name] = bool(value)
+            # 先按旧密钥算出各节点可信状态, 再换新密钥全部重签 (被篡改的记录在此归零)
+            old_key = self._capability_key()
+            states = {n['id']: self._verified_capabilities(n, old_key)[name] for n in data.values()}
+            states[node_id] = bool(value)
+            key = self._new_capability_key()
+            for item in data.values():
+                item['capabilities'] = {name: states[item['id']]}
+                item['capabilities_sig'] = self._capability_sig(key, item, True) if states[item['id']] else ''
             return {'alias': node['alias'], 'capabilities': dict(node['capabilities'])}
 
     def node_capabilities(self, node_id):
-        """节点当前能力；供设备经认证轮询获取，用于本地二次校验。"""
+        """节点当前可信能力；供设备经认证轮询获取，用于本地二次校验。"""
         with self.locked() as data:
             node = next((n for n in data.values() if n['id'] == node_id), None)
-            caps = dict(node.get('capabilities', {})) if node else {}
-            caps.setdefault(self.SHELL_CAPABILITY, False)
-            return caps
+            if not node:
+                return {self.SHELL_CAPABILITY: False}
+            return self._verified_capabilities(node, self._capability_key())
 
     def revoke(self, node_id):
         with self.locked() as data:

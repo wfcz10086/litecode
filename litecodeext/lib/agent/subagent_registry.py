@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import json
+import re
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 INSTR_PREFIX = "[来自主代理的补充指令]"
@@ -42,10 +45,18 @@ MAX_WAIT = 1800
 RECORD_TTL = 3600
 UNFETCHED_TTL = 24 * 3600
 POLL = 0.2
+# ── 后台子代理结果落盘 (重启后仍可取回) ──
+PERSIST_SUBDIR = ("telemetry", "bg_agents")   # WORKSPACE 下的相对目录
+MAX_RESULT_BYTES = 64 * 1024                   # 落盘 result 上限, 超出截断并标注
+MAX_PER_SESSION = 50                           # 每会话磁盘最多保留的已结束记录数, 超出按时间淘汰
+# 测试可覆盖: None = 复用 subagent_worktree 的工作区解析 (含其 WORKSPACE_OVERRIDE), 再退回 lib.config.WORKSPACE
+WORKSPACE_OVERRIDE: Optional[Path] = None
+_RESTORED = False                              # registry 首次使用时从磁盘恢复一次
 _FAIL_PREFIXES = ("[子代理超时]", "[子代理异常]", "[子代理错误栈]", "[子代理嵌套过深]", "[子代理已取消",
                   "[子代理已中断]", "(subagent exhausted")
 _MULTI_KEYS = ("dag_tasks", "pipeline_tasks", "competitive_tasks", "batch_items")
-_STATUS_CN = {"running": "运行中", "done": "已完成", "failed": "失败", "stopped": "已停止"}
+_STATUS_CN = {"running": "运行中", "done": "已完成", "failed": "失败", "stopped": "已停止",
+              "interrupted": "已中断"}
 
 
 @dataclass
@@ -69,6 +80,8 @@ class AgentRecord:
     stop_requested: bool = False
     stop_reason: str = "主代理请求停止 (agent_control stop)"
     future: Optional[asyncio.Future] = None
+    restored: bool = False            # 来源标记: 从磁盘恢复 (服务重启前的结果)
+    result_truncated: bool = False    # 落盘时 result 曾被截断
 
     @property
     def brief(self) -> str:
@@ -111,21 +124,200 @@ def _log():
     return log
 
 
+# ═══════════════════════════ 结果落盘 (重启后兜底) ═══════════════════════════
+#
+# 设计: 内存 _RECORDS 仍是主路径; 磁盘只在"后台子代理结束"时写一次, 供服务重启后取回。
+#   路径    <WORKSPACE>/telemetry/bg_agents/<sid_safe>/<id>.json (原子写)。按 sid 分目录做会话隔离,
+#           sid 清洗后当目录名 (只留 [A-Za-z0-9_-]), 防路径穿越; 一个会话只会扫到自己目录下的文件。
+#   内容    一条已结束记录的快照 (id/sid/agent_type/task/status/时间/进度/证据后的 result 等),
+#           result 超 64KB 截断并标注; 内存里的 result 保持完整 (不受截断影响)。
+#   恢复    进程首次使用 registry 时, 从磁盘加载未过期的已结束记录到内存, 标 restored=True, 状态原样;
+#           残留的 "running" 文件 (正常不该有) → 标 interrupted (服务重启, 进程已不在), 不显示成仍在跑。
+#   清理    与内存 TTL 一致 (后台未取结果 24h, 其余 1h) 过期即删文件; 每会话磁盘上限 MAX_PER_SESSION 条,
+#           超出按结束时间淘汰最旧的。运行中的子代理不落盘 (重启后进程没了, 算中断)。
+
+def _workspace() -> Path:
+    if WORKSPACE_OVERRIDE is not None:
+        return Path(WORKSPACE_OVERRIDE)
+    try:
+        from .subagent_worktree import _workspace as _wt_ws
+        return _wt_ws()
+    except Exception:
+        from ..config import WORKSPACE
+        return Path(WORKSPACE)
+
+
+def _persist_root() -> Path:
+    return _workspace().joinpath(*PERSIST_SUBDIR)
+
+
+def _safe_name(s) -> str:
+    """把 sid / id 清洗成安全文件名 (防 ../ 穿越)。空 → '_'。"""
+    name = re.sub(r"[^A-Za-z0-9_-]", "_", str(s or ""))
+    return name[:80] or "_"
+
+
+def _keep_secs(background: bool, fetched: bool) -> float:
+    return UNFETCHED_TTL if (background and not fetched) else _ttl()
+
+
+def _rec_to_dict(rec: AgentRecord) -> dict:
+    result = rec.result or ""
+    truncated = False
+    b = result.encode("utf-8", "replace")
+    if len(b) > MAX_RESULT_BYTES:
+        result = (b[:MAX_RESULT_BYTES].decode("utf-8", "ignore")
+                  + f"\n…[结果过长已截断: 原 {len(b)} 字节, 落盘仅保留前 {MAX_RESULT_BYTES} 字节]")
+        truncated = True
+    return {"id": rec.id, "sid": rec.sid, "agent_type": rec.agent_type, "task": rec.task,
+            "background": rec.background, "status": rec.status, "started": rec.started,
+            "ended": rec.ended, "iteration": rec.iteration, "max_iter": rec.max_iter,
+            "last_tool": rec.last_tool, "tool_calls": rec.tool_calls, "result": result,
+            "fetched": rec.fetched, "delivered": rec.delivered,
+            "result_truncated": truncated, "persisted_at": time.time()}
+
+
+def _persist(rec: AgentRecord) -> None:
+    """后台子代理结束 (或结果被取走) 时落盘一次; 非后台不落盘。只在非热路径调用, 失败只记日志。"""
+    if not rec.background or rec.status == "running" or rec.ended is None:
+        return
+    try:
+        from ..atomic_io import atomic_write_json
+        d = _persist_root() / _safe_name(rec.sid)
+        atomic_write_json(d / f"{_safe_name(rec.id)}.json", _rec_to_dict(rec))
+        _enforce_cap(d)
+    except Exception as e:
+        _log().warning(f"  [subagent-registry] {rec.id} 结果落盘失败 (忽略, 内存仍可用): {e}")
+
+
+def _enforce_cap(sid_dir: Path) -> int:
+    """单会话目录按结束时间淘汰最旧, 保留最多 MAX_PER_SESSION 条。返回删除个数。"""
+    try:
+        files = list(sid_dir.glob("*.json"))
+    except Exception:
+        return 0
+    excess = len(files) - MAX_PER_SESSION
+    if excess <= 0:
+        return 0
+    files.sort(key=lambda f: f.stat().st_mtime)
+    n = 0
+    for f in files[:excess]:
+        try:
+            f.unlink()
+            n += 1
+        except Exception:
+            pass
+    return n
+
+
+def _cleanup_disk(now: Optional[float] = None) -> int:
+    """删除磁盘上过期的落盘文件 + 每会话超量淘汰。返回删除的文件数。"""
+    now = now or time.time()
+    root = _persist_root()
+    if not root.exists():
+        return 0
+    removed = 0
+    try:
+        sid_dirs = [p for p in root.iterdir() if p.is_dir()]
+    except Exception:
+        return 0
+    for sid_dir in sid_dirs:
+        for f in list(sid_dir.glob("*.json")):
+            try:
+                d = json.loads(f.read_text("utf-8"))
+            except Exception:
+                try:
+                    f.unlink(); removed += 1
+                except Exception:
+                    pass
+                continue
+            ended = d.get("ended")
+            if ended and now - float(ended) > _keep_secs(bool(d.get("background")), bool(d.get("fetched"))):
+                try:
+                    f.unlink(); removed += 1
+                except Exception:
+                    pass
+        removed += _enforce_cap(sid_dir)
+    return removed
+
+
+def _rec_from_dict(d: dict) -> AgentRecord:
+    status = str(d.get("status") or "done")
+    result = d.get("result")
+    if status == "running":   # 残留运行态 → 服务重启导致中断 (进程已不在)
+        status = "interrupted"
+        result = result or "[子代理中断] 服务重启, 该后台子代理的运行态记录已失效 (进程已不在)。"
+    rec = AgentRecord(id=str(d.get("id") or ""), sid=str(d.get("sid") or ""),
+                      agent_type=str(d.get("agent_type") or "coder"), task=str(d.get("task") or ""),
+                      background=bool(d.get("background", True)), status=status,
+                      started=float(d.get("started") or time.time()),
+                      ended=float(d["ended"]) if d.get("ended") else time.time(),
+                      iteration=int(d.get("iteration") or 0), max_iter=int(d.get("max_iter") or 0),
+                      last_tool=str(d.get("last_tool") or ""), tool_calls=int(d.get("tool_calls") or 0),
+                      result=result, fetched=bool(d.get("fetched", False)),
+                      delivered=int(d.get("delivered") or 0),
+                      restored=True, result_truncated=bool(d.get("result_truncated", False)))
+    return rec
+
+
+def _restore_once() -> None:
+    """进程首次使用 registry 时, 从磁盘加载未过期的已结束记录到内存 (幂等, 线程安全)。
+    注意: 调用方不得持有 _LOCK (本函数内部获取)。"""
+    global _RESTORED
+    if _RESTORED:
+        return
+    with _LOCK:
+        if _RESTORED:
+            return
+        _RESTORED = True
+        try:
+            _cleanup_disk()
+        except Exception:
+            pass
+        root = _persist_root()
+        if not root.exists():
+            return
+        loaded = 0
+        try:
+            sid_dirs = sorted(p for p in root.iterdir() if p.is_dir())
+        except Exception:
+            return
+        for sid_dir in sid_dirs:
+            for f in sorted(sid_dir.glob("*.json")):
+                try:
+                    d = json.loads(f.read_text("utf-8"))
+                except Exception:
+                    continue
+                rid = str(d.get("id") or "").strip()
+                if not rid or rid in _RECORDS:
+                    continue
+                try:
+                    _RECORDS[rid] = _rec_from_dict(d)
+                    loaded += 1
+                except Exception:
+                    continue
+        if loaded:
+            _log().info(f"  [subagent-registry] 从磁盘恢复 {loaded} 个已结束后台子代理记录 (服务重启兜底)")
+
+
 # ═══════════════════════════ 登记表 ═══════════════════════════
 
 def _gc(now: Optional[float] = None) -> int:
     """清理过期的已结束记录。结果没取走的后台子代理保留更久 (下一轮还要提示)。"""
     now = now or time.time()
-    ttl = _ttl()
     n = 0
     with _LOCK:
         for rid, r in list(_RECORDS.items()):
             if r.status == "running" or r.ended is None:
                 continue
-            keep = UNFETCHED_TTL if (r.background and not r.fetched) else ttl
-            if now - r.ended > keep:
+            if now - r.ended > _keep_secs(r.background, r.fetched):
                 _RECORDS.pop(rid, None)
                 n += 1
+                if r.background:   # 内存淘汰的同时删掉其落盘文件, 保持磁盘一致
+                    try:
+                        (_persist_root() / _safe_name(r.sid) / f"{_safe_name(r.id)}.json").unlink()
+                    except Exception:
+                        pass
     return n
 
 
@@ -138,6 +330,7 @@ def _new_record(sid: Optional[str], agent_type: str, task: str, background: bool
 
 
 def records(sid: Optional[str]) -> List[AgentRecord]:
+    _restore_once()
     _gc()
     with _LOCK:
         return sorted((r for r in _RECORDS.values() if r.sid == (sid or "")), key=lambda r: r.started)
@@ -145,6 +338,7 @@ def records(sid: Optional[str]) -> List[AgentRecord]:
 
 def get(sid: Optional[str], rid: str) -> Optional[AgentRecord]:
     """按 id 取本会话的记录; 别的会话的 id 当作不存在 (会话隔离)。"""
+    _restore_once()
     r = _RECORDS.get(str(rid or "").strip())
     return r if r is not None and r.sid == (sid or "") else None
 
@@ -163,6 +357,7 @@ def _status_of(rec: AgentRecord, out) -> str:
 def _finish(rec: AgentRecord, status: str, result: str) -> None:
     rec.status, rec.result, rec.ended = status, result, time.time()
     rec.inbox.clear()
+    _persist(rec)   # 后台子代理结束 → 落盘 (重启后可取回); 非后台在 _persist 内跳过
 
 
 # ═══════════════════════════ 子代理侧钩子 (subagent._run_subagent_core) ═══════════════════════════
@@ -360,7 +555,10 @@ def _progress(r: AgentRecord) -> str:
 
 
 def _take(r: AgentRecord) -> str:
+    was = r.fetched
     r.fetched = True
+    if r.background and not was:   # 结果已取走 → 落盘里同步 fetched (改走较短 TTL)
+        _persist(r)
     return f"=== {r.id} {r.agent_type}「{r.brief}」{_STATUS_CN.get(r.status, r.status)} ({r.elapsed()}s) ===\n{r.result or ''}"
 
 
