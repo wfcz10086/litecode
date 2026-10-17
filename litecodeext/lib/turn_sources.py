@@ -10,6 +10,7 @@ import re
 from . import turn_context as tc
 from .config import CFG, WORKSPACE, HAS_MEMORY_INDEX, memory_index_get
 from .prompt import _detect_auto_delegation, matched_skills_block, PROMPT_FILE
+from .agent import failure_loop as _failure_loop
 
 try:
     from memory import recall as _recall          # 容器 / 服务进程: core 在 sys.path
@@ -104,3 +105,5 @@ tc.register("delegation", delegation, order=10)
 tc.register("skills", skills, order=30)
 tc.register("memory_index", memory_index, order=40)
 tc.register("memory_recall", memory_recall, order=50)
+# 失败经验召回 (lib/agent/failure_loop.py): 相似度过阈值才给, 开关 agent.failure_memory.enabled
+tc.register("failure_memory", _failure_loop.recall_source, order=60)

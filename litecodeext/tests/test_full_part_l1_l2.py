@@ -11,6 +11,7 @@ from pathlib import Path
 from _full_common import (  # noqa: F401  (共享配置/颜色/记录器, 见 _full_common.py)
     BASE, _load_cfg, _make_tester,
     G, R, Y, C, B, D, NC,
+    _html_elements, _has_class, _css_rules, _css_class_rule,
 )
 
 
@@ -90,43 +91,54 @@ def _offline_l1_smoke() -> list:
 
     # ── 49. web_ui.html 顶部按钮 (sbt) ≥ 7 个 ──
     def test_webui_sbt_count():
-        html = (BASE / "web_ui.html").read_text()
-        n = html.count('class="sbt"')
-        assert n >= 7, f"sbt 按钮太少: {n}"
+        # 结构断言: 解析 DOM 数真实 <button class="... sbt ..."> 且带 onclick (注释/脚本里的字样不算)
+        els, _ = _html_elements(BASE / "web_ui.html")
+        btns = [a for t, a in els if t == "button" and _has_class(a, "sbt") and a.get("onclick")]
+        assert len(btns) >= 7, f"sbt 按钮太少: {len(btns)}"
     _test("[v1.10] web_ui.html sbt 按钮 ≥ 7", test_webui_sbt_count)
 
     # ── 50. web_ui.html 8 个面板 pnl-* + DAG v2 独立全屏入口 ──
     def test_webui_panels():
-        html = (BASE / "web_ui.html").read_text()
+        # 结构断言: 解析 DOM, 面板必须是 class 含 pnl 的真实元素 (而非源码里出现 id="..." 字样)
+        els, scripts = _html_elements(BASE / "web_ui.html")
+        panel_ids = {a.get("id") for t, a in els if _has_class(a, "pnl")}
         for p in ("pnl-stats", "pnl-memory", "pnl-wechat", "pnl-timer",
                   "pnl-sfiles", "pnl-vnc", "pnl-project", "pnl-settings"):
-            assert f'id="{p}"' in html, f"缺面板 {p}"
+            assert p in panel_ids, f"缺面板 {p}"
         # [dag-v2 2026-08-04] DAG 编排不再走 pnl-dag 弹窗面板, 已改成独立的
         # Jenkins-lite 3 屏全屏路由 (list/editor/build), 入口是 openDAGRouter()
-        assert "openDAGRouter" in html, "DAG v2 全屏入口 openDAGRouter 缺失"
+        entry = [a for t, a in els if t == "button"
+                 and re.search(r"\bopenDAGRouter\s*\(", a.get("onclick", ""))]
+        assert entry, "DAG v2 全屏入口按钮 (onclick=openDAGRouter()) 缺失"
+        js = "\n".join(scripts) + "".join(
+            f.read_text() for f in sorted((BASE / "web_assets").glob("*.js")))
+        assert re.search(r"openDAGRouter\s*=\s*function|function\s+openDAGRouter\s*\(", js), \
+            "openDAGRouter 被按钮引用但没有定义"
     _test("[v1.10] web_ui.html 8 个 pnl-* 面板 + DAG v2 入口", test_webui_panels)
 
     # ── 51. 输入元素 (input) 至少 2 个 (登录密码 + 上传文件) ──
     def test_webui_inputs():
-        html = (BASE / "web_ui.html").read_text()
-        import re as _re
-        ids = _re.findall(r'<input[^>]*id="([^"]+)"', html)
-        assert "lpwd" in ids, "缺登录密码 input"
-        assert "fi" in ids, "缺文件上传 input"
+        # 结构断言: 解析 DOM 取 <input> 元素, 同时校验 type (密码框/文件框)
+        els, _ = _html_elements(BASE / "web_ui.html")
+        inputs = {a.get("id"): a for t, a in els if t == "input" and a.get("id")}
+        assert "lpwd" in inputs and inputs["lpwd"].get("type") == "password", "缺登录密码 input"
+        assert "fi" in inputs and inputs["fi"].get("type") == "file", "缺文件上传 input"
     _test("[v1.10] web_ui.html 输入元素就位", test_webui_inputs)
 
     # ── 52. fold 折叠类 (.rsb .rsh .rsc .rsi) 都有 ──
     def test_css_fold_classes():
-        css = (BASE / "web_assets" / "app.css").read_text()
-        for cls in (".rsb", ".rsh", ".rsc", ".rsi"):
-            assert cls in css, f"app.css 缺折叠类 {cls}"
+        # 结构断言: 解析 CSS 规则, 要求有带声明的规则选中该类 (注释/前缀相同的类名如 .rsbx 不算)
+        rules = _css_rules(BASE / "web_assets" / "app.css")
+        for cls in ("rsb", "rsh", "rsc", "rsi"):
+            assert _css_class_rule(rules, cls), f"app.css 缺折叠类 .{cls}"
     _test("[v1.10] app.css 4 个 fold 类齐全", test_css_fold_classes)
 
     # ── 53. 工具组类 (.tg .ti .tn .ta) ──
     def test_css_tool_classes():
-        css = (BASE / "web_assets" / "app.css").read_text()
-        for cls in (".tg{", ".ti{", ".tn{", ".ta{"):
-            assert cls in css, f"app.css 缺工具类 {cls}"
+        # 结构断言: 原 ".tg{" 子串意为"有独立的 .tg 规则"; 现解析规则, 要求某选择器恰为 .tg 且有声明
+        rules = _css_rules(BASE / "web_assets" / "app.css")
+        for cls in ("tg", "ti", "tn", "ta"):
+            assert _css_class_rule(rules, cls, standalone=True), f"app.css 缺工具类 .{cls}"
     _test("[v1.10] app.css 4 个工具类齐全", test_css_tool_classes)
 
     # ── 54. 静态资源 app.js 存在 + 非空 ──
@@ -627,9 +639,20 @@ def _offline_l2_mid() -> list:
     def test_cli_exists():
         cli = BASE / "cli.py"
         assert cli.exists()
-        # 含 argparse / main
-        src = cli.read_text()
-        assert "main" in src or "ArgumentParser" in src
+        # 行为断言: 真跑 argparse 入口 (原为源码含 "main"/"ArgumentParser" 子串)
+        import subprocess, tempfile
+        with tempfile.TemporaryDirectory() as home:
+            # 临时 HOME: 不碰真实 ~/.litecode; 死端口: 万一走到网络也连不上生产
+            env = {**os.environ, "HOME": home, "OPENCLAW_URL": "http://127.0.0.1:9"}
+            r = subprocess.run([sys.executable, str(cli), "--help"], capture_output=True,
+                               text=True, timeout=30, env=env, cwd=str(BASE))
+            assert r.returncode == 0, f"cli.py --help 退出码 {r.returncode}: {r.stderr[-300:]}"
+            for flag in ("--query", "--session", "--output-format", "--check"):
+                assert flag in r.stdout, f"cli.py --help 缺参数 {flag}"
+            # 入口真在解析参数: 空 query 必须在联网前被拦下 (exit 2)
+            r = subprocess.run([sys.executable, str(cli), "--session", "test-full", "--query", " "],
+                               capture_output=True, text=True, timeout=30, env=env, cwd=str(BASE))
+            assert r.returncode == 2, f"cli.py --query 空串应 exit 2, 实际 {r.returncode}"
     _test("[v1.10] cli.py: argparse 入口", test_cli_exists)
 
     # ── 102. AGENT_PROMPT.md 段落齐全 ──

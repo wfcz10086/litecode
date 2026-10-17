@@ -168,6 +168,7 @@ from lib.agent.text_reply import _salvage_empty_reply, TextReplyState, _handle_t
 from lib.agent.turn_persist import _turn_persist  # noqa: E402,F401
 from lib.agent.tool_exec import ToolRunState, _run_tool_calls, _write_call_confirmed_success  # noqa: E402,F401
 from lib.agent.turn_errors import _turn_error_message  # noqa: E402,F401
+from lib.agent import failure_loop as _fl  # noqa: E402  失败经验记录 (召回走 lib/turn_sources)
 
 
 
@@ -332,6 +333,7 @@ async def agent_stream(
                         f"\n\n[timeout] 任务已运行 {int(_usage.elapsed)}s，达到时间上限 ({int(_effective_timeout)}s)。"
                         f"请总结当前进度和剩余步骤。"
                     )
+                    _fl.mark(_ctx, "timeout", detail=f"运行 {int(_usage.elapsed)}s 超过上限 {int(_effective_timeout)}s")
                     yield sse_content(timeout_msg, model)
                     # 给模型一次最后总结的机会
                     _ctx.messages.append({"role": "user", "content":
@@ -608,6 +610,7 @@ async def agent_stream(
                             f"  \033[31m[TOOL-LOOP-BREAK:{_ctx.sid_tag}]\033[0m "
                             f"iter={_iteration} 累计拦截 {_tool_loop_guard.block_count} 次, 终止本轮"
                         )
+                        _fl.mark(_ctx, "tool_loop_break")
                         _tlb_msg = (
                             "\n\n（同一个操作反复重试了好多次都没有进展，已经先停下来了，"
                             "换个思路，或者告诉我更多信息再继续吧。）\n"
@@ -669,6 +672,8 @@ async def agent_stream(
                     if _tr.action == "break":
                         break
                     continue
+            else:   # for 正常耗尽 (没有任何 break) = 迭代上限
+                _fl.mark(_ctx, "max_iter", detail=f"{_effective_max_iter} 轮迭代用尽")
 
             # [FIX] for 循环正常耗尽时不做任何处理 — MAX_ITER 由 config.json 控制
             # (当前 999), 已足够大；真正耗尽说明任务已完成或模型主动 break；
@@ -686,6 +691,7 @@ async def agent_stream(
             _raw_err = str(e)
             log.exception(f"  [{_ctx.sid_tag}] 回合异常: {_raw_err[:500]}")
             _err_msg = _turn_error_message(_raw_err)
+            _fl.mark(_ctx, "turn_exception", detail=f"{type(e).__name__}: {_raw_err[:300]}")
             try:
                 yield sse_content(_err_msg, model)
             except GeneratorExit:
@@ -695,6 +701,7 @@ async def agent_stream(
             except Exception:
                 pass
 
+        _fl.record_turn(_ctx, user_message, error_streak)   # 失败回合写经验 (内部吞异常)
         # AGENT_STREAM_REFACTOR M6a: FINALIZE 段提取为子生成器 (原 L2981-3053)
         async for _ev in _turn_finalize(_ctx, _usage, _batch_state, _guard_stats, model):
             yield _ev

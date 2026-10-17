@@ -11,7 +11,8 @@ failure_memory.py — 失败模式记忆 (P21)
 - fix_hint: 已知修复建议 (空字符串若不知道)
 
 API:
-- record_failure(workspace, error_type, summary, fix_hint="")
+- record_failure(workspace, error_type, summary, fix_hint="", extra=None)
+  extra: 附加字段 (如 stuck_at / detail), 每个值截 300 字, 不参与指纹
 - find_similar(workspace, error_type, query, limit=3) → 最相关的过往失败
 - get_summary(workspace) → 顶级 error_type 计数
 
@@ -37,8 +38,10 @@ def _sig(error_type: str, summary: str) -> str:
     return h.hexdigest()[:12]
 
 
-def record_failure(workspace, error_type: str, summary: str, fix_hint: str = "") -> bool:
-    """记一条失败. 返回 True = 新记录, False = 已存在 (按 signature dedup)."""
+def record_failure(workspace, error_type: str, summary: str, fix_hint: str = "",
+                   extra: Optional[Dict] = None) -> bool:
+    """记一条失败. 返回 True = 新记录, False = 已存在 (按 signature dedup).
+    extra: 附加字段 (不覆盖内置字段, 不参与指纹), 值统一转 str 截 300 字。"""
     try:
         p = _path(workspace)
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -64,6 +67,9 @@ def record_failure(workspace, error_type: str, summary: str, fix_hint: str = "")
             "summary": summary[:400],
             "fix_hint": fix_hint[:300],
         }
+        for k, v in (extra or {}).items():
+            if k not in entry:
+                entry[k] = str(v)[:300]
         with p.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
         return True

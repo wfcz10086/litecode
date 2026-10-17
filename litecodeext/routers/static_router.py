@@ -1,10 +1,12 @@
 """static_router.py — 静态资源 (/assets/*) + 主页 HTML (/).
 
-主页 HTML 走 _get_html() 函数 (注入 VNC/WebPort 后返回), 由 web_ui.py 注入.
+主页 HTML 走 _get_html() 函数 (注入 VNC/WebPort 后返回), 由 web_ui.py 注入;
+仓外插件的前端入口由 plugin_assets_router.inject_html() 在返回前追加.
 """
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
 
+from routers.plugin_assets_router import inject_html
 from routers.state import S
 
 router = APIRouter()
@@ -49,7 +51,7 @@ async def artifacts_page():
 
 @router.get("/", response_class=HTMLResponse)
 async def index():
-    """主页 HTML — 由 web_ui.py 注入 _get_html 函数."""
+    """主页 HTML — 由 web_ui.py 注入 _get_html 函数; 再注入仓外插件的 WEB_ENTRY (无插件时原样)."""
     if S.get_html is None:
         return HTMLResponse("<h1>get_html not injected</h1>", status_code=500)
-    return S.get_html()
+    return inject_html(S.get_html())

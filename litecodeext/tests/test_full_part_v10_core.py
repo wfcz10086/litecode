@@ -11,6 +11,7 @@ from pathlib import Path
 from _full_common import (  # noqa: F401  (共享配置/颜色/记录器, 见 _full_common.py)
     BASE, _load_cfg, _make_tester,
     G, R, Y, C, B, D, NC,
+    _run_subagent_scripted,
 )
 
 
@@ -200,12 +201,46 @@ def _offline_v10_core() -> list:
 
     # ── 8. browser-automation 新 action 定义 ──
     def test_browser_actions():
-        sys.path.insert(0, str(BASE))
-        server_py = (BASE / "skills" / "browser-automation" / "browser_server.py").read_text()
+        # 行为断言: 真导入 browser_server (不起浏览器), 断言 _run 把每个新动作分发到对应实现
+        # (原为源码子串匹配 —— 模块 docstring 里列了动作名, 删掉分发分支也照样绿)
+        import asyncio, importlib.util, inspect, tempfile
         new_actions = ["deep_inspect", "find_element", "check_state", "wait_dom_stable",
                        "smart_wait", "extract_table", "extract_form", "fill_form", "intercept"]
+        saved_env = {k: os.environ.get(k) for k in ("SESSIONS_DIR", "DISPLAY")}
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                os.environ["SESSIONS_DIR"] = tmp  # 模块导入时会 mkdir STATE_DIR
+                spec = importlib.util.spec_from_file_location(
+                    "_test_full_browser_server",
+                    BASE / "skills" / "browser-automation" / "browser_server.py")
+                bs = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(bs)
+        finally:
+            for k, v in saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        called = []
+
+        def _stub(name):
+            async def _f(page, params):
+                called.append((name, params))
+                return {"ok": True, "msg": f"stub:{name}", "data": params}
+            return _f
+
         for action in new_actions:
-            assert action in server_py, f"Missing action: {action}"
+            impl = getattr(bs, f"_action_{action}", None)
+            assert inspect.iscoroutinefunction(impl), f"Missing action impl: _action_{action}"
+            setattr(bs, f"_action_{action}", _stub(action))
+        for action in new_actions:
+            params = {"probe": action}
+            r = asyncio.run(bs._run(action, params, None, None, "s"))
+            assert r.get("ok") and r.get("msg") == f"stub:{action}", f"Missing action: {action} → {r}"
+        assert [n for n, _ in called] == new_actions, f"分发顺序/次数异常: {called}"
+        assert all(p == {"probe": n} for n, p in called), "参数未原样透传给动作实现"
+        bad = asyncio.run(bs._run("no_such_action", {}, None, None, "s"))
+        assert bad["ok"] is False and "未知动作" in bad["msg"]
     _test("browser: all 9 new actions defined in server", test_browser_actions)
 
     # ── 9. thinking_adapter (v1.0) ──
@@ -480,11 +515,19 @@ def _offline_v10_core() -> list:
 
     # ── 20. subagent 每轮进度日志 (v1.0) ──
     def test_subagent_iter_log():
-        sa_file = BASE / "lib/agent/subagent.py"
-        content = sa_file.read_text()
-        assert "subagent:{agent_type}:iter=" in content, \
-            "subagent 缺少每轮进度日志, 会被误认为'卡死'"
-        assert "start" in content  # iter 开始日志
+        # 行为断言: 用脚本化假 LLM 真跑 2 轮子代理 (第 1 轮调工具, 第 2 轮出答案),
+        # 断言每轮开始都打了 [subagent:<type>:iter=N/max] start 日志 (原为源码子串匹配)
+        sys.path.insert(0, str(BASE))
+        tool_round = [{"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call_1",
+            "function": {"name": "read_file", "arguments": '{"filepath": "a.py"}'}}]}}]}]
+        answer_round = [{"choices": [{"delta": {"content": "审查完成"}}]}]
+        result, logs, executed = _run_subagent_scripted([tool_round, answer_round], "critic")
+        assert result == "审查完成", f"子代理结果异常: {result!r}"
+        assert executed == [("read_file", {"filepath": "a.py"})], f"工具未执行: {executed}"
+        starts = [m for m in logs if re.search(r"\[subagent:critic:iter=\d+/\d+\] start", m)]
+        assert len(starts) == 2, f"subagent 缺少每轮进度日志, 会被误认为'卡死': {logs}"
+        assert "iter=1/" in starts[0] and "iter=2/" in starts[1], f"轮次编号不对: {starts}"
     _test("[v1.0] subagent: 每轮进度日志防'卡死'误报", test_subagent_iter_log)
 
     return results

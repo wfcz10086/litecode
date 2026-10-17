@@ -11,6 +11,7 @@ from pathlib import Path
 from _full_common import (  # noqa: F401  (共享配置/颜色/记录器, 见 _full_common.py)
     BASE, _load_cfg, _make_tester,
     G, R, Y, C, B, D, NC,
+    _run_subagent_scripted, _css_rules, _css_class_rule, _strip_js_comments,
 )
 
 
@@ -81,10 +82,15 @@ def _offline_v10_fixes() -> list:
 
     # ── 23. subagent 防御性 <think> 剥离 (v1.0) ──
     def test_subagent_think_strip():
-        sa_file = BASE / "lib/agent/subagent.py"
-        content = sa_file.read_text()
-        assert "<think>.*?</think>" in content, \
-            "subagent 缺少防御性 <think> 剥离"
+        # 行为断言: 假 LLM 把思考 (跨 chunk、含换行) 塞进 content, 子代理返回值必须只剩答案
+        # (原为源码含正则字面量 "<think>.*?</think>" 的子串匹配)
+        sys.path.insert(0, str(BASE))
+        chunks = [{"choices": [{"delta": {"content": c}}]}
+                  for c in ("<think>先想想\n内部", "推理 SECRET</think>", "\n最终答案")]
+        result, _, _ = _run_subagent_scripted([chunks], "critic")
+        assert "SECRET" not in result and "<think>" not in result and "</think>" not in result, \
+            f"subagent 缺少防御性 <think> 剥离: {result!r}"
+        assert result == "最终答案", f"剥离后答案不对: {result!r}"
     _test("[v1.0] subagent: 防御性剥离 <think> 标签", test_subagent_think_strip)
 
     # ── 24. AGENT_PROMPT 不再建议字面 [THINK] (v1.0) ──
@@ -101,20 +107,18 @@ def _offline_v10_fixes() -> list:
     # ── 25. Web UI 推理折叠显示 (v1.0) ──
     def test_webui_reasoning():
         # [v1.0] Web UI 已拆分为 web_ui.html + web_assets/*, 分别检查
-        html_file = BASE / "web_ui.html"
-        css_file = BASE / "web_assets" / "app.css"
-        combined = html_file.read_text()
-        if css_file.exists():
-            combined += css_file.read_text()
-        for js_file in sorted((BASE / "web_assets").glob("*.js")):
-            combined += js_file.read_text()
-        # CSS 应该已有
-        assert ".rsb" in combined, "缺 .rsb 折叠面板 CSS"
-        assert ".rsh" in combined, "缺 .rsh 折叠标题 CSS"
-        # JS 应该处理 delta.reasoning
-        assert "delta.reasoning" in combined, "Web UI JS 未处理 delta.reasoning"
+        # CSS 部分: 解析规则, 要求有带声明的 .rsb / .rsh 规则 (原为全文子串)
+        rules = _css_rules(BASE / "web_assets" / "app.css")
+        assert _css_class_rule(rules, "rsb"), "缺 .rsb 折叠面板 CSS"
+        assert _css_class_rule(rules, "rsh"), "缺 .rsh 折叠标题 CSS"
+        # JS 部分: 浏览器 DOM 代码, 离线无 JS 引擎/DOM 可跑, 保留文本检查;
+        # 但先剥掉注释, 防止"只剩注释里提到 delta.reasoning"也算过 (playwright E2E 覆盖真实渲染)
+        js = "".join(_strip_js_comments(f.read_text())
+                     for f in sorted((BASE / "web_assets").glob("*.js")))
+        # JS 应该处理 delta.reasoning (代码里真读取该字段)
+        assert re.search(r"\bdelta\.reasoning\b", js), "Web UI JS 未处理 delta.reasoning"
         # 最终渲染应该保留 rsb (变量名或 class 均可)
-        assert "rsbHtml" in combined or "rsb.live" in combined, "Web UI 最终渲染未保留推理块"
+        assert "rsbHtml" in js or "rsb.live" in js, "Web UI 最终渲染未保留推理块"
     _test("[v1.0] Web UI: 推理内容折叠展示", test_webui_reasoning)
 
     # ── 26. extract_content vLLM/Ollama 兼容 (v1.0) ──

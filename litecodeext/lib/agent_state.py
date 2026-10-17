@@ -160,6 +160,7 @@ class TurnContext:
     session_id: Optional[str] = None                  # 形参型字段, 构造时显式传入 (非默认值起手)
     turn_context: str = ""      # 本轮挂在 user 消息前的动态上下文 (lib/turn_context.py), 随 new_msgs 持久化
     disabled_tools: frozenset = frozenset()   # 本次请求禁用的工具 (lib/tool_filter.py), 评测断网用
+    failure: Optional[dict] = None   # 本轮失败出口打标 {kind, stuck_at, detail} (lib/agent/failure_loop.py)
 
 
 @dataclass

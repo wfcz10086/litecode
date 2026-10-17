@@ -9,6 +9,7 @@ from history_utils import _clear_old_tool_results
 from history_utils import _extract_first_user_summary
 from history_utils import _extract_last_completed_turn
 from history_utils import _sanitize_history
+from lib.agent.failure_loop import recall_text as _fl_recall
 from lib.agent_state import BatchWriteState
 from lib.agent_state import TurnContext
 from lib.agent_state import UsageCounters
@@ -277,6 +278,10 @@ def _turn_setup_context(
                 sys_prompt += "\n\n" + _hist_ctx
         except Exception as _me:
             log.warning(f"  [memory_index] search failed: {_me}")
+    if not _turn_ctx_enabled():   # 旧路径: 失败经验同样进 system prompt (开启时由 turn_sources 提供)
+        _fl_exp = _fl_recall(user_message, _ctx.session_id)
+        if _fl_exp:
+            sys_prompt += "\n\n" + _fl_exp
 
     # ── Trace: 记录技能自动加载 ──
     if _ctx.tracer.enabled:

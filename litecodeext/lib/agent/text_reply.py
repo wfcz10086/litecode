@@ -5,6 +5,7 @@ from lib.config import log
 from lib.sse import sse_content
 from lib.agent.tool_names import _WRITE_TOOL_NAMES_STR
 from lib.config import CFG
+from lib.agent.failure_loop import mark as _fl_mark
 _AGT = CFG.get("agent", {})
 
 
@@ -198,6 +199,7 @@ async def _handle_text_reply(_ctx, _batch_state, _st, full_text, _full_reasoning
                 if m.get("role") == "tool"
             ]
             _summary = _salvage_empty_reply(_iteration, _done_tools, _last_reasoning_salvage)
+            _fl_mark(_ctx, "empty_reply", detail=f"连续 {_consecutive_empty} 次空回复")
             if _last_reasoning_salvage.strip():
                 log.warning(f"  \033[33m[empty-reply] 触顶取回 reasoning 尾段当正文 "
                             f"({len(_last_reasoning_salvage)}c → 正文)\033[0m")

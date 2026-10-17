@@ -127,11 +127,64 @@ def ping():
 - 插件导入失败、`ROUTER` 类型错误、挂载异常 → 只记日志跳过, 不影响 web_ui 启动 (仓内 router 缺 `router` 仍直接报错)。
 - 未设置 `LITECODE_PLUGIN_PATH` 时不收集; 路由在 web_ui **启动时**挂上, `POST /api/plugins/reload` 只重扫工具,
   路由改动需重启 web_ui 生效。
-- 前端面板 (插件自带 JS/CSS 注入主页) 暂不支持。
+- 前端面板 / 静态资源见下一节 `WEB_ASSETS` / `WEB_ENTRY`。
+
+## 可选: 前端资源与面板 (WEB_ASSETS / WEB_ENTRY, 2026-10-17 起; ABI v1 向后兼容扩展)
+
+插件可以自带 JS/CSS/图片等前端资源, 并把其中的 .js/.css 注入主页 (`/`)。不导出这两个字段的老插件行为不变,
+主页字节完全不变。
+
+| 字段 | 类型 | 缺省 | 说明 |
+|---|---|---|---|
+| `WEB_ASSETS` | `str` / `Path` | 无 | 静态资源目录; 相对路径以 `plugin.py` 所在目录为基准, 也可绝对路径。必须是已存在目录 |
+| `WEB_ENTRY` | `list[str]` / `tuple` | 无 | 要注入主页的文件名, 只允许 `WEB_ASSETS` **第一层**的 `.js` / `.css` (不得含 `/` `\` `..`), 按列出顺序注入 |
+
+```python
+# /opt/demo/plugin.py
+WEB_ASSETS = "web"                       # → /opt/demo/web/
+WEB_ENTRY = ["demo.css", "demo.js"]
+```
+
+托管: `GET /plugin-assets/{插件名}/{path}` 只读提供 `WEB_ASSETS` 目录 (含子目录)。
+- 插件名: `<dir>/plugin.py` → `<dir>`; `<root>/plugins/<x>.py` → `<root>.<x>`。只允许 `[A-Za-z0-9_.-]` (首字符字母数字, ≤64),
+  否则该插件前端资源跳过; 重名时先扫到的生效。
+- 与主页 `/assets/` 策略一致, **不要求登录** (登录页本身也要加载静态资源) — 别把敏感数据放进 `WEB_ASSETS`, 数据走带鉴权的 `ROUTER`。
+- 后缀白名单: js mjs css map json txt png jpg jpeg gif webp svg ico woff woff2 ttf, 其他 → 400。
+- 路径任一段为空/`.`/`..`/以 `.` 开头 (隐藏文件) 或含反斜杠 → 400; resolve 后不在目录内 (符号链接逃逸) → 404;
+  未知插件/文件不存在 → 404。响应带 `X-Content-Type-Options: nosniff`。
+
+注入: 返回主页时在最后一个 `</body>` 前插入 (按插件名排序, 同插件按 `WEB_ENTRY` 顺序):
+```html
+<!-- plugin web assets -->
+<link rel="stylesheet" href="/plugin-assets/demo/demo.css?v=<mtime>" data-plugin="demo">
+<script src="/plugin-assets/demo/demo.js?v=<mtime>" defer data-plugin="demo"></script>
+```
+注入内容只由 (已校验的) 插件名和文件名拼成, 并经 `html.escape`; 主页当前无 CSP 头, 同源脚本可直接加载。
+
+前端挂载约定 (`web_assets/plugin_panels.js`, 主页始终加载):
+```js
+window.LiteCodePlugins.registerPanel({
+  id: 'demo',                 // [A-Za-z0-9][A-Za-z0-9_-]{0,47}, 全局唯一
+  title: 'Demo',              // 按钮与面板标题 (纯文本, ≤40 字)
+  icon: '🧩',                 // 可选, 纯文本 (emoji)
+  render(container) {         // 首次打开时调用一次, container = 面板 .pbd_ 区域
+    container.textContent = 'hello';
+  },
+  onOpen(container) {},       // 可选, 每次打开都调用 (刷新数据)
+});                           // 返回 true/false (id 非法/重复/缺 render → false + console.warn)
+```
+- 按钮加在侧栏 "接入" 分组 (无分组时平铺进 `#sbf`); 面板复用 `.pnl/.pb_/.ph_/.px_` 样式与 `openP/closeP`,
+  DOM id 为 `pnl-plugin-<id>`, 点 × 或遮罩关闭。也可 `LiteCodePlugins.open(id)` / `.close(id)` 编程控制。
+- 插件脚本是 `defer`, 执行时 DOM 已解析; 在 `DOMContentLoaded` 前注册的面板会排队, 等侧栏分组建好后再挂。
+- 面板内要调后端, 用插件自己的 `ROUTER` (默认需登录, 浏览器同源请求自动带 cookie)。
+
+出错隔离: `WEB_ASSETS` 类型不对/目录不存在、`WEB_ENTRY` 不是列表 → 该插件跳过 (只记日志);
+`WEB_ENTRY` 中单个非法/不存在的文件名只跳过该项; 只有 `WEB_ENTRY` 没有 `WEB_ASSETS` → 忽略。
+资源每次请求按 `registry.external_modules()` 计算, `POST /api/plugins/reload` 重扫后即跟随; 未设置 `LITECODE_PLUGIN_PATH` 时完全不收集。
 
 ## 卸载
 
-`unset LITECODE_PLUGIN_PATH` → 下次 `registry.scan()` 该插件的工具消失, 下次 web_ui 启动其路由消失，LiteCode 零改动继续跑。
+`unset LITECODE_PLUGIN_PATH` → 下次 `registry.scan()` 该插件的工具消失, 下次 web_ui 启动其路由消失, 主页不再注入其前端资源、`/plugin-assets/<名>/` 返回 404，LiteCode 零改动继续跑。
 
 ## 契约变更
 

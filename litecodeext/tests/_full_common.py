@@ -51,6 +51,110 @@ NC = "\033[0m"  if _T else ""
 
 
 # ══════════════════════════════════════════════════════════════
+# 行为化测试辅助 (替代"读源码 + 子串匹配"的断言)
+# ══════════════════════════════════════════════════════════════
+
+def _html_elements(path: Path) -> tuple:
+    """用 html.parser 解析页面, 返回 ([(tag, attrs_dict)], [内联 script 文本])。注释里的文字不算元素。"""
+    from html.parser import HTMLParser
+
+    class _P(HTMLParser):
+        def __init__(self):
+            super().__init__()
+            self.els = []
+            self.scripts = []
+            self._in_script = False
+
+        def handle_starttag(self, tag, attrs):
+            self.els.append((tag, {k: (v or "") for k, v in attrs}))
+            self._in_script = tag == "script"
+
+        def handle_startendtag(self, tag, attrs):
+            self.els.append((tag, {k: (v or "") for k, v in attrs}))
+
+        def handle_endtag(self, tag):
+            if tag == "script":
+                self._in_script = False
+
+        def handle_data(self, data):
+            if self._in_script:
+                self.scripts.append(data)
+
+    p = _P()
+    p.feed(Path(path).read_text())
+    p.close()
+    return p.els, p.scripts
+
+
+def _has_class(attrs: dict, cls: str) -> bool:
+    return cls in (attrs.get("class") or "").split()
+
+
+def _css_rules(path: Path) -> list:
+    """极简 CSS 解析: 去注释后取最内层 `selector{decls}` 规则 (@media 等包裹层自动展开), 返回 [(selectors, decls)]。"""
+    css = re.sub(r"/\*.*?\*/", "", Path(path).read_text(), flags=re.S)
+    return [(sel.strip(), body.strip()) for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)]
+
+
+def _css_class_rule(rules: list, cls: str, standalone: bool = False) -> bool:
+    """是否存在 *带声明* 的规则选中类 cls。standalone=True 要求某个选择器恰好就是 `.cls` 本身。"""
+    pat = re.compile(r"\." + re.escape(cls) + r"(?![\w-])")
+    for sels, body in rules:
+        if ":" not in body:
+            continue
+        for s in (x.strip() for x in sels.split(",")):
+            if standalone and s == "." + cls:
+                return True
+            if not standalone and pat.search(s):
+                return True
+    return False
+
+
+def _strip_js_comments(src: str) -> str:
+    """去掉 JS 的 /* */ 块注释与行首/空白后的 // 行注释 (不碰字符串里的 http://), 只留代码。"""
+    src = re.sub(r"/\*.*?\*/", "", src, flags=re.S)
+    return re.sub(r"(^|\s)//[^\n]*", r"\1", src)
+
+
+def _run_subagent_scripted(rounds: list, agent_type: str = "critic"):
+    """用脚本化的假 LLM 流真跑 lib.agent.subagent._run_subagent。
+
+    rounds: 每轮一个 chunk 列表 (OpenAI 流式 chunk dict)。工具调用走假 execute_tool。
+    返回 (result, log_messages, executed_tools)。
+    """
+    import asyncio
+    import logging
+    from lib.agent import subagent as sa
+    from lib.config import log as _log
+
+    msgs, executed = [], []
+    it = iter(rounds)
+
+    class _H(logging.Handler):
+        def emit(self, rec):
+            msgs.append(rec.getMessage())
+
+    async def _fake_stream(messages, tools):
+        for ch in next(it, [{"choices": [{"delta": {"content": "兜底结束"}}]}]):
+            yield ch
+
+    async def _fake_exec(name, args, sid):
+        executed.append((name, args))
+        return f"fake result of {name}", None
+
+    h = _H()
+    saved = (sa._vllm_stream, sa.execute_tool)
+    _log.addHandler(h)
+    sa._vllm_stream, sa.execute_tool = _fake_stream, _fake_exec
+    try:
+        result = asyncio.run(sa._run_subagent("脚本化任务", agent_type))
+    finally:
+        sa._vllm_stream, sa.execute_tool = saved
+        _log.removeHandler(h)
+    return result, msgs, executed
+
+
+# ══════════════════════════════════════════════════════════════
 # v1.0 OFFLINE UNIT TESTS (无需 server, 直接跑)
 # ══════════════════════════════════════════════════════════════
 
