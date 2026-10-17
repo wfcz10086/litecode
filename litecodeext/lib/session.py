@@ -231,6 +231,16 @@ def delete_session(sid: str):
 # ── Interrupt ────────────────────────────────────────────────
 def set_interrupt(sid: str):
     with _interrupt_lock: _interrupt_flags.add(sid)
+    _stop_background_agents(sid)
+
+
+def _stop_background_agents(sid: str):
+    """用户点停止 = 该会话的后台子代理也一起停 (见 lib/agent/subagent_registry.stop_session)。"""
+    try:
+        from lib.agent.subagent_registry import stop_session
+        stop_session(sid)
+    except Exception:
+        pass
 
 def check_interrupt(sid: str) -> bool:
     with _interrupt_lock: return sid in _interrupt_flags

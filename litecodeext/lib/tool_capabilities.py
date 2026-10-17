@@ -19,7 +19,7 @@ _READ_ONLY = (
 # spawn_agent / update_map 由主循环特殊处理, 不走 execute_tool;
 # DAG 增删改跑由 DAG 自身的 dag 步类型负责, 工具步里再开 DAG 会递归
 _NOT_FOR_DAG = (
-    "spawn_agent", "update_map", "task_done",
+    "spawn_agent", "update_map", "task_done", "agent_control",
     "create_dag", "update_dag", "delete_dag", "patch_dag_node", "run_dag",
 )
 

@@ -256,6 +256,7 @@ _SUBAGENT_CONFIGS: dict = {
 from .subagent_operator import OPERATOR_CONFIG as _OPERATOR_CONFIG, is_operator as _is_operator
 from .subagent_operator import loop_exempt as _loop_exempt, check_windows_call as _win_guard
 from .subagent_operator import append_observation as _append_observation
+from . import subagent_registry as _reg   # [agent-control] 登记进度 / 信箱补充指令 / 停止请求 (见 subagent_registry)
 _SUBAGENT_CONFIGS["operator"] = _OPERATOR_CONFIG
 
 
@@ -494,6 +495,8 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
         from lib.session import check_interrupt as _check_parent_interrupt
     except Exception:
         _check_parent_interrupt = None
+    if _reg.is_background():   # 后台子代理不随主回合中断而停, 叫停走 agent_control stop
+        _check_parent_interrupt = None
     cfg = _SUBAGENT_CONFIGS.get(agent_type, _SUBAGENT_CONFIGS["coder"])
     allowed = cfg["allowed"]
     sa_tools = [t for t in TOOL_DEFS if t["function"]["name"] in allowed]
@@ -586,6 +589,10 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
         # 清理旧 tool result
         if _iter > 0 and _iter % 4 == 0:
             _clear_old_tool_results(messages, keep_recent=6)
+        _stop = _reg.tick(messages, _iter, max_iter, agent_type)   # [agent-control] 停止请求 / 注入补充指令
+        if _stop:
+            await _cleanup_subagent_bg(_subagent_sid, agent_type)
+            return _stop
 
         full_text = ""
         acc_tools: dict = {}
@@ -635,6 +642,9 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 messages.append({"role": "assistant", "content": full_text or "(准备结束)"})
                 messages.append({"role": "user", "content": _ev_nudge})
                 log.info(f"  [subagent:{agent_type}] evidence nudge @iter={_iter+1}")
+                continue
+            if _reg.pending() and _iter < max_iter - 1:   # 收尾前信箱里还有补充指令 → 再跑一轮处理
+                messages.append({"role": "assistant", "content": full_text or "(准备结束)"})
                 continue
             # [v1.2] 链路兜底: 模型本轮既无工具调用也无正文 → 不能让下游拿到空串
             # 优先级 1) 历史里最近的 tool 结果 (含真实数据)
@@ -756,6 +766,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 result = f"ERROR: execute_tool not available for {fn_name}"
             if _ev is not None:
                 _ev.observe(fn_name, fn_args, result)
+            _reg.note_tool(fn_name, fn_args)
             if _op and fn_name == "windows_desktop":
                 _raw_desktop.append({"tool_call_id": tc["id"], "content": result})
 
@@ -936,7 +947,7 @@ async def _run_subagent_safe(task: str, agent_type: str, context: str = "",
                 timeout=timeout,
             )
             _emit_subagent_telemetry(agent_type, task, "ok", (time.time() - _t0) * 1000, len(result))
-            if result and not result.startswith("[子代理") and not _is_operator(agent_type):
+            if result and not result.startswith("[子代理") and not _is_operator(agent_type) and not _reg.steered():
                 _subagent_cache_put(_cache_key, result)
             return result
         except asyncio.TimeoutError:

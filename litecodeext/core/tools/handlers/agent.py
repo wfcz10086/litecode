@@ -16,6 +16,11 @@ async def h_spawn_agent(sid: str, args: dict) -> tuple[str, Any]:
     args, _op_err = prepare_spawn_args(args)
     if _op_err:
         return _op_err, None
+    # [agent-control 2026-10-17] background=true: 后台子代理, 立即返回 id (见 subagent_registry)
+    from lib.agent import subagent_registry as _reg
+    if args.get("background"):
+        from lib.agent.subagent import _run_subagent_safe
+        return await _reg.launch_background(args, sid, _run_subagent_safe), None
     WORKSPACE = td.WORKSPACE
     task = args.get("task", "")
     agent_type = args.get("agent_type", "coder")
@@ -38,7 +43,7 @@ async def h_spawn_agent(sid: str, args: dict) -> tuple[str, Any]:
     # [evidence 2026-10-17] 包在工作树之外: 采集每个子代理的证据, 结果开头标 [已验证]/[未验证: 原因]
     from lib.agent.subagent_evidence import plan_evidence
     _ev = plan_evidence()
-    _run_subagent = _ev.wrap(_iso.wrap(_run_subagent))
+    _run_subagent = _reg.track(_ev.wrap(_iso.wrap(_run_subagent)), sid)
 
     def _with_iso(text: str) -> str:
         return _ev.decorate(text + ("\n" + _iso.summary() if _iso.summary() else ""))
@@ -104,6 +109,16 @@ async def h_spawn_agent(sid: str, args: dict) -> tuple[str, Any]:
         return _with_iso(result), None
     except Exception as e:
         return f"ERROR in subagent({agent_type}): {e}", None
+
+
+@register("agent_control")
+async def h_agent_control(sid: str, args: dict) -> tuple[str, Any]:
+    """查看/控制本会话派出的子代理: list / status / send / wait / result / stop。"""
+    from lib.agent.subagent_registry import agent_control_tool
+    try:
+        return await agent_control_tool(sid, args or {}), None
+    except Exception as e:
+        return f"ERROR: agent_control 失败: {e}", None
 
 
 @register("agent_worktree")

@@ -58,6 +58,8 @@ async def interrupt_session_api(sid: str, request: Request):
     require_auth(request)
     with _interrupt_lock:
         _interrupt_flags.add(sid)
+    from lib.session import _stop_background_agents
+    _stop_background_agents(sid)
     log.info(f"[INTERRUPT] flagged session {sid}")
     return {"ok": True, "sid": sid}
 

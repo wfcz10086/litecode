@@ -65,7 +65,14 @@ AGENT_DEFS = [
                 "写入文件及是否回读、搜索/读取取证、工作树提交与合并状态), 结果开头标 [已验证] 或 [未验证: 原因], "
                 "末尾附「证据」小节; 多个子代理时列出每个子代理的判定。"
                 "[未验证] 的子代理结论 (尤其是数字、'测试通过'、'已修复'之类) 只能当线索: "
-                "汇报给用户前必须自己核实 (跑测试 / read_file 回读 / 重新计算), 或明确告诉用户该结论未经验证。"
+                "汇报给用户前必须自己核实 (跑测试 / read_file 回读 / 重新计算), 或明确告诉用户该结论未经验证。\n"
+                "后台子代理 (background=true): 只支持单个 task 或 parallel_tasks, 立即返回每个子代理的 id (sa-xxxxxx)、"
+                "角色和任务摘要, 子代理在后台跑 (工作树隔离/证据/操作员独占照旧; 写类子代理在 git 仓库里一律用独立工作树, "
+                "因为你自己也在同时改文件), 你不用干等。典型用法: spawn_agent(background=true, ...) 派出去 → 你继续做别的 → "
+                "发现要补充/纠正时 agent_control(action=\"send\", id, message) 追加指令 (子代理下一轮迭代前收到) → "
+                "需要结果时 agent_control(action=\"wait\", id) 收结果 (格式与阻塞模式相同, 带 [已验证]/[未验证] 标记)。"
+                "每个会话同时运行的后台子代理默认最多 4 个 (超过拒绝派发); 回合结束时还没跑完的不会被杀, 下一轮再用 agent_control 取。"
+                "不需要中途干预、马上就要结果的任务, 照旧用阻塞方式 (不带 background)。"
             ),
             "parameters": {
                 "type": "object",
@@ -77,6 +84,7 @@ AGENT_DEFS = [
                     "alias":      {"type": "string", "description": "agent_type=operator 时必填: 要操作的 Windows 电脑别名 (windows_nodes list 可查); 多任务时作为未写 alias 的 operator 项的默认值"},
                     "context":    {"type": "string", "description": "Extra context to pass (file paths, prior results, etc.)"},
                     "workdir":    {"type": "string", "description": "要改动的项目目录 (绝对路径, 默认 WORKSPACE); 是 git 仓库时才可能用工作树隔离"},
+                    "background": {"type": "boolean", "description": "true=后台运行, 立即返回子代理 id, 之后用 agent_control 查看/补充指令/等待/停止; 默认 false (阻塞到子代理结束)"},
                     "isolation":  {"type": "string", "enum": ["auto", "worktree", "none"],
                                    "description": "auto(默认)=≥2 个写类子代理并发且 workdir 是 git 仓库时自动用独立工作树; worktree=写类子代理一律隔离; none=不隔离 (旧行为, 共用目录)"},
                     "parallel_tasks": {
@@ -157,6 +165,33 @@ AGENT_DEFS = [
                     },
                 },
                 "required": ["task", "agent_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_control",
+            "description": (
+                "查看和控制本会话派出的子代理 (spawn_agent background=true 的后台子代理; 阻塞模式的也有记录可查)。"
+                "action: list=列出本会话子代理及进度; status=某个子代理的状态/迭代数/最近工具调用; "
+                "send=给运行中的子代理补充指令 (message ≤2000 字, 子代理在下一轮迭代开始前收到并照做, 正在跑的工具不会被打断; "
+                "已结束的会报错); wait=等指定子代理 (不给 id 则等本会话全部) 结束并返回结果, timeout 默认 300 秒、最多 1800 秒, "
+                "超时不报错而是返回当前进度, 可稍后再 wait 或先做别的; result=取已结束子代理的结果 (没结束返回进度); "
+                "stop=请求停止, 子代理在下一轮迭代开始时结束 (状态 stopped, 结果标未验证; 在独立工作树里的改动只提交不合并, 用 agent_worktree 处理)。"
+                "结果格式与阻塞模式相同: 开头 [已验证] 或 [未验证: 原因], 末尾附证据小节; [未验证] 的结论只能当线索, "
+                "汇报前须自己核实或明确告诉用户未经验证。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action":  {"type": "string", "enum": ["list", "status", "send", "wait", "result", "stop"],
+                                "description": "操作"},
+                    "id":      {"type": "string", "description": "子代理 id (sa-xxxxxx, 来自 spawn_agent 后台派发结果或 list); list 不需要, wait 不给则等全部"},
+                    "message": {"type": "string", "description": "send 用: 补充指令 (≤2000 字)"},
+                    "timeout": {"type": "integer", "description": "wait 用: 最多等待秒数 (默认 300, 上限 1800)"},
+                },
+                "required": ["action"]
             }
         }
     },

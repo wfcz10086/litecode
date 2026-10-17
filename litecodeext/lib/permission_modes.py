@@ -23,6 +23,7 @@ _TOOL_DANGER_LEVEL = {
     "find_symbol": "read", "get_tree": "read",
     # neutral: agent / 工具内部
     "spawn_agent": "agent", "update_global_context": "agent", "agent_worktree": "agent",
+    "agent_control": "agent",
 }
 
 

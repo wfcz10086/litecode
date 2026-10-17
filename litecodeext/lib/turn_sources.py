@@ -11,6 +11,7 @@ from . import turn_context as tc
 from .config import CFG, WORKSPACE, HAS_MEMORY_INDEX, memory_index_get
 from .prompt import _detect_auto_delegation, matched_skills_block, PROMPT_FILE
 from .agent import failure_loop as _failure_loop
+from .agent import subagent_registry as _sa_registry
 
 try:
     from memory import recall as _recall          # 容器 / 服务进程: core 在 sys.path
@@ -107,3 +108,5 @@ tc.register("memory_index", memory_index, order=40)
 tc.register("memory_recall", memory_recall, order=50)
 # 失败经验召回 (lib/agent/failure_loop.py): 相似度过阈值才给, 开关 agent.failure_memory.enabled
 tc.register("failure_memory", _failure_loop.recall_source, order=60)
+# 后台子代理已结束但结果未取走 → [SYSTEM-AGENTS] 简短提示 (lib/agent/subagent_registry.py)
+tc.register("agents", _sa_registry.turn_source, order=70)

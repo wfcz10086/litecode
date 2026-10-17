@@ -10,6 +10,7 @@ from history_utils import _extract_first_user_summary
 from history_utils import _extract_last_completed_turn
 from history_utils import _sanitize_history
 from lib.agent.failure_loop import recall_text as _fl_recall
+from lib.agent import subagent_registry as _sa_reg
 from lib.agent_state import BatchWriteState
 from lib.agent_state import TurnContext
 from lib.agent_state import UsageCounters
@@ -131,6 +132,10 @@ async def _turn_finalize(
 
     # 先把 SSE 结束标记发给客户端，解锁前端 streaming 状态
     try:
+        # [agent-control] 还有后台子代理在跑: 不强杀, 最终回复后追加一条简短备注 (用户可见, 随 new_msgs 落库)
+        _bg_note = _sa_reg.turn_end_note(_ctx.session_id, _ctx.new_msgs)
+        if _bg_note:
+            yield sse_content(_bg_note, model)
         yield sse_usage(_usage.total_prompt_tokens, _usage.total_completion_tokens,
                        _usage.total_iterations, _usage.elapsed, model)
         yield sse_stop(model)
@@ -282,6 +287,9 @@ def _turn_setup_context(
         _fl_exp = _fl_recall(user_message, _ctx.session_id)
         if _fl_exp:
             sys_prompt += "\n\n" + _fl_exp
+        _bg_done = _sa_reg.pending_notice(_ctx.session_id)   # 后台子代理已结束未取结果 (开启时由 turn_sources 提供)
+        if _bg_done:
+            sys_prompt += "\n\n" + _bg_done
 
     # ── Trace: 记录技能自动加载 ──
     if _ctx.tracer.enabled:

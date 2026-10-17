@@ -32,6 +32,11 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
     if _op_err:
         out["result"] = _op_err
         return
+    # [agent-control 2026-10-17] background=true: 起后台子代理立即返回 id, 主循环不等待 (见 subagent_registry)
+    from lib.agent.subagent_registry import launch_background, track as _reg_track
+    if fn_args.get("background"):
+        out["result"] = await launch_background(fn_args, ctx.session_id, _run_subagent_safe)
+        return
     # [v1.0] 动态延长超时: spawn_agent(writer) 需要大量时间
     out["effective_timeout"] = max(out["effective_timeout"], TASK_TIMEOUT * 6)
 
@@ -55,7 +60,7 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
             from multi_agent import handle_spawn_agent_enhanced
             _sa_coro = handle_spawn_agent_enhanced(
                 fn_args,
-                run_subagent_fn=_ev.wrap(_iso.wrap(_run_subagent)),
+                run_subagent_fn=_reg_track(_ev.wrap(_iso.wrap(_run_subagent)), ctx.session_id),
                 sse_emit=sse_emit,
                 session_id=ctx.session_id,
                 tracer=ctx.tracer,  # [v1.1] 让 DAG 事件进日志
@@ -80,7 +85,7 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
             _sa_timeout = 180
         elif is_operator(agent_type):
             _sa_timeout = DEFAULT_TIMEOUT      # GUI 步数多 (max_iter 60)
-        _sa_coro = _ev.wrap(_iso.wrap(_run_subagent_safe))(
+        _sa_coro = _reg_track(_ev.wrap(_iso.wrap(_run_subagent_safe)), ctx.session_id)(
             task_arg, agent_type, context_arg,
             sse_emit=sse_emit,
             timeout=_sa_timeout,
