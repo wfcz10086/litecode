@@ -60,6 +60,8 @@ def desktop_request(args, workspace):
         if args.get('name'):
             request['name'] = str(args['name'])
         request['force'] = bool(args.get('force', False))
+        if args.get('all') is True:
+            request['all'] = True   # 旧代理不认识该字段, 忽略即可
     elif action == 'services':
         request['name'] = str(args.get('name', ''))
     elif action == 'run_powershell':
@@ -180,6 +182,24 @@ def _uuid():
     return uuid.uuid4().hex
 
 
+UPDATE_WAIT_SECONDS = 90
+UPDATE_POLL_SECONDS = 2
+
+
+def wait_until_updated(nodes, alias, node, limit=None):
+    """节点正在自动更新 (update_state=updating) 时最多等 90 秒, 直到它以新版本回连 (current) 再下发。
+    execute 由工具层经 asyncio.to_thread 调用, 这里的 sleep 只占工作线程, 不阻塞事件循环。"""
+    deadline = time.monotonic() + (UPDATE_WAIT_SECONDS if limit is None else limit)
+    while node is not None and node.get('update_state') == 'updating':
+        if time.monotonic() >= deadline:
+            raise ValueError(f'节点正在更新，请稍后重试：已等待 {UPDATE_WAIT_SECONDS} 秒仍未完成自动更新')
+        time.sleep(UPDATE_POLL_SECONDS)
+        node = next((n for n in nodes.list() if n['alias'] == alias), None)
+    if node is None:
+        raise ValueError('节点不存在或已被删除')
+    return node
+
+
 def execute(args, workspace):
     from core.tools.handlers.remote import _conn, _connect, _close
     action = args.get('action', 'screenshot')
@@ -189,6 +209,8 @@ def execute(args, workspace):
     nodes = Nodes(workspace)
     node = next((n for n in nodes.list() if n['alias'] == args.get('alias')), None)
     if node is not None:
+        if action in NEW_ACTIONS and node.get('update_state') == 'updating':
+            node = wait_until_updated(nodes, args.get('alias'), node)
         if action in NEW_ACTIONS and node.get('update_state') != 'current':
             raise ValueError('代理版本过低，等待自动更新：该节点运行的仍是旧版代理，暂不支持此动作')
         if action == 'run_powershell' and not node.get('capabilities', {}).get('shell'):

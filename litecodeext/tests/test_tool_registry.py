@@ -16,7 +16,9 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 2026-10-16: 新增 windows_desktop 初始化、截图及微信登录状态工具。
 # 2026-10-17: windows_desktop 增 launch_app/window_state/compress 及新快捷键; 新增 windows_system 工具 (系统运维 + 文件传输 + 受控 run_powershell)。
 # 2026-10-17: windows_desktop 加 double_click 与选择、格式快捷键。
-TOOL_DEFS_SHA256 = "746998cd5ae05be8a9fe70882add1501a24592f1bc131067badcbe8d7b565e1b"   # 2026-10-17: windows_system 加 inspect_file 回读核对; windows_desktop 描述加回读要求
+# 2026-10-17: windows_system 加 inspect_file 回读核对; windows_desktop 描述加回读要求。
+# 2026-10-17: spawn_agent 加 operator 角色 + alias 字段 (顶层与 parallel/pipeline/dag 每项)。
+TOOL_DEFS_SHA256 = "f7fcb3e994bb242af837d9e19e8e961f79bf9e5b8ebb29e99dd3e73af6d86ba2"   # 2026-10-17: windows_system 描述加"用户指定界面做法时照做"
 
 READ_ONLY_21 = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",

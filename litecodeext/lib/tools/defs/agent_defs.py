@@ -1,4 +1,4 @@
-"""lib/tools/defs/agent_defs.py — skill / agent / memory / self-reflect (7 个)."""
+"""lib/tools/defs/agent_defs.py — skill / agent / memory / self-reflect (8 个)."""
 
 AGENT_DEFS = [
     {
@@ -46,16 +46,39 @@ AGENT_DEFS = [
                 "  tester     – runs tests and verifies results (execute_shell, read_file)\n"
                 "  shell      – pure shell/bash tasks (execute_shell only)\n"
                 "  writer     – long-form writing: novels, reports, articles (write_file, read_file)\n"
-                "Multiple spawn_agent calls can run the SAME task in different ways; pick the best result."
+                "  operator   – 远程操作员: 操作一台已接入的 Windows 电脑 (windows_desktop / windows_system, "
+                "截图→动作→截图确认, 改过文件用 inspect_file 回读); 不能改服务器文件、不能 execute_shell\n"
+                "远程操作员 (operator) 用法: 必须用 alias 字段指定要操作的电脑 (单个任务用顶层 alias, "
+                "parallel_tasks/pipeline_tasks/dag_tasks 每项写自己的 alias)。一台电脑同一时刻只能一个操作员 "
+                "(只有一套鼠标键盘): 同时运行的两个 operator 指定同一 alias 会被拒绝派发, 同一台电脑上的多件事请合并成"
+                "一个任务或用 pipeline_tasks/depends_on 串行; 某台电脑正被操作员占用时, 你自己对它的 windows_desktop/"
+                "windows_system 调用会立即报错, 等子代理结束再操作。多台电脑并行示例: spawn_agent(parallel_tasks=["
+                "{\"agent_type\":\"operator\",\"alias\":\"vm-a\",\"task\":\"在桌面新建 报告.txt 写入'A 完成'并保存\"}, "
+                "{\"agent_type\":\"operator\",\"alias\":\"vm-b\",\"task\":\"用 WPS 打开 D:/sales.xlsx, 在 D5 填 =SUM(D2:D4) 保存\"}])。"
+                "operator 属写类: 改过文件且之后回读过 (或只做界面操作且最后有截图/OCR 确认) 才标 [已验证]。\n"
+                "Multiple spawn_agent calls can run the SAME task in different ways; pick the best result.\n"
+                "并行改代码自动隔离: 本次派发有 ≥2 个写类子代理 (coder/analyst/tester/shell/writer) 并行或按 DAG 并发, "
+                "且 workdir 是 git 仓库时, 每个写类子代理在独立 git 工作树 (分支 lc-agent/<id>) 里干活, 互不覆盖; "
+                "结束后自动提交并 merge --no-ff 回主工作区, 冲突则保留分支与工作树并列出冲突文件, "
+                "交你用 agent_worktree 处理。主工作区有未提交改动时不自动合并。\n"
+                "交付证据: 框架从子代理自己的工具调用里机器采集证据 (测试/构建/运行命令的退出码与通过失败数、"
+                "写入文件及是否回读、搜索/读取取证、工作树提交与合并状态), 结果开头标 [已验证] 或 [未验证: 原因], "
+                "末尾附「证据」小节; 多个子代理时列出每个子代理的判定。"
+                "[未验证] 的子代理结论 (尤其是数字、'测试通过'、'已修复'之类) 只能当线索: "
+                "汇报给用户前必须自己核实 (跑测试 / read_file 回读 / 重新计算), 或明确告诉用户该结论未经验证。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "task":       {"type": "string", "description": "Detailed task description for the subagent"},
                     "agent_type": {"type": "string",
-                                   "enum": ["explorer","researcher","coder","analyst","tester","shell","writer"],
+                                   "enum": ["explorer","researcher","coder","analyst","tester","shell","writer","operator"],
                                    "description": "Subagent specialization"},
+                    "alias":      {"type": "string", "description": "agent_type=operator 时必填: 要操作的 Windows 电脑别名 (windows_nodes list 可查); 多任务时作为未写 alias 的 operator 项的默认值"},
                     "context":    {"type": "string", "description": "Extra context to pass (file paths, prior results, etc.)"},
+                    "workdir":    {"type": "string", "description": "要改动的项目目录 (绝对路径, 默认 WORKSPACE); 是 git 仓库时才可能用工作树隔离"},
+                    "isolation":  {"type": "string", "enum": ["auto", "worktree", "none"],
+                                   "description": "auto(默认)=≥2 个写类子代理并发且 workdir 是 git 仓库时自动用独立工作树; worktree=写类子代理一律隔离; none=不隔离 (旧行为, 共用目录)"},
                     "parallel_tasks": {
                         "type": "array",
                         "description": "并行子任务列表。多个独立任务同时执行。格式: [{\"task\":\"...\",\"agent_type\":\"...\"}]",
@@ -63,7 +86,8 @@ AGENT_DEFS = [
                             "type": "object",
                             "properties": {
                                 "task":       {"type": "string"},
-                                "agent_type": {"type": "string"}
+                                "agent_type": {"type": "string"},
+                                "alias":      {"type": "string", "description": "operator 必填: 该任务操作的 Windows 电脑别名"}
                             }
                         }
                     },
@@ -74,7 +98,8 @@ AGENT_DEFS = [
                             "type": "object",
                             "properties": {
                                 "task":       {"type": "string"},
-                                "agent_type": {"type": "string"}
+                                "agent_type": {"type": "string"},
+                                "alias":      {"type": "string", "description": "operator 必填: 该任务操作的 Windows 电脑别名"}
                             }
                         }
                     },
@@ -96,7 +121,8 @@ AGENT_DEFS = [
                                 "depends_on":  {"type": "array", "items": {"type": "string"}, "description": "依赖的 step_id 列表"},
                                 "max_retries": {"type": "integer", "description": "最大重试次数（默认2）"},
                                 "timeout":     {"type": "integer", "description": "超时秒数（默认300）"},
-                                "context":     {"type": "string", "description": "额外上下文"}
+                                "context":     {"type": "string", "description": "额外上下文"},
+                                "alias":       {"type": "string", "description": "operator 必填: 该步骤操作的 Windows 电脑别名"}
                             }
                         }
                     },
@@ -131,6 +157,27 @@ AGENT_DEFS = [
                     },
                 },
                 "required": ["task", "agent_type"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "agent_worktree",
+            "description": (
+                "处理子代理留下的隔离工作树 (spawn_agent 并行改代码时创建, 冲突/未合并时保留)。"
+                "action=list 列出待处理工作树 (顺带清理 24 小时前已合并/已丢弃的残留); "
+                "diff 看某个工作树相对基点的改动; merge 再次尝试 merge --no-ff 回主工作区 "
+                "(冲突则 abort 并列出冲突文件, 可手动解决后再 merge 或 discard); discard 删除工作树与分支。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {"type": "string", "enum": ["list", "merge", "discard", "diff"],
+                               "description": "操作"},
+                    "id":     {"type": "string", "description": "工作树 id (spawn_agent 结果或 list 里的 [工作树 <id>]); list 不需要"},
+                },
+                "required": ["action"]
             }
         }
     },

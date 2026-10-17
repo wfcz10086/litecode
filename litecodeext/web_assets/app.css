@@ -377,6 +377,14 @@ pre:hover .cpb,.cpb:focus{opacity:1}.cpb:active{background:var(--ac);color:#000}
 #imgModal{display:none;position:fixed;inset:0;z-index:999;background:rgba(0,0,0,.88);align-items:center;justify-content:center;cursor:zoom-out}
 #imgModal.show{display:flex}
 #imgModal img{max-width:94vw;max-height:92vh;border-radius:var(--rs);object-fit:contain}
+/* [perf 2026-10] 长会话: 离屏历史消息跳过渲染 (Ctrl+F 仍可搜到) + 图片固定比例占位/缩略图 + 加载更早消息 */
+#msgs>.msg.lc-cv{content-visibility:auto;contain-intrinsic-size:auto 220px}
+.lc-more{display:flex;justify-content:center;padding:6px 0 10px}
+.lc-more .mab{font-size:12px;padding:4px 14px}
+#msgs img.lc-img{background:var(--sf2)}
+#msgs img.lc-pv{display:block;width:100%;max-width:min(100%,480px);height:auto;aspect-ratio:var(--lc-ar,16/10);border-radius:4px;cursor:zoom-in;object-fit:contain}
+.mfa img.lc-img:not(.lc-loaded){width:220px;aspect-ratio:16/10}
+.wx-img.lc-img:not(.lc-loaded){width:260px;aspect-ratio:16/10}
 /* inline code 样式（不依赖hljs）*/
 code.ic{background:rgba(165,214,255,.12);color:#a5d6ff;padding:1px 5px;border-radius:4px;font-family:var(--mono);font-size:.87em}
 /* pre data-lang 标签 */

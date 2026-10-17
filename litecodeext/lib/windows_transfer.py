@@ -86,9 +86,11 @@ def resolve_within(base, candidate):
     """校验 candidate 落在 base 目录内（含 base 自身），返回解析后的绝对路径，否则拒绝。
 
     服务端用它确保上传源文件必须位于工作区内，杜绝把服务器任意文件发出去。
+    相对路径先拼到 base 再 resolve（不按进程当前目录解析，web_ui 的 cwd 不一定是工作区）。
     """
     base = Path(base).resolve()
-    target = Path(candidate).resolve()
+    path = Path(candidate)
+    target = (path if path.is_absolute() else base / path).resolve()
     if target != base and base not in target.parents:
         raise ValueError('路径必须位于允许的工作区目录内')
     return target

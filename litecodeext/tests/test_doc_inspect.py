@@ -297,12 +297,18 @@ def test_inspect_file_via_handler_and_real_download_chain(tmp_path, monkeypatch)
     assert jobs == [('download', None, True), ('download', 0, True)]     # 只读, 允许网络错误重试
 
 
-def test_inspect_file_rejected_on_legacy_agent_and_ssh_alias(tmp_path):
+def test_inspect_file_rejected_on_legacy_agent_and_ssh_alias(tmp_path, monkeypatch):
+    from lib import windows_desktop
     from lib.windows_desktop import execute
     from lib.windows_nodes import Nodes
+    # 版本落后 = 正在自动更新: 等待超时后报"节点正在更新"; 不上报版本的 legacy 仍立即"代理版本过低"
+    monkeypatch.setattr(windows_desktop, 'UPDATE_WAIT_SECONDS', 0)
     _enroll_online(Nodes(tmp_path), {'agent': '0' * 16, 'assets': '0' * 16})
-    with pytest.raises(ValueError, match='代理版本过低'):
+    with pytest.raises(ValueError, match='节点正在更新'):
         execute({'alias': 'ops', 'action': 'inspect_file', 'path': 'C:\\a.xlsx'}, str(tmp_path))
+    _enroll_online(Nodes(tmp_path), {}, alias='old')
+    with pytest.raises(ValueError, match='代理版本过低'):
+        execute({'alias': 'old', 'action': 'inspect_file', 'path': 'C:\\a.xlsx'}, str(tmp_path))
     with pytest.raises(ValueError, match='主动回连'):
         execute({'alias': 'ssh-only', 'action': 'inspect_file', 'path': 'C:\\a.xlsx'}, str(tmp_path))
 

@@ -32,17 +32,18 @@ def test_plaintext_legacy_credential_requires_migration(tmp_path):
 
 
 def test_uninstall_uses_separate_task_without_credentials_in_command(tmp_path):
-    with patch.object(agent.subprocess, 'run') as run:
+    with patch.object(agent, 'run_quiet') as run:
         run.return_value.returncode = 0
         agent.launch_uninstall(tmp_path)
     args = run.call_args.args[0]
     assert '-Schedule' in args and '-Root' in args
     assert str(tmp_path / 'uninstall.ps1') in args
     assert not any('token' in arg for arg in args)
-    run.return_value.returncode = 1
-    with patch.object(agent.subprocess, 'run', return_value=run.return_value):
-        with pytest.raises(RuntimeError, match='启动失败'):
-            agent.launch_uninstall(tmp_path)
+    for code in (1, None):   # 失败或超时 (None) 都报启动失败
+        run.return_value.returncode = code
+        with patch.object(agent, 'run_quiet', return_value=run.return_value):
+            with pytest.raises(RuntimeError, match='启动失败'):
+                agent.launch_uninstall(tmp_path)
 
 
 def test_uninstall_command_stops_agent_without_desktop_action(tmp_path):
@@ -53,6 +54,7 @@ def test_uninstall_command_stops_agent_without_desktop_action(tmp_path):
     with patch.object(sys, 'argv', ['agent.py', str(tmp_path)]), \
          patch.object(agent, 'load_config', return_value={'id': 'test'}), \
          patch.object(agent, 'request', side_effect=response), \
+         patch.object(agent.os, 'chdir'), \
          patch.object(agent, 'launch_uninstall') as uninstall, \
          patch.object(agent, 'run_job') as desktop:
         agent.main()
@@ -78,14 +80,19 @@ def _run_agent(tmp_path, responses, served):
     calls = []
     def response(config, path, data=None):
         calls.append(path)
+        if path == '/versions':
+            raise urllib.error.HTTPError('', 404, 'none', {}, None)   # 启动时不带校验直接加载
         if path == '/poll':
             if not responses:
-                raise urllib.error.HTTPError('', 403, 'stop', {}, None)
+                # 带撤销标记的 403, 连续 3 次后代理停用自己并退出
+                raise urllib.error.HTTPError('', 403, 'stop', {'X-LiteCode-Auth': 'revoked'}, None)
             return json.dumps(responses.pop(0)).encode()
         return served(path)
     with patch.object(sys, 'argv', ['agent.py', str(tmp_path)]), \
          patch.object(agent, 'load_config', return_value={'id': 'a' * 32}), \
          patch.object(agent, 'request', side_effect=response), \
+         patch.object(agent.time, 'sleep'), \
+         patch.object(agent.os, 'chdir'), \
          patch.object(agent, 'powershell') as shell, \
          patch.object(agent.subprocess, 'Popen') as popen:
         shell.return_value.returncode = 0
@@ -95,12 +102,13 @@ def _run_agent(tmp_path, responses, served):
 
 
 def test_idle_agent_hot_reloads_worker_assets(tmp_path):
-    version = {'n': 0}
+    downloads = []
     def served(path):
-        return ('# v%d %s' % (version['n'], path)).encode()
+        downloads.append(path)   # 启动先下载 v0 全套, 之后控制端已发布 v1
+        return ('# v%d %s' % (0 if len(downloads) <= len(agent.ASSETS) else 1, path)).encode()
+    v1 = hashlib.sha256(b''.join(('# v1 /assets/' + a).encode() for a in agent.ASSETS)).hexdigest()[:16]
     sys.modules['windows_desktop_worker'] = object()
-    first = {'job': None, 'versions': {'assets': 'x' * 16, 'agent': agent.VERSIONS['agent']}}
-    version['n'] = 0
+    first = {'job': None, 'versions': {'assets': v1, 'agent': agent.VERSIONS['agent']}}
     calls, popen = _run_agent(tmp_path, [first, dict(first)], served)
     # 启动加载一次 + 版本不同重载一次; 同一目标版本不重复下载
     assert calls.count('/assets/worker.py') == 2

@@ -109,7 +109,8 @@ try {
     Invoke-WebRequest "$device/assets/agent.py" -Headers $headers -OutFile (Join-Path $root 'agent.py') -UseBasicParsing
     Invoke-RestMethod "$device/assets/uninstall.ps1" -Headers $headers | Set-Content -Encoding UTF8 (Join-Path $root 'uninstall.ps1')
     $pythonw = Join-Path (Split-Path $python) 'pythonw.exe'
-    $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"'+(Join-Path $root 'agent.py')+'" "'+$root+'"')
+    # 指定工作目录, 否则代理 cwd 为 C:\Windows\system32, 它拉起的应用"另存为"会默认跳到 System32
+    $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"'+(Join-Path $root 'agent.py')+'" "'+$root+'"') -WorkingDirectory $root
     # 登录时启动 + 每 5 分钟补拉一次 (运行中由 IgnoreNew 忽略), 崩溃最多自动重启 999 次
     $trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $identity.Name),
                  (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)))

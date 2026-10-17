@@ -750,6 +750,7 @@ async def handle_spawn_agent_enhanced(
         specs = [AgentSpec(
             task=t.get("task", ""), agent_type=t.get("agent_type", "coder"),
             context=t.get("context", ""), label=t.get("label", ""),
+            timeout=t.get("timeout", 300),    # operator 默认放宽 (见 subagent_operator.prepare_spawn_args)
         ) for t in parallel_tasks]
         result = await orch.run(AgentMode.PARALLEL, specs, sse_emit)
         return _format_result(result)

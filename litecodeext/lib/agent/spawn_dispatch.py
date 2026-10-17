@@ -26,6 +26,12 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
             set_execute_tool(execute_tool)
     except Exception:
         pass
+    # [operator 2026-10-17] 远程操作员: 校验 alias + 同一电脑不能被两个并行操作员同时使用
+    from lib.agent.subagent_operator import prepare_spawn_args, is_operator, DEFAULT_TIMEOUT
+    fn_args, _op_err = prepare_spawn_args(fn_args)
+    if _op_err:
+        out["result"] = _op_err
+        return
     # [v1.0] 动态延长超时: spawn_agent(writer) 需要大量时间
     out["effective_timeout"] = max(out["effective_timeout"], TASK_TIMEOUT * 6)
 
@@ -36,6 +42,12 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
                    or fn_args.get("parallel_tasks")
                    or fn_args.get("competitive_tasks")
                    or fn_args.get("batch_items"))
+    # [worktree-iso 2026-10-17] 写类子代理并行时用独立 git 工作树隔离, 结束自动合并
+    from lib.agent.subagent_worktree import plan_isolation
+    _iso = plan_isolation(fn_args, single=not (_multi_tasks and isinstance(_multi_tasks, list)))
+    # [evidence 2026-10-17] 证据包装器在工作树之外; 结果开头标 [已验证]/[未验证: 原因]
+    from lib.agent.subagent_evidence import plan_evidence
+    _ev = plan_evidence()
     # [v1.0] 将子代理包装为 task, 同时 drain SSE 队列做实时透传 + 中断检查
     if _multi_tasks and isinstance(_multi_tasks, list) and len(_multi_tasks) > 0:
         # 路由到 multi-agent 编排器
@@ -43,7 +55,7 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
             from multi_agent import handle_spawn_agent_enhanced
             _sa_coro = handle_spawn_agent_enhanced(
                 fn_args,
-                run_subagent_fn=_run_subagent,
+                run_subagent_fn=_ev.wrap(_iso.wrap(_run_subagent)),
                 sse_emit=sse_emit,
                 session_id=ctx.session_id,
                 tracer=ctx.tracer,  # [v1.1] 让 DAG 事件进日志
@@ -66,7 +78,9 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
             _sa_timeout = 400
         elif agent_type == "critic":
             _sa_timeout = 180
-        _sa_coro = _run_subagent_safe(
+        elif is_operator(agent_type):
+            _sa_timeout = DEFAULT_TIMEOUT      # GUI 步数多 (max_iter 60)
+        _sa_coro = _ev.wrap(_iso.wrap(_run_subagent_safe))(
             task_arg, agent_type, context_arg,
             sse_emit=sse_emit,
             timeout=_sa_timeout,
@@ -129,6 +143,10 @@ async def _dispatch_spawn_agent(fn_args: dict, ctx, sse_emit, sse_queue, out):
                     out["result"] = f"ERROR in subagent: {e}"
             elif _sa_task.cancelled():
                 out["result"] = "[子代理已取消: 父会话被中断]"
+            if isinstance(out.get("result"), str) and _iso.summary():
+                out["result"] += "\n" + _iso.summary()
+            if isinstance(out.get("result"), str):
+                out["result"] = _ev.decorate(out["result"])
             # drain 队列中剩余事件
             while True:
                 try:

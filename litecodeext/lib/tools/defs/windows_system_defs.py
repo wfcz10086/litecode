@@ -4,12 +4,13 @@ WINDOWS_SYSTEM_DEFS = [{
         'name': 'windows_system',
         'description': (
             '主动回连 Windows 节点的系统运维与文件传输（命令行/非视觉通道）。能用命令行完成的事'
-            '（查看/增删文件、看进程、装软件、读写配置、查系统信息）优先用本工具，比截图点击更快更稳；'
+            '（查看/增删文件、看进程、装软件、读写配置、查系统信息）优先用本工具，比截图点击更快更稳；但用户明确指定了界面做法（如「用记事本」「用鼠标拖拽」「在 WPS 里改」）时必须照做，不要换成命令行；'
             '只有需要看界面或操作 GUI 应用（如用 WPS 编辑文档、处理图形界面弹窗）才改用 windows_desktop 的 '
             'ocr/click_text/点击。动作：'
             'system_info 返回系统版本/主机名/CPU/内存/磁盘/开机时长/登录用户；'
             'processes 按 cpu 或 memory 排序的前 top 个进程，可用 name 过滤；'
-            'kill_process 按 pid 或精确进程名结束，拒绝结束关键系统进程，结束 explorer 需 force=true；'
+            'kill_process 按 pid 或精确进程名结束，拒绝结束关键/常驻系统进程与会话 0 服务进程，结束 explorer 需 force=true；'
+            '按名称命中多个进程时拒绝并列出 pid，需改用 pid 或显式 all=true；'
             'services 只读列出服务及状态（代理普通用户权限，不做启停）；'
             'list_dir 列目录（名称/大小/修改时间/是否目录，最多 500 项）；'
             'download 把 Windows 上的文件（≤50MB）取回服务端工作区，返回服务端路径；'
@@ -33,6 +34,7 @@ WINDOWS_SYSTEM_DEFS = [{
             'name': {'type': 'string', 'description': 'processes/services 过滤关键词，或 kill_process 的精确进程名'},
             'pid': {'type': 'integer', 'minimum': 1, 'description': 'kill_process 目标进程号（与 name 二选一）'},
             'force': {'type': 'boolean', 'default': False, 'description': 'kill_process 结束 explorer 等受保护进程时必须为 true'},
+            'all': {'type': 'boolean', 'default': False, 'description': 'kill_process 按名称命中多个进程时，确认全部结束须为 true'},
             'path': {'type': 'string', 'description': 'list_dir 的目录，或 download / inspect_file 的 Windows 文件路径（支持 %USERPROFILE% 等环境变量）'},
             'source': {'type': 'string', 'description': 'upload 必填：服务端工作区内的源文件路径（必须位于工作区内）'},
             'dest_name': {'type': 'string', 'description': 'upload 可选：落地到 Windows 的文件名，默认取源文件名；会清洗并防穿越'},

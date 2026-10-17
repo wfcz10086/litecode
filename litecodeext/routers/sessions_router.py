@@ -80,12 +80,53 @@ async def api_tombstones_remove(sid: str, request: Request):
     return {"ok": True}
 
 
+_PAGE_MAX = 2000  # 单页上限, 防一次拉爆
+
+
+def _page_int(request: Request, name: str):
+    """可选非负整数 query 参数; 缺省返回 None, 非法 → 400。"""
+    raw = request.query_params.get(name)
+    if raw is None or raw == "":
+        return None
+    try:
+        v = int(raw)
+    except ValueError:
+        raise HTTPException(400, f"{name} must be an integer")
+    if v < 0:
+        raise HTTPException(400, f"{name} must be >= 0")
+    return v
+
+
+def page_session(d: dict, tail=None, before=None, limit=None) -> dict:
+    """[paging 2026-10] 会话消息分段: tail=N 取最后 N 条; before=i&limit=N 取下标 i 之前的 N 条。
+    返回 d 的浅拷贝, messages 换成片段 (每条附全局下标 index), 另附 total / offset / has_more。
+    下标始终基于完整列表, 前端截断/编辑/重试用它定位, 不受已渲染片段影响。"""
+    msgs = d.get("messages", []) or []
+    total = len(msgs)
+    if before is not None:
+        end = min(before, total)
+        start = max(0, end - (limit if limit is not None else 60))
+    else:
+        start, end = max(0, total - tail), total
+    end = max(start, min(end, start + _PAGE_MAX))
+    out = dict(d)
+    out["messages"] = [{**m, "index": start + k} for k, m in enumerate(msgs[start:end])]
+    out.update(total=total, offset=start, has_more=start > 0)
+    return out
+
+
 @router.get("/api/sessions/{sid}")
 async def api_get(sid: str, request: Request):
+    """不带参数: 原样返回整份会话 (向后兼容)。?tail=N / ?before=i&limit=N: 分段, 见 page_session。"""
     require_auth(request)
+    tail, before, limit = (_page_int(request, k) for k in ("tail", "before", "limit"))
     d = _wui().load_session(sid)
     require_owner(d, request)
-    return d
+    if tail is None and before is None:
+        return d
+    if tail is not None and before is not None:
+        raise HTTPException(400, "tail and before are mutually exclusive")
+    return page_session(d, tail=tail, before=before, limit=limit)
 
 
 @router.patch("/api/sessions/{sid}")

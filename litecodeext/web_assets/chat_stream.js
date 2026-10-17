@@ -251,14 +251,8 @@ async function regenerateLast(){
     await _truncateSession(lastUserIdx);
     /* [BUG-FIX 2026-05-22] 同 msgRetry: DOM 删按 user 节点位置, 不按 server msgs idx
      * (server 一轮多条, DOM 只 1 个 .msg.user 块; 用 server idx 当 DOM idx 会少删) */
-    let userOrdinal=0;
-    for(let i=0;i<lastUserIdx;i++){if(msgs[i].role==='user')userOrdinal++;}
-    const userDoms=document.querySelectorAll('#msgs .msg.user');
-    const targetDom=userDoms[userOrdinal];
-    if(targetDom){
-      let n=targetDom;
-      while(n){const nx=n.nextElementSibling;n.remove();n=nx;}
-    }
+    /* [perf 2026-10] 分段渲染: 按全局下标定位 DOM (data-midx / 片段基数), 见 chat_paging.js */
+    _lcDomRemoveFrom(msgs,lastUserIdx);
     document.getElementById('mi').value=uc;
     arx(document.getElementById('mi'));
     send();

@@ -252,6 +252,11 @@ _SUBAGENT_CONFIGS: dict = {
         "allowed": {"vision_ocr", "read_file", "execute_shell", "find_files", "get_tree"},
     },
 }
+# [operator 2026-10-17] 远程操作员: 操作分配给它的那台 Windows (定义/独占/视觉回流见 subagent_operator)
+from .subagent_operator import OPERATOR_CONFIG as _OPERATOR_CONFIG, is_operator as _is_operator
+from .subagent_operator import loop_exempt as _loop_exempt, check_windows_call as _win_guard
+from .subagent_operator import append_observation as _append_observation
+_SUBAGENT_CONFIGS["operator"] = _OPERATOR_CONFIG
 
 
 # ═══════════════════════════════════════════════════════
@@ -467,6 +472,16 @@ def _clear_old_tool_results(messages: list, keep_recent: int = 6):
 async def _run_subagent(task: str, agent_type: str, context: str = "",
                        sse_emit: callable = None,
                        parent_sid: str = None) -> str:
+    """运行子代理; operator 先按 alias 独占那台 Windows 再跑 (见 subagent_operator.run_as_operator)。"""
+    if _is_operator(agent_type):
+        from .subagent_operator import run_as_operator
+        return await run_as_operator(_run_subagent_core, task, agent_type, context, sse_emit, parent_sid)
+    return await _run_subagent_core(task, agent_type, context, sse_emit, parent_sid)
+
+
+async def _run_subagent_core(task: str, agent_type: str, context: str = "",
+                             sse_emit: callable = None,
+                             parent_sid: str = None, sid: str = None) -> str:
     """
     运行聚焦子智能体。v1.0 增强:
     - 滚动摘要: 每 8 轮压缩历史
@@ -493,10 +508,15 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
     sys_prompt = cfg["system"]
     # [v1.0] 所有子代理（除 critic 外）继承主 agent 的铁律
     # critic 的职责是找错，不需要执行约束
-    if agent_type != "critic":
+    if agent_type != "critic" and not _is_operator(agent_type):   # operator 有自己的 GUI 规则
         sys_prompt += _SUBAGENT_IRON_RULES
     if context:
         sys_prompt += f"\n\n## 上下文（来自主智能体）\n{context}"
+    # [worktree-iso 2026-10-17] 隔离工作树: 告知子代理它的工作目录
+    from .subagent_worktree import current as _wt_current, prompt_section as _wt_prompt
+    from .subagent_worktree import rewrite_tool_args as _wt_rewrite
+    if _wt_current() is not None:
+        sys_prompt += _wt_prompt(_wt_current())
 
     # [v1.0.4] PROJECT_MAP 注入: 大项目的子代理开工前看到项目索引
     # 避免子代理盲目 get_tree/find_files, 直接从 map 里定位
@@ -515,7 +535,8 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
             )
 
     # [v1.0] 为子代理生成虚拟 sid, 这样它启动的 bg 进程可独立追踪/清理
-    _subagent_sid = f"subagent_{agent_type}_{uuid.uuid4().hex[:8]}"
+    _subagent_sid = sid or f"subagent_{agent_type}_{uuid.uuid4().hex[:8]}"
+    _op = _is_operator(agent_type)
 
     messages = [
         {"role": "system", "content": sys_prompt},
@@ -523,6 +544,9 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
     ]
 
     log.info(f"  \033[33m[subagent:{agent_type}]\033[0m {task[:80]}")
+    # [evidence 2026-10-17] 机器采集交付证据 (agent.subagent_evidence 关闭时为 None, 全部短路)
+    from .subagent_evidence import start_collector as _ev_start
+    _ev = _ev_start(agent_type)
     final_text = ""
     error_streak = 0
 
@@ -605,6 +629,13 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
             full_text = _re_th.sub(r'<think>.*?</think>', '', full_text, flags=_re_th.DOTALL).strip()
 
         if not acc_tools:
+            # [evidence] 写类子代理准备结束但无证据 → 注入一次 [SYSTEM-EVIDENCE] 补证 (不进用户可见内容)
+            _ev_nudge = _ev.nudge(_iter, max_iter) if _ev is not None else None
+            if _ev_nudge:
+                messages.append({"role": "assistant", "content": full_text or "(准备结束)"})
+                messages.append({"role": "user", "content": _ev_nudge})
+                log.info(f"  [subagent:{agent_type}] evidence nudge @iter={_iter+1}")
+                continue
             # [v1.2] 链路兜底: 模型本轮既无工具调用也无正文 → 不能让下游拿到空串
             # 优先级 1) 历史里最近的 tool 结果 (含真实数据)
             #        2) 剥掉的 <think> 思考内容 (模型推理结论)
@@ -668,6 +699,7 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
             return f"[子代理已中断] 父会话 {parent_sid[:8]} 被用户中断，工具执行前停止。"
 
         tool_results = []
+        _raw_desktop = []          # [operator] 未截断的 windows_desktop 结果, 供截图回流
         _loop_break_sig = None
         _loop_break_count = 0
         for i in sorted(acc_tools):
@@ -683,6 +715,8 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
             # 第 4 次还来就是死循环 (典型: writer 重写 ch01 13 次).
             _sig = _tool_call_sig(fn_name, fn_args)
             _already = _recent_tool_sigs.count(_sig)
+            if _op and _loop_exempt(fn_name, fn_args):
+                _already = 0          # operator 每步都要截图/OCR, 观察类重复调用不算死循环
             if _already >= 3:
                 _loop_break_sig = _sig
                 _loop_break_count = _already + 1
@@ -697,6 +731,12 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
                     "status": "executing", "agent": agent_type, "detail": detail_str,
                 }))
 
+            # [operator] 只能操作分配的电脑: alias 不符 → 拒绝; 未填 → 补成分配的
+            _win_err = None
+            if _op and fn_name not in allowed:   # 模型越权直呼白名单外工具 (execute_shell/write_file...) → 拒绝
+                _win_err = f"ERROR: operator 不能调用 {fn_name} (只允许 {', '.join(sorted(allowed))}), 不得改动服务器"
+            elif _op:
+                fn_args, _win_err = _win_guard(_subagent_sid, fn_name, fn_args)
             # v1.0: 黑板工具特殊处理
             if fn_name == "update_global_context" and _active_blackboard:
                 key = fn_args.get("key", "")
@@ -704,13 +744,20 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
                 entry_type = fn_args.get("type", "context")
                 _active_blackboard.put(key, value, source=agent_type)
                 result = f"✅ 已写入黑板: {key}"
+            elif _win_err:
+                result = _win_err
             elif execute_tool:
                 try:
-                    result, _ = await execute_tool(fn_name, fn_args, _subagent_sid)
+                    # [worktree-iso] 路径改写钩子: 仅本子代理挂了工作树时生效
+                    result, _ = await execute_tool(fn_name, _wt_rewrite(fn_name, fn_args), _subagent_sid)
                 except Exception as _tool_exc:
                     result = f"ERROR: tool execution failed: {_tool_exc}"
             else:
                 result = f"ERROR: execute_tool not available for {fn_name}"
+            if _ev is not None:
+                _ev.observe(fn_name, fn_args, result)
+            if _op and fn_name == "windows_desktop":
+                _raw_desktop.append({"tool_call_id": tc["id"], "content": result})
 
             # 截断
             if len(result) > 3000:
@@ -745,6 +792,9 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
                 "role": "tool", "tool_call_id": tc["id"], "content": result,
             })
         messages.extend(tool_results)
+        # [operator] 子代理版 DESKTOP-VISION: 最新截图回流下一轮模型输入 (先补齐 tool 响应再附图)
+        if _raw_desktop and _append_observation(messages, asst_msg["tool_calls"], _raw_desktop):
+            log.info(f"  [DESKTOP-VISION:{_subagent_sid}] 最新截图已回流子代理下一轮输入")
 
         # [loop-detect-2026-05] 内层 for 触发循环, 跳出外层 _iter
         if _loop_break_sig is not None:
@@ -763,6 +813,8 @@ async def _run_subagent(task: str, agent_type: str, context: str = "",
             break
 
     log.info(f"  \033[33m[subagent:{agent_type}] done\033[0m {final_text[:80]}")
+    if _ev is not None:
+        log.info(f"  [subagent:{agent_type}] evidence verified=%s (%s)" % _ev.verdict())
 
     # [v1.0] 子代理结束: 清理它启动的非 keep_alive bg 进程
     # 例: coder 启动 uvicorn 做测试, 没主动 kill -> 由这里兜底清掉
@@ -873,7 +925,7 @@ async def _run_subagent_safe(task: str, agent_type: str, context: str = "",
     try:
         _t0 = time.time()
         _cache_key = _subagent_cache_key(agent_type, task, context or "")
-        _cached = _subagent_cache_get(_cache_key)
+        _cached = None if _is_operator(agent_type) else _subagent_cache_get(_cache_key)   # GUI 有副作用, 不缓存
         if _cached is not None:
             log.info(f"  [subagent:{agent_type}] cache HIT (key {_cache_key[:8]})")
             _emit_subagent_telemetry(agent_type, task, "ok", 0, len(_cached), error="(cache)")
@@ -884,7 +936,7 @@ async def _run_subagent_safe(task: str, agent_type: str, context: str = "",
                 timeout=timeout,
             )
             _emit_subagent_telemetry(agent_type, task, "ok", (time.time() - _t0) * 1000, len(result))
-            if result and not result.startswith("[子代理"):
+            if result and not result.startswith("[子代理") and not _is_operator(agent_type):
                 _subagent_cache_put(_cache_key, result)
             return result
         except asyncio.TimeoutError:

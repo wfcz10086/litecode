@@ -12,6 +12,9 @@ from multiprocessing import Pool
 
 from playwright.sync_api import sync_playwright
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import theme as TH  # noqa: E402
+
 FPS = int(os.environ.get("FPS", 24))
 FMT = os.environ.get("FRAME_FMT", "jpg")          # jpg: 编码快、体积约 PNG 的 1/5; 成片是 h264 有损, 看不出差别
 WORKERS = int(os.environ.get("RENDER_WORKERS", max(1, min(6, (os.cpu_count() or 2) // 2))))
@@ -140,6 +143,14 @@ def render_all(tl):
     return got == n and not errs
 
 
+def check_theme(res):
+    """配色硬闸: 字幕/正文对背景 ≥4.5:1, 强调/警示色 ≥3:1 (WCAG AA), 预设名/背景样式写错也在这里拦"""
+    print("配色:", TH.describe(res))
+    for e in res["errors"]:
+        print("  ✗ 配色", e)
+    return len(res["errors"])
+
+
 def check_page(pw, tl):
     b = browser(pw)
     pg = b.new_page(viewport={"width": 1080, "height": 1920})
@@ -149,8 +160,12 @@ def check_page(pw, tl):
 
 def main():
     tl = json.load(open("timeline.json", encoding="utf-8"))
+    # 视觉字段每次都从 script.json 重读 + 解析: 改配色/背景样式不用重新配音
+    script = json.load(open("script.json", encoding="utf-8")) if os.path.exists("script.json") else None
+    tl, res = TH.apply_tl(tl, script)
     open("tl.js", "w", encoding="utf-8").write("window.TL=" + json.dumps(tl, ensure_ascii=False) + ";")
     mode = sys.argv[1] if len(sys.argv) > 1 else "snap"
+    theme_bad = check_theme(res) if mode == "check" else 0
     with sync_playwright() as pw:
         b = browser(pw)
         pg = b.new_page(viewport={"width": 1080, "height": 1920})
@@ -162,7 +177,7 @@ def main():
             print("PAGE ERRORS:", errs); b.close(); sys.exit(1)
         if mode == "check":
             b.close()
-            sys.exit(1 if check_page(pw, tl) else 0)
+            sys.exit(1 if check_page(pw, tl) + theme_bad else 0)
         if mode == "all":
             b.close()
             sys.exit(0 if render_all(tl) else 1)

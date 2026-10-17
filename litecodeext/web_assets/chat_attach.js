@@ -38,7 +38,9 @@
   async function resume(sid) {
     if (cur !== sid || streaming) return;
     let msgs;
-    try { msgs = (await (await fetch(`/api/sessions/${sid}`)).json()).messages || []; }
+    // [perf 2026-10] 与 swS 一致只拉最近一段 (带全局 index), 更早的由 chat_paging.js 按需加载
+    const tail = typeof LC_PAGE_SIZE === 'number' ? `?tail=${LC_PAGE_SIZE}` : '';
+    try { msgs = (await (await fetch(`/api/sessions/${sid}${tail}`)).json()).messages || []; }
     catch (e) { setTimeout(() => afterTurn(sid), RETRY_MS); return; }
     if (cur !== sid || streaming) return;
     renderMsgs(msgs); sbot(true);

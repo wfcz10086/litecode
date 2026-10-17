@@ -4,7 +4,9 @@ import json
 from . import register
 
 
-# (会话, 电脑) → 最近一次返回的截图。模型下一步看到的就是这张, 坐标以它为准;
+# (会话, 电脑) → 最近一次返回的截图。子代理有自己唯一的 sid (subagent_operator_<hex>), 因此多个操作员
+# 子代理之间、子代理与主代理之间不会串用彼此的截图; 操作员拿锁/结束时由 subagent_operator 清理。
+# 模型下一步看到的就是这张, 坐标以它为准;
 # 实测模型常漏传 reference_image 被拒后再重试, 白费一轮。
 _LAST_SHOT: dict = {}
 _POINTER_ACTIONS = ('click', 'double_click', 'right_click', 'hover', 'drag')
@@ -28,6 +30,11 @@ async def h_windows_desktop(sid, args):
     from lib.config import WORKSPACE
     from lib.windows_desktop import execute
     try:
+        # [operator] 节点独占: 被操作员子代理占用的电脑其他调用方立即报错; 操作员只能用分配的 alias
+        from lib.agent.subagent_operator import check_windows_call
+        args, busy = check_windows_call(sid, 'windows_desktop', args)
+        if busy:
+            return busy, None
         args = with_reference(sid, args)
         result = await asyncio.to_thread(execute, args, WORKSPACE)
         remember_shot(sid, args.get('alias'), result)

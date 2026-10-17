@@ -63,7 +63,8 @@ async function swS(sid){
     msgsEl.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--tx3);font-size:12px"><div class="dots" style="justify-content:center;margin-bottom:8px"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>加载会话中…</div>';
   }
   try{
-    const r=await fetch(`/api/sessions/${sid}`);
+    /* [perf 2026-10] 只拉最近 LC_PAGE_SIZE 条 (每条带全局 index), 更早的滚到顶部再分段拉, 见 chat_paging.js */
+    const r=await fetch(`/api/sessions/${sid}?tail=${LC_PAGE_SIZE}`);
     const d=await r.json();
     if(cur!==sid)return;  // 切换期间又点了别的会话, 丢弃旧 fetch
     renderMsgs(d.messages||[]);
@@ -100,11 +101,15 @@ async function newChat(){if(streaming)return;const r=await fetch('/api/sessions'
 async function delS(sid){if(!await confirmCard('删除会话','确定要删除此会话? 消息和上下文将永久移除','删除'))return;await fetch(`/api/sessions/${sid}`,{method:'DELETE'});sess=sess.filter(s=>s.id!==sid);renderSL();if(cur===sid){cur=null;document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div></div>';}}
 /* [v12.9] 渲染前合并连续 assistant 消息 —— 多轮 iteration 持久化成多条 assistant 时,
    刷新后显示为多个独立 "AI" 气泡, spawn_agent/工具调用被拆散。合并后同一轮成一个气泡。*/
-function _mergeConsecutiveAssistants(msgs){
+/* base: msgs[0] 的全局下标 (消息自带 index 时以 index 为准); 输出块附 _i0/_i1 (首/末条全局下标) 与 _key (定位用指纹) */
+function _mergeConsecutiveAssistants(msgs,base=0){
   const out=[];
-  for(const m of (msgs||[])){
+  (msgs||[]).forEach((m,k)=>{
+    const gi=typeof m.index==='number'?m.index:base+k;
+    const key=typeof _lcKey==='function'?_lcKey(m):'';
     const last=out[out.length-1];
     if(m.role==='assistant' && last && last.role==='assistant' && (last.source||'')===(m.source||'')){
+      last._i1=gi;last._key=key;
       const joiner=(last.content && m.content)?'\n\n':'';
       last.content=(last.content||'')+joiner+(m.content||'');
       last.tools=[...(last.tools||[]),...(m.tools||[])];
@@ -115,12 +120,13 @@ function _mergeConsecutiveAssistants(msgs){
       if(m.usage) last.usage=m.usage;  /* 用最后一条 usage (含总 tokens) */
       last.ts=m.ts||last.ts;
     }else{
-      out.push({...m, tools:[...(m.tools||[])], diffs:[...(m.diffs||[])], _tool_results:[...(m._tool_results||[])]});
+      out.push({...m, tools:[...(m.tools||[])], diffs:[...(m.diffs||[])], _tool_results:[...(m._tool_results||[])], _i0:gi, _i1:gi, _key:key});
     }
-  }
+  });
   return out;
 }
-function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}const merged=_mergeConsecutiveAssistants(msgs);merged.forEach(m=>addMsg(m.role,m.content,m.tools||[],false,m.diffs||[],m.usage,m.source||'',m.wx_user||'',m.reasoning||'',m._tool_results||[],m.desktop_steps||[]));sbot()}
+/* msgs 可以是完整列表, 也可以是 ?tail / ?before 返回的片段 (每条带全局 index) — 分段逻辑见 chat_paging.js */
+function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){_lcPage.sid=cur;_lcPage.start=0;el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}_lcRenderInitial(msgs);sbot()}
 function rdiff(df){if(typeof df!=='string')return '';return df.split('\n').map(l=>{const cl=l.startsWith('+')&&!l.startsWith('+++')?'da':l.startsWith('-')&&!l.startsWith('---')?'dd_':l.startsWith('@@')?'dm':'';return`<span class="${cl}">${esc(l)}</span>`;}).join('\n')}
 /* ── 微信附件解析：从消息文本中提取图片/文件路径 ── */
 const _IMG_EXTS=new Set(['jpg','jpeg','png','gif','webp','bmp','svg']);
@@ -142,9 +148,10 @@ function _buildAttachNode(att){
   const p=att.path;const fname=p.split('/').pop()||p;
   const apiUrl=`/api/media?path=${encodeURIComponent(p)}`;
   if(att.type==='image'){
-    const img=document.createElement('img');img.className='wx-img';img.src=apiUrl;img.alt=fname;
+    const img=document.createElement('img');img.className='wx-img';img.alt=fname;_lcPrepImg(img,apiUrl,p,280);
     img.onclick=()=>{const m=document.getElementById('imgModal');document.getElementById('imgModalImg').src=apiUrl;m.classList.add('show');};
-    img.onerror=()=>{img.style.display='none';};
+    /* 缩略图失败时 chat_paging.js 先回退原图 (fb=retry), 原图也失败才隐藏 */
+    img.onerror=()=>{if(img.dataset.fb==='retry'){img.dataset.fb='1';return;}img.style.display='none';};
     return img;
   }
   if(att.type==='video'){
@@ -219,7 +226,7 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
           const rel=p.replace(/^.*?\/tmp\/openclaw_workspace\//,'');
           const src=`/api/workspace/preview?path=${encodeURIComponent(rel)}`;
           if(_IMG_EXT.test(name)){
-            const img=document.createElement('img');img.src=src;img.alt=name;img.onclick=()=>_openImg(src);ac.appendChild(img);
+            const img=document.createElement('img');img.alt=name;_lcPrepImg(img,src,p,220);img.onclick=()=>_openImg(src);ac.appendChild(img);
           }else{
             const a=document.createElement('a');a.className='mfc';a.href=`/api/workspace/download?path=${encodeURIComponent(rel)}`;a.target='_blank';
             a.innerHTML=`<span class="mft">${_fileBadge(name)}</span><span class="mfn" title="${esc(name)}">${esc(name)}</span>`;
@@ -263,7 +270,7 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
       } else if(typeof content !== 'string'){
         textContent = String(content);
       }
-      function _renderMd(container,txt){try{container.innerHTML=marked.parse(txt||'');}catch(e){container.textContent=txt;}container.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{try{hljs.highlightElement(c);}catch(e){}});});_scanAndPreview(container,txt);}
+      function _renderMd(container,txt){try{container.innerHTML=marked.parse(txt||'');}catch(e){container.textContent=txt;}_lcOptimizeImgs(container);container.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{try{hljs.highlightElement(c);}catch(e){}});});_scanAndPreview(container,txt);}
       if(textContent.length>LONG_MSG_THRESHOLD){
         const lmid='lm'+Date.now()+Math.random().toString(36).slice(2,4);
         const lmEl=document.createElement('div');lmEl.className='lmb';
@@ -302,5 +309,6 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
     }
     bubble.appendChild(mac);
   }
+  _lcOptimizeImgs(bubble);  /* [perf] 兜底: 本气泡里所有 <img> 补 lazy/async + 上传图换缩略图 (同步执行, 早于取图) */
   wrap.appendChild(bubble);el.appendChild(wrap);if(scroll)sbot();return{wrap,bubble};
 }

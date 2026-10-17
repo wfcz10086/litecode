@@ -1,12 +1,27 @@
 """Windows 节点登记与主动回连；管理入口沿用 Web 登录。"""
 import asyncio
+import logging
 from pathlib import Path
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import PlainTextResponse
 from routers.auth_router import require_auth
-from lib.windows_nodes import Nodes
+from lib.windows_nodes import AuthError, Nodes
+
+log = logging.getLogger(__name__)
+# 只有真正的认证失败 (凭据不符/节点已撤销) 才带这个标记; 新代理只对带标记的 403 连续 3 次才停用自己。
+AUTH_REVOKED = {'X-LiteCode-Auth': 'revoked'}
+
+
+def auth_failed():
+    return HTTPException(403, '设备认证失败', headers=AUTH_REVOKED)
+
+
+def internal_error(where, exc):
+    """非认证类异常 (任务文件损坏、磁盘错误等) 返回 500: 代理按网络错误退避重试, 不会误判撤销。"""
+    log.exception('Windows 节点接口 %s 异常: %s', where, exc)
+    return HTTPException(500, '控制端内部错误，请稍后重试')
 
 def no_store(response: Response):
     response.headers['Cache-Control'] = 'no-store'
@@ -57,7 +72,7 @@ async def body(request):
 @router.get('/api/windows/nodes')
 async def list_nodes(request: Request):
     require_management(request)
-    return {'nodes': manager().list()}
+    return {'nodes': await asyncio.to_thread(manager().list)}
 
 
 @router.post('/api/windows/nodes')
@@ -164,13 +179,33 @@ async def enroll(request: Request):
 @router.get('/api/windows/device/{node_id}/assets/{asset}')
 async def asset(node_id: str, asset: str, request: Request):
     try:
-        manager().authenticate(node_id, credential(request))
-    except ValueError:
-        raise HTTPException(403, '设备认证失败')
+        await asyncio.to_thread(manager().authenticate, node_id, credential(request))
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('assets', exc)
     if asset not in ASSETS:
         raise HTTPException(404, '不存在的节点组件')
     return PlainTextResponse(Path(__file__).resolve().parents[1].joinpath('lib', ASSETS[asset]).read_text(),
                              headers={'Cache-Control': 'no-store'})
+
+
+def _versions_payload():
+    from lib.windows_nodes import asset_hashes, component_versions
+    # asset_hashes 是新增字段: 新代理逐个校验下载的组件, 旧代理忽略。
+    return {'versions': component_versions(), 'asset_hashes': asset_hashes()}
+
+
+@router.get('/api/windows/device/{node_id}/versions')
+async def versions(node_id: str, request: Request):
+    """代理启动时先取目标版本与逐文件哈希, 下载组件后全部校验通过才替换。"""
+    try:
+        await asyncio.to_thread(manager().authenticate, node_id, credential(request))
+        return await asyncio.to_thread(_versions_payload)
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('versions', exc)
 
 
 @router.post('/api/windows/device/{node_id}/status')
@@ -183,46 +218,64 @@ async def status(node_id: str, request: Request):
     if stage not in ('', 'python', 'packages', 'agent'):
         raise HTTPException(400, '安装阶段无效')
     try:
-        manager().heartbeat(node_id, credential(request), state, data.get('error', ''), stage)
-    except ValueError:
-        raise HTTPException(403, '设备认证失败')
+        await asyncio.to_thread(manager().heartbeat, node_id, credential(request), state, data.get('error', ''), stage)
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('status', exc)
     return {'ok': True}
 
 
 @router.post('/api/windows/device/{node_id}/uninstalled')
 async def uninstalled(node_id: str, request: Request):
     try:
-        manager().uninstalled(node_id, credential(request))
-    except ValueError:
-        raise HTTPException(403, '设备认证失败')
+        await asyncio.to_thread(manager().uninstalled, node_id, credential(request))
+    except ValueError:   # 含 AuthError 与"已撤销/已卸载"重复回执: 均视为认证失败
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('uninstalled', exc)
     return {'ok': True}
+
+
+def _poll_reply(nodes, node_id, job):
+    # capabilities 走已认证通道下发, 供设备对 run_powershell 做本地二次校验; 旧代理忽略新增字段。
+    return {'job': job, **_versions_payload(), 'capabilities': nodes.node_capabilities(node_id)}
 
 
 @router.get('/api/windows/device/{node_id}/poll')
 async def poll(node_id: str, request: Request):
-    from lib.windows_nodes import component_versions
     reported = {'agent': request.headers.get('x-agent-version', ''), 'assets': request.headers.get('x-assets-version', '')}
     nodes = manager()
+    token = credential(request)
     deadline = time.monotonic() + 20
+    job = None
     while time.monotonic() < deadline:
         try:
-            job = nodes.claim(node_id, credential(request), reported)
-        except ValueError:
-            raise HTTPException(403, '设备认证失败')
-        if job:
-            # capabilities 走已认证通道下发, 供设备对 run_powershell 做本地二次校验; 旧代理会忽略该字段。
-            return {'job': job, 'versions': component_versions(), 'capabilities': nodes.node_capabilities(node_id)}
-        if await request.is_disconnected():
+            # 加锁读写与磁盘 IO 放到线程里, 不阻塞事件循环
+            job = await asyncio.to_thread(nodes.claim, node_id, token, reported)
+        except AuthError:
+            raise auth_failed()
+        except Exception as exc:
+            # 只有认证失败才是 403; 其他异常 (含任务文件 JSON 损坏) 返回 500, 代理按网络错误退避
+            raise internal_error('poll', exc)
+        if job or await request.is_disconnected():
             break
         await asyncio.sleep(1)
-    return {'job': None, 'versions': component_versions(), 'capabilities': nodes.node_capabilities(node_id)}
+    try:
+        return await asyncio.to_thread(_poll_reply, nodes, node_id, job)
+    except Exception as exc:
+        raise internal_error('poll', exc)
 
 
 @router.post('/api/windows/device/{node_id}/result/{job_id}')
 async def result(node_id: str, job_id: str, request: Request):
     data = await body(request)
     try:
-        manager().finish(node_id, credential(request), job_id, data.get('result'), data.get('images', {}))
+        # base64 解码与图片校验是同步重活, 放线程里做
+        await asyncio.to_thread(manager().finish, node_id, credential(request), job_id,
+                                data.get('result'), data.get('images', {}))
+    except AuthError:
+        raise auth_failed()
     except (ValueError, TypeError, KeyError) as exc:
         raise HTTPException(400, str(exc))
     return {'ok': True}

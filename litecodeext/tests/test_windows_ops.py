@@ -175,22 +175,31 @@ def test_kill_process_requires_exactly_one_selector():
         wsa.kill_process({'pid': 1, 'name': 'x'})
 
 
-def test_run_powershell_sets_encoding_prefix_cwd_and_decodes_gbk(tmp_path, monkeypatch):
-    captured = {}
+def _fake_popen_module(stdout, captured=None):
+    """run_powershell 改用 Popen + 临时文件收输出: 假 Popen 把 stdout 写进传入的文件。"""
     fake = types.ModuleType('subprocess')
     fake.CREATE_NO_WINDOW = 0
+    fake.DEVNULL = -3
     fake.TimeoutExpired = type('TimeoutExpired', (Exception,), {})
 
-    class _Completed:
-        returncode = 0
-        stdout = '目录列表'.encode('gbk')    # 中文 Windows 默认 GBK 输出
-        stderr = b''
+    class _Popen:
+        pid = 4242
 
-    def _run(cmd, **kwargs):
-        captured['cmd'] = cmd
-        captured['cwd'] = kwargs.get('cwd')
-        return _Completed()
-    fake.run = _run
+        def __init__(self, cmd, **kwargs):
+            if captured is not None:
+                captured['cmd'], captured['cwd'] = cmd, kwargs.get('cwd')
+            kwargs['stdout'].write(stdout)
+            kwargs['stdout'].flush()
+
+        def wait(self, timeout=None):
+            return 0
+    fake.Popen = _Popen
+    return fake
+
+
+def test_run_powershell_sets_encoding_prefix_cwd_and_decodes_gbk(tmp_path, monkeypatch):
+    captured = {}
+    fake = _fake_popen_module('目录列表'.encode('gbk'), captured)    # 中文 Windows 默认 GBK 输出
     monkeypatch.setitem(sys.modules, 'subprocess', fake)
     out = wsa.run_powershell({'script': 'Get-ChildItem', 'cwd': str(tmp_path)})
     assert out['ok'] and out['exit_code'] == 0 and out['stdout'] == '目录列表'
@@ -211,15 +220,7 @@ def test_run_powershell_rejects_missing_cwd(monkeypatch):
 
 
 def test_run_powershell_truncates_output(monkeypatch):
-    fake = types.ModuleType('subprocess')
-    fake.CREATE_NO_WINDOW = 0
-    fake.TimeoutExpired = type('TimeoutExpired', (Exception,), {})
-
-    class _Completed:
-        returncode = 0
-        stdout = ('A' * 20000).encode()
-        stderr = b''
-    fake.run = lambda *a, **k: _Completed()
+    fake = _fake_popen_module(('A' * 20000).encode())
     monkeypatch.setitem(sys.modules, 'subprocess', fake)
     out = wsa.run_powershell({'script': 'x'})
     assert len(out['stdout']) == wsa.OUTPUT_LIMIT and out['stdout_truncated'] is True
@@ -275,12 +276,16 @@ def test_shell_disabled_rejects_run_powershell(tmp_path):
         execute({'alias': 'ops', 'action': 'run_powershell', 'script': 'whoami'}, str(tmp_path))
 
 
-def test_new_action_rejected_on_legacy_agent(tmp_path):
-    from lib.windows_desktop import execute
+def test_new_action_rejected_on_legacy_agent(tmp_path, monkeypatch):
+    from lib import windows_desktop
     nodes = Nodes(tmp_path)
-    _enroll_online(nodes, {'agent': '0' * 16, 'assets': '0' * 16})   # 版本落后
+    _enroll_online(nodes, {'agent': '0' * 16, 'assets': '0' * 16})   # 版本落后 → updating, 等待超时后报错
+    monkeypatch.setattr(windows_desktop, 'UPDATE_WAIT_SECONDS', 0)
+    with pytest.raises(ValueError, match='节点正在更新'):
+        windows_desktop.execute({'alias': 'ops', 'action': 'system_info'}, str(tmp_path))
+    _enroll_online(nodes, {}, alias='old')                            # 不上报版本 = legacy, 立即拒绝
     with pytest.raises(ValueError, match='代理版本过低'):
-        execute({'alias': 'ops', 'action': 'system_info'}, str(tmp_path))
+        windows_desktop.execute({'alias': 'old', 'action': 'system_info'}, str(tmp_path))
 
 
 def test_run_powershell_rejected_on_ssh_alias(tmp_path):

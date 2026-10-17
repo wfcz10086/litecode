@@ -14,6 +14,7 @@ const oback = x => { x = clamp(x, 0, 1); const c = 1.70158; return 1 + (c + 1) *
 const win = (u, a, b, fin = .4, fout = .4) => ez((u - a) / fin) * (1 - ez((u - b) / fout));  // [a,b] 内显示
 function rng(seed) { return function () { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 const R = rng(TL.seed || 2024);
+const BG = TL.bg_style || "radial";        // 背景样式: radial / blueprint / stripes / bokeh / paper / mesh (见 video.html)
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const num = (v, p = {}) => (v < 0 ? "-" : "") + (p.prefix || "") + Math.abs(Math.round(v)).toLocaleString("en-US") + (p.suffix || "");
 // 按字数缩字号, 保证单行不溢出 (width = 可用宽度 px)
@@ -26,7 +27,7 @@ const LAYOUTS = window.LAYOUTS = Object.assign({
   // 开场钩子: 数字从 0 滚到 number + 大标题逐字砸下 + 底部滚动警示带
   hook: {
     build(el, p) {
-      mk(el, "big num hook-num", "", "top:600px");
+      mk(el, "big num hook-num", "", "top:600px;left:50%;width:auto;white-space:nowrap");   // 盒子=文字宽, 缩放时不会整框出屏
       const t = mk(el, "hook-title");
       t.style.fontSize = fitFont(p.title || "", 140, 960) + "px";
       [...(p.title || "")].forEach(ch => mk(t, "ch", esc(ch)));
@@ -35,7 +36,7 @@ const LAYOUTS = window.LAYOUTS = Object.assign({
     update(el, p, u) {
       const n = el.querySelector(".hook-num");
       n.textContent = p.number != null ? num(p.number * ez(u / 3.5), p) : "";
-      n.style.transform = `scale(${1 + .08 * Math.sin(u * 7) * (1 - ez(u / 3.5))})`;
+      n.style.transform = `translateX(-50%) scale(${1 + .08 * Math.sin(u * 7) * (1 - ez(u / 3.5))})`;
       el.querySelectorAll(".hook-title .ch").forEach((c, i) => {
         const k = oback((u - 1.2 - i * .12) / .45);
         c.style.opacity = clamp((u - 1.2 - i * .12) / .2, 0, 1);
@@ -155,18 +156,34 @@ function setSub(i, u, dur) {
     const el = mk(st, `scene t-${s.type}`); el.id = "sc" + i;
     L.build(el, s.params || {});
   });
+  // 背景粒子随 bg_style 变: radial 浮尘 (与改版前同一串随机数) / bokeh 大光斑 / 其余样式不加粒子 (省渲染)
   const D = $("dust");
-  for (let i = 0; i < 40; i++) mk(D, "mote", "", `left:${R() * 1080}px;width:${3 + R() * 6}px;height:${3 + R() * 6}px;--sp:${40 + R() * 90};--off:${R() * 1920}`);
+  if (BG === "radial")
+    for (let i = 0; i < 40; i++) mk(D, "mote", "", `left:${R() * 1080}px;width:${3 + R() * 6}px;height:${3 + R() * 6}px;--sp:${40 + R() * 90};--off:${R() * 1920}`);
+  if (BG === "bokeh")
+    for (let i = 0; i < 16; i++) { const s = 90 + R() * 220;
+      mk(D, "mote bokeh", "", `left:${R() * 1080 - s / 2}px;width:${s}px;height:${s}px;--sp:${8 + R() * 22};--off:${R() * 2000};--sw:${R() * 6.28};--c:var(${R() < .7 ? "--accent" : "--wash"})`); }
 })();
 
 /* ---------- 主入口 ---------- */
+const BG_ROOT = document.documentElement.style;
+function seekBg(t) {
+  BG_ROOT.setProperty("--bgt", t.toFixed(3));
+  if (BG === "mesh") [[.11, 1.7, 90, 120], [.08, 4.1, 110, 90], [.06, 2.6, 80, 140]].forEach(([w, ph, ax, ay], i) => {
+    BG_ROOT.setProperty(`--m${i + 1}x`, (ax * Math.sin(t * w + ph)).toFixed(1) + "px");
+    BG_ROOT.setProperty(`--m${i + 1}y`, (ay * Math.cos(t * w * .8 + ph)).toFixed(1) + "px"); });
+  document.querySelectorAll("#dust .mote").forEach(m => { const sp = +m.style.getPropertyValue("--sp"), off = +m.style.getPropertyValue("--off");
+    m.style.top = (1920 - ((t * sp + off) % 2000)) + "px";
+    if (BG === "bokeh") m.style.transform = `translateX(${(40 * Math.sin(t * .35 + +m.style.getPropertyValue("--sw"))).toFixed(1)}px)`; });
+}
+
 window.seek = function (t) {
   TL.scenes.forEach((s, i) => {
     const el = $("sc" + i), a = ez((t - (s.start - .1)) / .45) * (1 - ez((t - (s.start + s.dur - .2)) / .5));
     el.style.opacity = a;
     if (a > 0) LAYOUTS[s.type].update(el, s.params || {}, clamp(t - s.start, 0, s.dur + 1), s.dur);
   });
-  document.querySelectorAll("#dust .mote").forEach(m => { const sp = +m.style.getPropertyValue("--sp"), off = +m.style.getPropertyValue("--off"); m.style.top = (1920 - ((t * sp + off) % 2000)) + "px"; });
+  seekBg(t);
   let ci = 0; TL.scenes.forEach((s, i) => { if (t >= s.start) ci = i; });
   const cur = TL.scenes[ci], act = $("actband");
   if (act.dataset.i != ci) { act.dataset.i = ci; act.textContent = cur.act || ""; }

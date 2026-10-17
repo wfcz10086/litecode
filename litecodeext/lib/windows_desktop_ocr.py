@@ -61,6 +61,9 @@ def perform(action, folder, args):
     import ctypes
     import time
     import pyautogui
+    # 常驻代理无人值守: 关闭 pyautogui 的屏幕角落急停 (鼠标停在角落时每个动作都抛 FailSafeException),
+    # 否则上一次动作把鼠标留在角落后, 之后的点击会持续失败。急停改用撤销节点或停用计划任务。
+    pyautogui.FAILSAFE = False
     ctypes.windll.user32.SetProcessDPIAware()
     before = capture_ocr(folder, 'before.png')
     result = {'ok': True, 'state': 'ocr_ready', **before, 'image': 'before.png'}

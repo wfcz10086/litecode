@@ -9,6 +9,10 @@ async def h_windows_system(sid, args):
     from lib.config import WORKSPACE
     from lib.windows_desktop import execute
     try:
+        from lib.agent.subagent_operator import check_windows_call
+        args, busy = check_windows_call(sid, 'windows_system', args)
+        if busy:
+            return busy, None
         action = args.get('action')
         if action not in ('system_info', 'processes', 'kill_process', 'services',
                           'list_dir', 'download', 'upload', 'run_powershell', 'inspect_file'):

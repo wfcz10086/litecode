@@ -224,10 +224,34 @@ def compress_screenshot_file(path, long_edge=1600, quality=70):
             'compressed': True}
 
 
+def pyautogui_module():
+    """导入 pyautogui 并关闭 FAILSAFE: 它在鼠标位于屏幕角落时对每个动作抛 FailSafeException,
+    是给坐在电脑前的人用的急停。常驻代理无人值守, 上一个动作把鼠标停在角落 (如点了角落的关闭按钮)
+    就会让之后所有动作持续失败, 所以关掉; 急停改用撤销节点或停用计划任务。"""
+    import pyautogui
+    pyautogui.FAILSAFE = False
+    return pyautogui
+
+
+def documents_dir():
+    """当前用户的"文档"目录 (支持 OneDrive/组策略重定向); 取不到或不存在则回退用户主目录。"""
+    home = Path.home()
+    try:
+        buffer = ctypes.create_unicode_buffer(260)
+        # CSIDL_PERSONAL = 5: 已重定向时返回真实位置
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buffer) == 0 and buffer.value:
+            candidate = Path(buffer.value)
+            if candidate.is_dir():
+                return candidate
+    except Exception:
+        pass
+    candidate = home / 'Documents'
+    return candidate if candidate.is_dir() else home
+
+
 def launch_app(args):
     """按名称启动应用。内置常用映射；未知名称回退到开始菜单搜索（Win→输入→回车），结果靠截图验收。"""
     import subprocess
-    import pyautogui
     name = str(args.get('name', '')).strip()
     if not name:
         raise ValueError('必须提供应用名称 name')
@@ -236,8 +260,9 @@ def launch_app(args):
         raise ValueError('cmd/PowerShell/终端窗口属于 shell 能力，请开启 shell 能力后用 run_powershell')
     if key in LAUNCH_APPS:
         command = LAUNCH_APPS[key]
+        # 工作目录设为"文档": 代理 cwd 曾是 System32, 记事本/WPS 的"另存为"会默认跳到那里
         subprocess.Popen(command, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0),
-                         shell=False)
+                         shell=False, cwd=str(documents_dir()))
         return {'method': 'mapping', 'launched': key}
     # 兜底：开始菜单搜索。只输入应用名，不执行任意命令。
     if len(name) > 80 or any(c in name for c in '\r\n\t'):
@@ -261,7 +286,7 @@ def set_window_state(args):
 
 
 def perform(action, folder, args):
-    import pyautogui
+    pyautogui = pyautogui_module()   # 已关闭 FAILSAFE, 原因见 pyautogui_module
     import mss
     ctypes.windll.user32.SetProcessDPIAware()
     info = {}

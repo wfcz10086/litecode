@@ -46,6 +46,13 @@ async function _findMsgIdx(wrap){
     const d=await r.json();
     msgs=d.messages||[];
   }catch(e){return -1;}
+  /* 策略 0 [perf 2026-10 分段渲染]: 渲染时打在块上的全局下标 (data-midx / data-midx-end) + 内容指纹 data-mkey,
+   * 与完整列表逐条核对 role 和指纹, 一致才用 — 不受"只渲染了最近一段"影响, 也不会被同文消息串错 */
+  const tag=isUser?wrap.dataset.midx:wrap.dataset.midxEnd;
+  if(tag!==undefined&&tag!==''){
+    const ti=+tag;
+    if(msgs[ti]&&msgs[ti].role===role&&_lcKey(msgs[ti])===wrap.dataset.mkey)return ti;
+  }
   /* 策略 1: 文本前 40 字符匹配 (准确但易失效) */
   const norm=_normForMatch(_msgExtractText(wrap));
   if(norm){
@@ -70,10 +77,12 @@ async function _findMsgIdx(wrap){
     //   找第 (domIdx+1) 个 user msg, 然后:
     //     - 当前是 .msg.user → 返该 user msg idx
     //     - 当前是 .msg.ai → 返该 user 后到下个 user 前的最后一个 assistant idx
+    /* [perf 2026-10] 分段渲染时 DOM 第 0 个 user 不是会话第 0 个: 加上片段之前的 user 数 */
+    const userBase=_lcUserBase(msgs);
     let userSeen=0, targetUserIdx=-1;
     for(let i=0;i<msgs.length;i++){
       if(msgs[i].role==='user'){
-        if(userSeen===domIdx){ targetUserIdx=i; break; }
+        if(userSeen===domIdx+userBase){ targetUserIdx=i; break; }
         userSeen++;
       }
     }
@@ -147,7 +156,7 @@ async function _scanAndPreview(container, rawText){
       if (open || body._loaded) return;
       body._loaded = true;
       if (_PV_EXT_IMG.test(name)){
-        body.innerHTML = `<img src="/api/media?path=${encodeURIComponent(p)}" style="max-width:100%;border-radius:4px" alt="${esc(name)}">`;
+        body.innerHTML = _lcImgHtml(p, name, 480);  /* [perf] 缩略图 + lazy, 点击看原图 */
       } else if (_PV_EXT_VID.test(name)){
         body.innerHTML = `<video controls style="max-width:100%;border-radius:4px"><source src="/api/media?path=${encodeURIComponent(p)}"></video>`;
       } else if (_PV_EXT_AUD.test(name)){
@@ -201,7 +210,7 @@ async function _scanAndPreview(container, rawText){
     if (_autoOpen) {
       body._loaded = true;
       if (_PV_EXT_IMG.test(name)){
-        body.innerHTML = `<img src="/api/media?path=${encodeURIComponent(p)}" style="max-width:100%;border-radius:4px" alt="${esc(name)}">`;
+        body.innerHTML = _lcImgHtml(p, name, 480);  /* [perf] 缩略图 + lazy, 点击看原图 */
       } else if (_PV_EXT_VID.test(name)){
         body.innerHTML = `<video controls style="max-width:100%;border-radius:4px"><source src="/api/media?path=${encodeURIComponent(p)}"></video>`;
       }
@@ -301,14 +310,8 @@ async function msgRetry(btn){
    * 用 server idx 当 DOM idx 对不上 → 第 2 轮重试时 allMsg.length=4 但 prevUserIdx=4 → 不删任何 DOM →
    * send() 又 append 一份 user+ai → 用户看着"开了新对话".
    * 修: 算 prevUserIdx 是 server 第几个 user (0-based), 找 DOM 第 N 个 .msg.user, 删它和之后所有 .msg. */
-  let userOrdinal=0;
-  for(let i=0;i<prevUserIdx;i++){if(msgs[i].role==='user')userOrdinal++;}
-  const userDoms=document.querySelectorAll('#msgs .msg.user');
-  const targetDom=userDoms[userOrdinal];
-  if(targetDom){
-    let n=targetDom;
-    while(n){const nx=n.nextElementSibling;n.remove();n=nx;}
-  }
+  /* [perf 2026-10] 分段渲染后 DOM 序号 ≠ 全局序号 — 按 data-midx / 片段基数换算, 见 chat_paging.js */
+  _lcDomRemoveFrom(msgs,prevUserIdx);
   /* 取 user content 文本作为新输入 */
   let uc=prevUser.content||'';if(Array.isArray(uc))uc=uc.filter(p=>p&&p.type==='text').map(p=>p.text||'').join('\n');
   document.getElementById('mi').value=uc;arx(document.getElementById('mi'));
@@ -359,6 +362,7 @@ async function msgEditUser(btn){
       if(!ok)return;
       await _truncateSession(idx);
       let n=wrap;while(n){const nx=n.nextElementSibling;n.remove();n=nx;}
+      if(_lcPage.sid===cur&&idx<_lcPage.start){_lcPage.start=idx;_lcPage.anchor=null;_lcUpdateMoreBar();}
       document.getElementById('mi').value=newTxt;arx(document.getElementById('mi'));
       send();
       resolve(true);

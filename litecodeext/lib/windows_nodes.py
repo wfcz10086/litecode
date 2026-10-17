@@ -4,6 +4,7 @@ from contextlib import contextmanager
 import hashlib
 import ipaddress
 import json
+import logging
 import os
 from pathlib import Path
 import re
@@ -11,6 +12,19 @@ import secrets
 import time
 from urllib.parse import urlsplit
 import uuid
+
+log = logging.getLogger(__name__)
+
+
+class AuthError(ValueError):
+    """设备认证失败 (凭据不符 / 节点已撤销或删除)。只有它映射为带 X-LiteCode-Auth: revoked 的 403;
+    继承 ValueError, 既有 except ValueError 的调用方行为不变。"""
+
+
+# 设备心跳落盘节流: 状态不变时距上次写入不足这么多秒就不刷新 last_seen (离线判定阈值 90 秒)
+HEARTBEAT_WRITE_INTERVAL = 15
+# 截图上传上限 (原始字节); 代理端超过 windows_node_agent.IMAGE_SOFT_LIMIT 会先转 JPEG 再上报
+IMAGE_LIMIT = 12 * 1024 * 1024
 
 
 def server_url(value):
@@ -37,9 +51,11 @@ def _digest(value):
 
 _LIB = Path(__file__).resolve().parent
 # 与设备端 windows_node_agent.ASSETS 顺序一致; 路由用 read_text() 原样以 UTF-8 下发, 两端按相同字节算哈希。
-# 新增 Windows 端文件必须同时加进这里、windows_node_agent.ASSETS 和 routers 的 ASSETS 映射, 否则节点拿不到。
+# 新增 Windows 端文件必须同时加进这里、windows_node_agent.ASSETS 和 routers 的 ASSETS 映射, 否则节点拿不到
+# (tests/test_windows_reliability.py 校验三处清单一致)。卸载脚本也在清单里, 随自动更新刷新。
 WORKER_FILES = ('windows_desktop_worker.py', 'windows_desktop_actions.py', 'windows_desktop_ocr.py',
-                'windows_system_actions.py', 'windows_file_actions.py', 'windows_transfer.py')
+                'windows_system_actions.py', 'windows_file_actions.py', 'windows_transfer.py',
+                'windows_node_uninstall.ps1')
 _VERSION_RE = re.compile(r'[0-9a-f]{16}')
 
 
@@ -50,6 +66,11 @@ def component_versions():
     for name in WORKER_FILES:
         assets.update(_LIB.joinpath(name).read_text().encode())
     return {'agent': agent, 'assets': assets.hexdigest()[:16]}
+
+
+def asset_hashes():
+    """逐个组件的完整 sha256 (按路由实际下发的字节), 随轮询下发供新代理逐个校验; 旧代理忽略该字段。"""
+    return {name: hashlib.sha256(_LIB.joinpath(name).read_text().encode()).hexdigest() for name in WORKER_FILES}
 
 
 def update_state(node, current):
@@ -71,12 +92,22 @@ def _command(body):
 
 
 def _write(path, value):
+    """临时文件 + flush + fsync + os.replace: 断电或进程被杀时只会看到旧文件或完整新文件。"""
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
     fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, 'w') as stream:
-        json.dump(value, stream, ensure_ascii=False)
-    os.replace(temporary, path)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream, ensure_ascii=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        try:
+            os.unlink(temporary)
+        except OSError:
+            pass
+        raise
 
 
 class Nodes:
@@ -86,15 +117,62 @@ class Nodes:
 
     @contextmanager
     def locked(self):
+        """持锁读写 nodes.json; 内容没变就不回写 (只读路径与节流后的心跳不再每秒落盘)。"""
         import fcntl
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
         fd = os.open(self.root / 'lock', os.O_CREAT | os.O_RDWR, 0o600)
         with os.fdopen(fd, 'r+') as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
             file = self.root / 'nodes.json'
-            data = json.loads(file.read_text()) if file.exists() else {}
+            raw = file.read_text() if file.exists() else ''
+            data = json.loads(raw) if raw else {}
+            before = json.dumps(data, ensure_ascii=False, sort_keys=True)
             yield data
-            _write(file, data)
+            if not raw or json.dumps(data, ensure_ascii=False, sort_keys=True) != before:
+                _write(file, data)
+
+    def _quarantine(self, file, reason):
+        """损坏的任务文件移到 quarantine/ 并记日志, 不影响其他节点的任务。"""
+        folder = self.root / 'quarantine'
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            os.replace(file, folder / (file.name + '.' + uuid.uuid4().hex[:8]))
+            log.warning('Windows 节点任务文件损坏, 已隔离: %s (%s)', file.name, reason)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            log.warning('Windows 节点任务文件损坏, 隔离失败: %s (%s / %s)', file.name, reason, exc)
+
+    def _load_job(self, file):
+        """读单个任务文件: 已不存在返回 None; JSON 损坏或缺关键字段则隔离并返回 None。"""
+        try:
+            raw = file.read_text()
+        except FileNotFoundError:
+            return None   # wait() 不持锁删除, 与遍历并发时文件可能刚被删: 直接跳过
+        try:
+            job = json.loads(raw)
+            if not isinstance(job, dict) or not isinstance(job.get('node_id'), str) \
+                    or not isinstance(job.get('expires'), (int, float)) or 'state' not in job:
+                raise ValueError('缺少 node_id/expires/state')
+        except ValueError as exc:
+            self._quarantine(file, type(exc).__name__)
+            return None
+        return job
+
+    def _jobs(self, oldest_first=False):
+        """遍历有效任务 (file, job): 容忍并发删除 (FileNotFoundError 跳过), 损坏文件隔离后跳过。"""
+        files = []
+        for file in self.root.glob('job-*.json'):
+            try:
+                files.append((file.stat().st_mtime if oldest_first else 0, file))
+            except FileNotFoundError:
+                continue
+        if oldest_first:
+            files.sort(key=lambda item: item[0])
+        for _, file in files:
+            job = self._load_job(file)
+            if job is not None:
+                yield file, job
 
     def create(self, alias, base_url, ssh_aliases=()):
         if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', alias):
@@ -127,35 +205,40 @@ class Nodes:
 
     def authenticate(self, node_id, token):
         if not token:
-            raise ValueError('设备认证失败')
+            raise AuthError('设备认证失败')
         with self.locked() as data:
             node = next((n for n in data.values() if n['id'] == node_id), None)
             if not node or node['state'] in ('revoked', 'uninstalled') or not secrets.compare_digest(node.get('token_hash', ''), _digest(token)):
-                raise ValueError('设备认证失败')
+                raise AuthError('设备认证失败')
             return dict(node)
 
     def heartbeat(self, node_id, token, state='online', error='', stage='', versions=None):
         self.authenticate(node_id, token)
         with self.locked() as data:
-            node = next(n for n in data.values() if n['id'] == node_id)
-            if node['state'] in ('revoked', 'uninstalled'):
-                raise ValueError('节点已撤销')
+            node = next((n for n in data.values() if n['id'] == node_id), None)
+            if node is None or node['state'] in ('revoked', 'uninstalled'):
+                raise AuthError('节点已撤销')
             for key in ('agent', 'assets'):
                 value = (versions or {}).get(key)
                 if isinstance(value, str) and _VERSION_RE.fullmatch(value):
                     node[key + '_version'] = value
+            now = time.time()
+            stale = now - node.get('last_seen', 0) >= HEARTBEAT_WRITE_INTERVAL
             if node['state'].startswith('uninstall') and state != 'uninstall_failed':
-                node['last_seen'] = time.time()
+                if stale:
+                    node['last_seen'] = now
                 return
-            node.update(last_seen=time.time(), state=state, error=str(error)[:400])
+            error = str(error)[:400]
+            # 长轮询每秒心跳一次: 状态不变时 last_seen 每 15 秒才刷新一次, 不再每秒重写 nodes.json
+            if stale or node['state'] != state or node.get('error', '') != error:
+                node.update(last_seen=now, state=state, error=error)
             if stage:
                 node['stage'] = stage
 
     def list(self):
         with self.locked() as data:
             # 控制端重启后也清理过期任务，避免待输入凭据长期留在磁盘。
-            for file in self.root.glob('job-*.json'):
-                job = json.loads(file.read_text())
+            for file, job in self._jobs():
                 if job['expires'] < time.time():
                     node = next((n for n in data.values() if n['id'] == job['node_id']), None)
                     if node and node.get('last_task', {}).get('id') == job['id'] and job['state'] in ('pending', 'dispatched'):
@@ -227,8 +310,8 @@ class Nodes:
 
     def _remove_jobs(self, node_id):
         """由持有锁的调用者清除设备任务及其中可能包含的待输入凭据。"""
-        for file in self.root.glob('job-*.json'):
-            if json.loads(file.read_text()).get('node_id') == node_id:
+        for file, job in self._jobs():
+            if job['node_id'] == node_id:
                 file.unlink(missing_ok=True)
 
     def uninstall(self, node_id):
@@ -311,8 +394,7 @@ class Nodes:
             node = data[alias]
             if node['state'] != 'online':
                 raise ValueError('节点当前不能接受任务')
-            for file in self.root.glob('job-*.json'):
-                existing = json.loads(file.read_text())
+            for _, existing in self._jobs():
                 if existing['node_id'] == node['id'] and existing['expires'] > time.time() and existing['state'] in ('pending', 'dispatched'):
                     raise ValueError('该节点已有桌面任务，等完成后再操作')
             record = {'id': job_id, 'node_id': node['id'], 'state': 'pending', 'action': action,
@@ -324,9 +406,9 @@ class Nodes:
     def claim(self, node_id, token, versions=None):
         self.heartbeat(node_id, token, versions=versions)
         with self.locked() as data:
-            node = next(n for n in data.values() if n['id'] == node_id)
-            if node['state'] in ('revoked', 'uninstalled'):
-                raise ValueError('节点已撤销')
+            node = next((n for n in data.values() if n['id'] == node_id), None)
+            if node is None or node['state'] in ('revoked', 'uninstalled'):
+                raise AuthError('节点已撤销')
             if node['state'] in ('uninstall_pending', 'uninstalling'):
                 node['state'] = 'uninstalling'
                 return {'id': node_id, 'action': 'uninstall', 'request': {}}
@@ -338,8 +420,8 @@ class Nodes:
                 _write(self.root / ('job-' + job_id + '.json'), {
                     'id': job_id, 'node_id': node_id, 'state': 'pending', 'action': 'screenshot',
                     'request': {}, 'expires': time.time() + 120, 'initial': True})
-            for file in sorted(self.root.glob('job-*.json'), key=lambda p: p.stat().st_mtime):
-                job = json.loads(file.read_text())
+            # _jobs 只交出能解析且字段齐全的任务 (损坏文件隔离, 并发删除跳过), 再按 node_id 过滤
+            for file, job in self._jobs(oldest_first=True):
                 if job['node_id'] != node_id or job['state'] != 'pending':
                     continue
                 if job['expires'] < time.time():
@@ -358,11 +440,13 @@ class Nodes:
         if not re.fullmatch(r'[a-f0-9]{32}', job_id) or not isinstance(result, dict) or not isinstance(images, dict):
             raise ValueError('结果格式错误')
         with self.locked() as data:
-            node = next(n for n in data.values() if n['id'] == node_id)
+            node = next((n for n in data.values() if n['id'] == node_id), None)
+            if node is None:
+                raise AuthError('设备认证失败')
             if node['state'] != 'online':
                 raise ValueError('节点已撤销或正在卸载')
             file = self.root / ('job-' + job_id + '.json')
-            job = json.loads(file.read_text()) if file.exists() else {}
+            job = self._load_job(file) or {}
             if job.get('node_id') != node_id or job.get('state') != 'dispatched' or job['expires'] < time.time():
                 raise ValueError('任务已过期或不属于当前设备')
             for key, name in (('image', 'screen.png'), ('before_image', 'before.png')):
@@ -370,7 +454,7 @@ class Nodes:
                 result.pop(key, None)
                 if value:
                     raw = base64.b64decode(value, validate=True)
-                    if len(raw) > 12 * 1024 * 1024:
+                    if len(raw) > IMAGE_LIMIT:
                         raise ValueError('截图过大')
                     from PIL import Image
                     import io
@@ -391,9 +475,12 @@ class Nodes:
             _write(file, job)
             if job.get('initial'):
                 file.unlink(missing_ok=True)
-            node.update(desktop_state=str(result.get('state', 'unknown')),
-                        desktop_ok=bool(result.get('ok') is True and result.get('image')),
-                        observed_at=time.time(), screenshot=result.get('image', node.get('screenshot', '')))
+            # 只有带截图的结果才是桌面观察; 系统/文件/传输类动作不改"桌面就绪"状态。
+            # desktop_unavailable (锁屏/未登录) 本身就是桌面观察结论, 同样更新。
+            if result.get('image') or result.get('state') == 'desktop_unavailable':
+                node.update(desktop_state=str(result.get('state', 'unknown')),
+                            desktop_ok=bool(result.get('ok') is True and result.get('image')),
+                            observed_at=time.time(), screenshot=result.get('image', node.get('screenshot', '')))
             _task(node, job, 'returned' if result.get('ok') is True else 'failed')
 
     def wait(self, job_id, timeout):
@@ -401,8 +488,8 @@ class Nodes:
         try:
             deadline = time.monotonic() + timeout
             while time.monotonic() < deadline:
-                if path.exists():
-                    job = json.loads(path.read_text())
+                job = self._load_job(path)
+                if job is not None:
                     if job['state'] == 'done':
                         return job['result']
                 else:

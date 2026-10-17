@@ -1,37 +1,73 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<!-- 竖版 1080x1920 解说视频画布. 不要改尺寸; 颜色走 script.json 的 theme (render 时注入 --bg/--accent/--alert) -->
+<!-- 竖版 1080x1920 解说视频画布. 不要改尺寸; 颜色走 script.json 的 theme (预设名, 见 themes.json),
+     render.py 用 scripts/theme.py 解析后注入全部 CSS 变量 + html[data-bg] 背景样式. 本文件里不要再写死颜色. -->
 <style>
-:root{--bg:#0a1226;--accent:#f5c451;--alert:#e63946;--paper:#f2e8d5;--deep:#05070f}
+/* 默认值 = midnight 预设 (theme.py derive 结果); 实际颜色由 tl.js 的 TL.theme 覆盖 */
+:root{--bg:#0a1226;--deep:#05070f;--paper:#f2e8d5;--accent:#7aa2ff;--alert:#ff5a5f;--ink:#ffffff;--wash:#3a5a9a;
+ --on-accent:#000000;--on-alert:#ffffff;--panel:rgba(15,23,42,.85);--shadow:#000000;--glow:rgba(0,0,0,.9);--vig:rgba(0,0,0,.75);
+ --scan:#000000;--track:rgba(255,255,255,.08);--tape-bg:#000000;--tape-fg:#ff5a5f;--stamp-bg:rgba(0,0,0,.25);
+ --line:rgba(122,162,255,.13);--hard:#000000;--drop:rgba(0,0,0,.6);--bgt:0;--m1x:0px;--m1y:0px;--m2x:0px;--m2y:0px;--m3x:0px;--m3y:0px}
 *{margin:0;padding:0;box-sizing:border-box}
 body{width:1080px;height:1920px;overflow:hidden;background:var(--bg);color:var(--paper);
  font-family:"Noto Sans CJK SC","WenQuanYi Zen Hei",sans-serif}
 #stage,#scenes,#dust,.scene{position:absolute;inset:0}
-.bgwash{position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 0%,color-mix(in srgb,var(--bg) 70%,#3a5a9a) 0%,var(--bg) 55%,var(--deep) 100%)}
-.vig{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 300px 120px rgba(0,0,0,.75)}
-.scan{position:absolute;inset:0;pointer-events:none;opacity:.07;background:repeating-linear-gradient(0deg,transparent 0 6px,#000 6px 9px)}
+.bgwash,.bgfx{position:absolute;inset:0}
+.vig{position:absolute;inset:0;pointer-events:none;box-shadow:inset 0 0 300px 120px var(--vig)}
+.scan{position:absolute;inset:0;pointer-events:none;opacity:.07;background:repeating-linear-gradient(0deg,transparent 0 6px,var(--scan) 6px 9px)}
 .mote{position:absolute;border-radius:50%;background:var(--accent);opacity:.25;filter:blur(1px)}
 .scene{opacity:0}
+
+/* ---------- 背景样式 html[data-bg] (theme 推荐, script.json "bg_style" 可覆盖). 动画只由 seek 写的 --bgt/--m* 驱动 ---------- */
+/* radial: 径向渐变 + 浮尘光点 (经典) */
+.bgwash{background:radial-gradient(120% 80% at 50% 0%,color-mix(in srgb,var(--bg) 70%,var(--wash)) 0%,var(--bg) 55%,var(--deep) 100%)}
+/* blueprint: 蓝图网格, 大格 + 细格, 缓慢上移 */
+[data-bg=blueprint] .bgwash{background:linear-gradient(180deg,color-mix(in srgb,var(--bg) 80%,var(--wash)) 0%,var(--bg) 45%,var(--deep) 100%)}
+[data-bg=blueprint] .bgfx{background-image:linear-gradient(var(--line) 3px,transparent 3px),linear-gradient(90deg,var(--line) 3px,transparent 3px),
+ linear-gradient(color-mix(in srgb,var(--line) 50%,transparent) 1px,transparent 1px),linear-gradient(90deg,color-mix(in srgb,var(--line) 50%,transparent) 1px,transparent 1px);
+ background-size:180px 180px,180px 180px,36px 36px,36px 36px;background-position:0 calc(var(--bgt) * -14px)}
+/* stripes: 45° 斜条纹 (无缝 120px 砖), 缓慢横移 */
+[data-bg=stripes] .bgwash{background:linear-gradient(160deg,color-mix(in srgb,var(--bg) 82%,var(--wash)) 0%,var(--bg) 50%,var(--deep) 100%)}
+[data-bg=stripes] .bgfx{background-image:linear-gradient(135deg,var(--line) 25%,transparent 25% 50%,var(--line) 50% 75%,transparent 75%);
+ background-size:120px 120px;background-position:calc(var(--bgt) * 20px) 0;
+ -webkit-mask-image:linear-gradient(180deg,#000 0%,transparent 70%)}
+/* bokeh: 柔光大光斑 (engine.js 生成 .mote.bokeh) */
+[data-bg=bokeh] .bgwash{background:radial-gradient(110% 70% at 50% 15%,color-mix(in srgb,var(--bg) 65%,var(--wash)) 0%,var(--bg) 60%,var(--deep) 100%)}
+.mote.bokeh{filter:none;opacity:.32;background:radial-gradient(circle,color-mix(in srgb,var(--c) 70%,transparent) 0%,color-mix(in srgb,var(--c) 25%,transparent) 45%,transparent 70%)}
+/* paper: 纸张噪点 (内联 SVG 噪声砖, 静态) */
+[data-bg=paper] .bgwash{background:radial-gradient(130% 90% at 50% 40%,color-mix(in srgb,var(--bg) 75%,var(--wash)) 0%,var(--bg) 60%,var(--deep) 100%)}
+[data-bg=paper] .bgfx{opacity:.16;background-size:260px 260px;
+ background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  1.4 0 0 0 -.45'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+[data-bg=paper][data-light="0"] .bgfx{opacity:.10;
+ background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='260' height='260'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 1  0 0 0 0 1  0 0 0 0 1  1.4 0 0 0 -.45'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>")}
+/* mesh: 三团色块缓慢漂移 (位置由 --m1x… 决定) */
+[data-bg=mesh] .bgwash{background:linear-gradient(180deg,var(--bg) 0%,var(--deep) 100%)}
+[data-bg=mesh] .bgfx{background:
+ radial-gradient(55% 32% at calc(25% + var(--m1x)) calc(22% + var(--m1y)),color-mix(in srgb,var(--wash) 85%,transparent) 0%,transparent 70%),
+ radial-gradient(50% 30% at calc(80% + var(--m2x)) calc(48% + var(--m2y)),color-mix(in srgb,var(--accent) 30%,transparent) 0%,transparent 70%),
+ radial-gradient(60% 34% at calc(35% + var(--m3x)) calc(82% + var(--m3y)),color-mix(in srgb,var(--alert) 20%,transparent) 0%,transparent 70%)}
+[data-bg=mesh][data-light="1"] .bgfx{opacity:.7}
+
 /* 右上竖排幕名 + 底部进度条 */
 #actband{position:absolute;top:70px;right:44px;writing-mode:vertical-rl;font-weight:900;font-size:44px;letter-spacing:.35em;
  color:var(--accent);border-right:4px solid var(--accent);padding-right:18px;text-shadow:0 0 24px color-mix(in srgb,var(--accent) 40%,transparent)}
-#progbar{position:absolute;left:0;right:0;bottom:0;height:10px;background:rgba(255,255,255,.08)}
+#progbar{position:absolute;left:0;right:0;bottom:0;height:10px;background:var(--track)}
 #prog{height:100%;width:0;background:var(--accent)}
 /* 字幕: 安全区在底部 220px 以上 (避开抖音底部 UI) */
-.sub{position:absolute;left:60px;right:60px;bottom:220px;text-align:center;font-weight:900;font-size:62px;line-height:1.42;color:#fff;
- text-shadow:0 4px 0 #000,0 0 26px rgba(0,0,0,.9);opacity:0}
+.sub{position:absolute;left:60px;right:60px;bottom:220px;text-align:center;font-weight:900;font-size:62px;line-height:1.42;color:var(--ink);
+ text-shadow:0 4px 0 var(--shadow),0 0 26px var(--glow);opacity:0}
 .sub b{color:var(--accent)} .sub .hi{color:var(--alert)}
 /* 通用元素 */
 .big{position:absolute;width:100%;text-align:center;font-size:120px}
 .num{font-weight:900;font-variant-numeric:tabular-nums;color:var(--accent);text-shadow:0 0 40px color-mix(in srgb,var(--accent) 55%,transparent)}
 .num.down{color:var(--alert)}
-.h-title{position:absolute;top:360px;left:110px;right:150px;white-space:nowrap;text-align:center;font-size:96px;font-weight:900;color:#fff;line-height:1.25;
- text-shadow:0 6px 0 #000}
+.h-title{position:absolute;top:360px;left:110px;right:150px;white-space:nowrap;text-align:center;font-size:96px;font-weight:900;color:var(--ink);line-height:1.25;
+ text-shadow:0 6px 0 var(--hard)}
 /* hook */
-.hook-title{position:absolute;top:880px;width:100%;text-align:center;font-size:140px;font-weight:900;color:#fff;letter-spacing:.06em}
+.hook-title{position:absolute;top:880px;width:100%;text-align:center;font-size:140px;font-weight:900;color:var(--ink);letter-spacing:.06em}
 .hook-title .ch{display:inline-block;opacity:0}
-.tape{position:absolute;bottom:120px;left:0;width:300%;height:74px;background:#000;border-top:3px solid var(--alert);border-bottom:3px solid var(--alert);
- color:var(--alert);font-weight:900;font-size:44px;line-height:74px;white-space:nowrap}
+.tape{position:absolute;bottom:120px;left:0;width:300%;height:74px;background:var(--tape-bg);border-top:3px solid var(--alert);border-bottom:3px solid var(--alert);
+ color:var(--tape-fg);font-weight:900;font-size:44px;line-height:74px;white-space:nowrap}
 /* headline */
 .kicker{position:absolute;top:220px;width:100%;text-align:center;font-size:320px;font-weight:900;color:transparent;
  -webkit-text-stroke:3px color-mix(in srgb,var(--accent) 35%,transparent)}
@@ -39,38 +75,42 @@ body{width:1080px;height:1920px;overflow:hidden;background:var(--bg);color:var(-
 .h-line{font-size:56px;font-weight:700;margin-bottom:46px;padding-left:34px;border-left:10px solid var(--accent);opacity:0}
 /* stamps */
 .stamp{position:absolute;white-space:nowrap;padding:18px 40px;border:12px solid var(--alert);border-radius:18px;color:var(--alert);font-size:84px;font-weight:900;
- opacity:0;background:rgba(0,0,0,.25);letter-spacing:.08em}
+ opacity:0;background:var(--stamp-bg);letter-spacing:.08em}
 /* counter */
-.c-bar{position:absolute;top:1040px;left:140px;right:140px;height:28px;border-radius:14px;background:rgba(255,255,255,.12);overflow:hidden}
+.c-bar{position:absolute;top:1040px;left:140px;right:140px;height:28px;border-radius:14px;background:color-mix(in srgb,var(--ink) 12%,transparent);overflow:hidden}
 .c-fill{height:100%;width:0;background:linear-gradient(90deg,var(--accent),var(--alert))}
 .c-note{position:absolute;top:1140px;left:100px;right:100px;text-align:center;font-size:54px;font-weight:700;opacity:0}
 /* versus */
-.vs-card{position:absolute;top:560px;width:410px;height:620px;border-radius:28px;background:rgba(13,20,38,.85);border:6px solid var(--accent);
+.vs-card{position:absolute;top:560px;width:410px;height:620px;border-radius:28px;background:var(--panel);border:6px solid var(--accent);
  display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;text-align:center;padding:30px}
 .vs-card.left{left:40px} .vs-card.right{right:40px;border-color:var(--alert)}
-.vs-name{font-size:68px;font-weight:900;color:#fff} .vs-val{font-size:50px;line-height:1.3;font-weight:900;color:var(--accent)}
+.vs-name{font-size:68px;font-weight:900;color:var(--ink)} .vs-val{font-size:50px;line-height:1.3;font-weight:900;color:var(--accent)}
 .vs-card.right .vs-val{color:var(--alert)}
 .vs-badge{position:absolute;top:1220px;left:50%;margin-left:-100px;width:200px;height:200px;border-radius:50%;background:var(--alert);
- color:#fff;font-size:110px;font-weight:900;display:flex;align-items:center;justify-content:center;opacity:0;box-shadow:0 0 60px rgba(0,0,0,.6)}
+ color:var(--on-alert);font-size:110px;font-weight:900;display:flex;align-items:center;justify-content:center;opacity:0;box-shadow:0 0 60px var(--drop)}
 /* quote */
-.q-text{position:absolute;top:620px;left:110px;right:110px;font-size:84px;font-weight:900;line-height:1.5;color:#fff;
+.q-text{position:absolute;top:620px;left:110px;right:110px;font-size:84px;font-weight:900;line-height:1.5;color:var(--ink);
  font-family:"Noto Serif CJK SC","WenQuanYi Zen Hei",serif}
-.endcard{position:absolute;top:1260px;left:140px;right:140px;padding:34px;border-radius:24px;background:var(--accent);color:#000;
- text-align:center;font-size:58px;font-weight:900;opacity:0}
+.endcard{position:absolute;top:1260px;left:140px;right:140px;padding:34px;border-radius:24px;background:var(--accent);color:var(--on-accent);
+ text-align:center;font-size:58px;font-weight:900;opacity:0;box-shadow:0 12px 40px var(--drop)}
 /* image */
 .img-wrap{position:absolute;top:240px;left:60px;right:60px;height:1200px;overflow:hidden;border-radius:26px;border:6px solid var(--accent)}
 .img-wrap img{width:100%;height:100%;object-fit:cover}
 </style>
 <script src="tl.js"></script>
 <script>
-  // theme → CSS 变量 (seek 之前生效)
-  (function () { const th = (window.TL && TL.theme) || {}, r = document.documentElement.style;
-    for (const k of ["bg", "accent", "alert", "paper"]) if (th[k]) r.setProperty("--" + k, th[k]); })();
+  // theme → CSS 变量 + 背景样式 (seek 之前生效). TL.theme 由 render.py 经 theme.py 解析成完整变量表;
+  // 旧 tl.js 只有 bg/accent/alert 也照样生效, 其余用上面的默认值.
+  (function () { const T = window.TL || {}, th = T.theme || {}, d = document.documentElement, r = d.style;
+    if (typeof th === "object") for (const k in th) if (k !== "light" && typeof th[k] === "string") r.setProperty("--" + k.replace(/_/g, "-"), th[k]);
+    d.dataset.bg = T.bg_style || "radial";
+    d.dataset.light = th.light === "1" ? "1" : "0"; })();
 </script>
 <link rel="stylesheet" href="custom.css" onerror="this.remove()">
 </head><body>
 <div id="stage">
   <div class="bgwash"></div>
+  <div class="bgfx"></div>
   <div id="dust"></div>
   <div id="scenes"></div>
   <div class="vig"></div><div class="scan"></div>

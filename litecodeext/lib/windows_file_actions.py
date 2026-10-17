@@ -15,6 +15,23 @@ except ImportError:                    # 服务端/测试环境按包导入
     from lib import windows_transfer as wt
 
 LIST_LIMIT = 500
+STALE_PART_SECONDS = 3600   # 中断上传留下的 .part-* 超过 1 小时视为残留
+
+
+def cleanup_stale_parts(directory=None, max_age=STALE_PART_SECONDS):
+    """清理 Downloads\\LiteCode 下修改时间超过 max_age 的 .part-* 临时文件, 返回删除个数。
+    进行中的传输每块都会追加写入、mtime 持续刷新, 不会被误删。"""
+    directory = Path(directory) if directory else downloads_dir()
+    removed = 0
+    now = time.time()
+    for part in directory.glob('.part-*'):
+        try:
+            if part.is_file() and now - part.stat().st_mtime > max_age:
+                part.unlink()
+                removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def downloads_dir():
@@ -96,6 +113,8 @@ def upload(args):
     if not re.fullmatch(r'[a-f0-9]{64}', str(sha256)):
         raise ValueError('sha256 非法')
     block = base64.b64decode(payload, validate=True) if payload else b''
+    if index == 0:
+        cleanup_stale_parts()   # 每次新上传开始时顺手清掉以前中断留下的临时文件
     temp = downloads_dir() / ('.part-' + transfer_id)
     current = temp.stat().st_size if temp.exists() else 0
     expected_offset = index * wt.CHUNK

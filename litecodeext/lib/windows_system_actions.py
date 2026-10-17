@@ -5,16 +5,41 @@
 """
 import os
 
-# 绝不结束的关键系统进程（即使带 force）
-CRITICAL = {'system', 'system idle process', 'registry', 'csrss.exe', 'wininit.exe',
-            'winlogon.exe', 'services.exe', 'lsass.exe', 'smss.exe'}
+# 绝不结束的系统进程（即使带 force）。比较时忽略大小写与 .exe 后缀，见 _base。
+CRITICAL = {'system', 'system idle process', 'idle', 'registry', 'memory compression', 'secure system',
+            'csrss', 'wininit', 'winlogon', 'services', 'lsass', 'lsaiso', 'smss',
+            'svchost', 'dwm', 'sihost', 'fontdrvhost', 'msmpeng', 'nissrv', 'securityhealthservice',
+            'spoolsv', 'taskhostw', 'runtimebroker', 'ctfmon', 'conhost', 'dllhost', 'audiodg',
+            'wudfhost', 'searchindexer', 'startmenuexperiencehost', 'shellexperiencehost',
+            'textinputhost', 'searchhost', 'userinit', 'logonui', 'lockapp'}
 # 需要 force=True 才允许结束（会影响用户桌面但可恢复）
-GUARDED = {'explorer.exe'}
+GUARDED = {'explorer'}
 OUTPUT_LIMIT = 8000
+# 超时后结束进程树并收尾的额外宽限 (秒): run_powershell 保证在 timeout + KILL_GRACE 内返回
+KILL_GRACE = 15
 
 
 def _norm(name):
     return (name or '').strip().lower()
+
+
+def _base(name):
+    """进程名归一: 去空白、小写、去 .exe 后缀 (SVCHOST.EXE / svchost / Svchost.exe 视为同一个)。"""
+    name = _norm(name)
+    return name[:-4] if name.endswith('.exe') else name
+
+
+def _session_id(pid):
+    """进程所在会话号; 0 为服务会话。非 Windows 或查询失败返回 None。"""
+    try:
+        import ctypes
+        from ctypes import wintypes
+        session = wintypes.DWORD()
+        if ctypes.windll.kernel32.ProcessIdToSessionId(wintypes.DWORD(pid), ctypes.byref(session)):
+            return session.value
+    except Exception:
+        pass
+    return None
 
 
 def system_info(args=None):
@@ -115,10 +140,16 @@ def kill_process(args):
         except psutil.NoSuchProcess:
             raise ValueError('指定 pid 的进程不存在')
     else:
-        needle = _norm(name)
-        targets = [p for p in psutil.process_iter(['pid', 'name']) if _norm(p.info.get('name')) == needle]
+        needle = _base(name)
+        targets = [p for p in psutil.process_iter(['pid', 'name']) if _base(p.info.get('name')) == needle]
         if not targets:
             raise ValueError('未找到精确匹配该名称的进程')
+        if len(targets) > 1 and args.get('all') is not True:
+            pids = sorted(p.pid for p in targets)
+            return {'ok': False, 'state': 'kill_process_ambiguous', 'killed': [], 'skipped': [],
+                    'matches': pids,
+                    'error': f'名称匹配到 {len(pids)} 个进程 (pid: {", ".join(map(str, pids))})，'
+                             '请改用 pid 指定，或确认全部结束时传 all=true'}
     killed, skipped = [], []
     for proc in targets:
         try:
@@ -128,10 +159,13 @@ def kill_process(args):
         if proc.pid in own:
             skipped.append({'pid': proc.pid, 'name': pname, 'reason': '代理自身进程，拒绝结束'})
             continue
-        if pname in CRITICAL:
+        if _base(pname) in CRITICAL:
             skipped.append({'pid': proc.pid, 'name': pname, 'reason': '关键系统进程，拒绝结束'})
             continue
-        if pname in GUARDED and not force:
+        if _session_id(proc.pid) == 0:
+            skipped.append({'pid': proc.pid, 'name': pname, 'reason': '会话 0 的服务进程，拒绝结束'})
+            continue
+        if _base(pname) in GUARDED and not force:
             skipped.append({'pid': proc.pid, 'name': pname, 'reason': '需要 force=true 才能结束'})
             continue
         try:
@@ -207,27 +241,61 @@ def run_powershell(args):
             raise ValueError('cwd 目录不存在')
         cwd = str(Path(cwd).expanduser())
     started = time.perf_counter()
+    command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+               '-Command', PS_ENCODING_PREFIX + script]
+    code, raw_out, raw_err, timed_out = run_bounded(command, timeout, cwd=cwd)
+    out, err = _decode(raw_out), _decode(raw_err)
+    result = {'ok': code == 0 and not timed_out, 'state': 'run_powershell_timeout' if timed_out else 'run_powershell',
+              'returncode': code, 'exit_code': code, 'cwd': cwd, 'timed_out': timed_out,
+              'duration_ms': int((time.perf_counter() - started) * 1000),
+              'stdout': out[:OUTPUT_LIMIT], 'stdout_truncated': len(out) > OUTPUT_LIMIT,
+              'stderr': err[:OUTPUT_LIMIT], 'stderr_truncated': len(err) > OUTPUT_LIMIT}
+    if timed_out:
+        result['error'] = f'执行超过 {timeout} 秒，已结束整个进程树'
+    return result
+
+
+def _kill_tree(subprocess, process):
+    """taskkill /T /F 结束整个进程树 (只结束 powershell.exe 会留下它拉起的子进程); 失败再退回 kill()。"""
     try:
-        completed = subprocess.run(
-            ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-             '-Command', PS_ENCODING_PREFIX + script],
-            capture_output=True, timeout=timeout, cwd=cwd,
-            creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-    except subprocess.TimeoutExpired as exc:
-        out = _decode(exc.stdout or b'')
-        err = _decode(exc.stderr or b'')
-        return {'ok': False, 'state': 'run_powershell_timeout', 'returncode': None, 'exit_code': None,
-                'cwd': cwd, 'duration_ms': int((time.perf_counter() - started) * 1000),
-                'error': f'执行超过 {timeout} 秒被终止',
-                'stdout': out[:OUTPUT_LIMIT], 'stdout_truncated': len(out) > OUTPUT_LIMIT,
-                'stderr': err[:OUTPUT_LIMIT], 'stderr_truncated': len(err) > OUTPUT_LIMIT}
-    out = _decode(completed.stdout)
-    err = _decode(completed.stderr)
-    return {'ok': completed.returncode == 0, 'state': 'run_powershell',
-            'returncode': completed.returncode, 'exit_code': completed.returncode, 'cwd': cwd,
-            'duration_ms': int((time.perf_counter() - started) * 1000),
-            'stdout': out[:OUTPUT_LIMIT], 'stdout_truncated': len(out) > OUTPUT_LIMIT,
-            'stderr': err[:OUTPUT_LIMIT], 'stderr_truncated': len(err) > OUTPUT_LIMIT}
+        subprocess.run(['taskkill', '/T', '/F', '/PID', str(process.pid)], stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=10,
+                       creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+    except Exception:
+        pass
+    try:
+        process.kill()
+    except Exception:
+        pass
+
+
+def run_bounded(command, timeout, cwd=None, limit=1024 * 1024):
+    """运行命令, 保证在 timeout + KILL_GRACE 秒内返回 (returncode, stdout, stderr, timed_out)。
+
+    输出重定向到临时文件而不是管道: subprocess.run(capture_output) 超时后只结束 powershell.exe,
+    随后无超时的 communicate() 会被继承了管道写端的孙进程一直卡住, 代理随之挂死。
+    文件没有这个问题, 超时就 taskkill 进程树, 再读文件里已有的输出 (各读前 limit 字节)。
+    """
+    import subprocess
+    import tempfile
+    with tempfile.TemporaryFile() as out_file, tempfile.TemporaryFile() as err_file:
+        process = subprocess.Popen(command, stdin=subprocess.DEVNULL, stdout=out_file, stderr=err_file,
+                                   cwd=cwd, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        timed_out = False
+        try:
+            code = process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            timed_out, code = True, None
+            _kill_tree(subprocess, process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+        outputs = []
+        for handle in (out_file, err_file):
+            handle.seek(0)
+            outputs.append(handle.read(limit))
+    return code, outputs[0], outputs[1], timed_out
 
 
 def perform(action, folder, args):

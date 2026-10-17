@@ -42,13 +42,13 @@
 | --- | --- |
 | `system_info` | 系统版本、主机名、CPU 型号/核数/占用、内存、各磁盘容量/剩余、开机时长、登录用户 |
 | `processes` | 按 `sort=cpu|memory` 排序的前 `top` 个进程，可按 `name` 过滤 |
-| `kill_process` | 按 `pid` 或精确进程名结束；拒绝结束关键系统进程（System/csrss/wininit/winlogon/services/lsass/smss）和代理自身，结束 explorer 需 `force=true` |
+| `kill_process` | 按 `pid` 或精确进程名结束；名称比较忽略大小写与 `.exe` 后缀。拒绝结束关键/常驻系统进程（System/csrss/wininit/winlogon/services/lsass/smss/svchost/dwm/sihost/fontdrvhost/MsMpEng/spoolsv/taskhostw/RuntimeBroker/ctfmon 等，见 `windows_system_actions.CRITICAL`）、会话 0 的服务进程和代理自身；按名称命中多于 1 个进程时拒绝并列出 pid，需改用 `pid` 或显式 `all=true`；结束 explorer 需 `force=true` |
 | `services` | 只读列出服务及状态（代理普通用户权限，不做启停）；可 `name` 过滤 |
 | `list_dir` | 列目录（名称/大小/修改时间/是否目录），最多 500 项 |
 | `download` | 把 Windows 文件（≤50MB）取回服务端工作区 `uploads/` 并登记为产出物，返回服务端路径 |
 | `upload` | 把服务端工作区内的文件（`source` 必须在工作区内，≤50MB）发到 Windows 的 `%USERPROFILE%\Downloads\LiteCode\`，文件名清洗防穿越、同名自动加序号不覆盖 |
 | `inspect_file` | **回读核对**：把 Windows 文件（≤50MB，路径支持 `%USERPROFILE%` 等环境变量）取回服务端并解析真实内容，见下文「回读核对」 |
-| `run_powershell` | 执行 PowerShell：**默认关闭**，支持 `cwd`、返回 `exit_code`/`stdout`/`stderr`/`duration_ms`，输出各截断 8000 字符，`timeout` 默认 60 秒上限 300 秒 |
+| `run_powershell` | 执行 PowerShell：**默认关闭**，支持 `cwd`、返回 `exit_code`/`stdout`/`stderr`/`duration_ms`/`timed_out`，输出各截断 8000 字符，`timeout` 默认 60 秒上限 300 秒；超时用 `taskkill /T /F` 结束整个进程树，输出经临时文件收集，保证 timeout+15 秒内返回 |
 
 `kill_process`/`upload`/`download`/`run_powershell` 是有副作用动作，执行后应回读（再 `list_dir`/`processes`/`system_info` 或截图）确认，不盲目重试。幂等只读动作（`system_info`/`processes`/`list_dir`/`services`/`inspect_file`/截图）遇网络类错误服务端自动重试 1-2 次；点击/输入/结束/传输类绝不自动重试。
 
@@ -82,6 +82,27 @@
 - 注入走 `[SYSTEM-...]` 约定：Web 会话转换（`web_ui._is_sys_inject_text`）不显示；记忆提取输入（`turn_persist.memory_input`）剥掉 `[SYSTEM...]` 伪 user 消息。
 - 已知局限：被拦下的第一版总结已经流式发给用户，用户会先看到它、再看到回读后的更正版；子代理（spawn_agent）内部循环不经过本闸。
 
+### 多台电脑并行：远程操作员子代理（operator）
+
+主代理可以用 `spawn_agent` 派发 `agent_type="operator"` 的子代理，每个操作员负责**一台**电脑，多台电脑同时干活：
+
+```
+spawn_agent(parallel_tasks=[
+  {"agent_type": "operator", "alias": "vm-a", "task": "在桌面新建 报告.txt 写入'A 完成'并保存"},
+  {"agent_type": "operator", "alias": "vm-b", "task": "用 WPS 打开 D:/sales.xlsx, 在 D5 填 =SUM(D2:D4) 保存"}])
+```
+
+- **角色**：工具只有 `windows_desktop`、`windows_system`、`read_file`、`vision_ocr`；不能 `execute_shell`、不能写服务器文件。max_iter 60，默认超时 1200 秒。提示词要求：先截图观察 → 每步动作后截图/OCR 确认 → 能用 windows_system 命令行完成的优先命令行 → 改过文件必须 `inspect_file` 回读并以回读为准 → 只操作分配的 alias。
+- **必须指定 alias**：任务项 `alias` 字段（或 spawn_agent 顶层 `alias` 作默认）。缺 alias 直接拒绝派发。
+- **一台电脑同一时刻只归一个操作员**（只有一套鼠标键盘）：
+  - 同时运行的两个 operator 指定同一 alias（parallel/competitive，或 DAG 中无依赖先后的步骤）→ **拒绝整个派发**，提示把同一台电脑上的事合并成一个任务，或用 `pipeline_tasks` / `depends_on` 串行。管道、批量、有依赖的 DAG 步骤允许同一 alias。
+  - 运行时按 alias 加 `asyncio.Lock`：不同派发/不同会话的操作员抢同一台电脑时排队，最多等 `agent.operator_lock_wait` 秒（默认 120）。
+  - 操作员占用期间，主代理或其他会话对这台电脑的 `windows_desktop` / `windows_system` 调用**立即报错**（"节点 X 正被操作员子代理独占"），不排队，避免主代理等自己的子代理形成死锁；其它电脑不受影响。
+  - 操作员调用 windows 工具时 alias 与分配的不同 → 拒绝；没填 alias → 自动补成分配的。
+- **截图回流**：操作员每次 `windows_desktop` 返回截图后，下一轮模型输入附上最新一张截图（与主循环 `[DESKTOP_OBSERVATION]` 同一实现）；当前模型不支持视觉时按配置路由到 `vision_fallback_id` 或剥图。`reference_image` 自动补的是该操作员自己的最近截图（按子代理独立 sid 记录），不会用到别的操作员或主代理的截图；操作员开工时清掉其他会话手里这台电脑的旧截图。
+- **交付证据**：operator 属写类。界面改过文件（保存/另存/粘贴/剪切/删除/重命名/拖拽，与回读闸同一判定）或 upload 过文件，最后一次改动后必须有成功的 `inspect_file` / `list_dir` / `run_powershell` / `download` 回读才标 `[已验证]`，截图/OCR 不算；只做界面操作没改文件的，最后一次操作后有 screenshot/OCR 确认即可。未验证时注入一次补证提示。
+- 局限：操作员截图登记在子代理自己的会话下，不会作为产出物出现在主会话里（结果文本里有图片路径）；主循环的收尾回读闸不作用于子代理内部，由证据判定兜底。
+
 ### 命令行能力开关（run_powershell）
 
 `run_powershell` 是用户主动要的一等功能，但默认关闭、最小权限：
@@ -95,7 +116,7 @@
 
 传输走现有任务通道。单块原始 4MB（base64 后约 5.3MB，远低于请求体 24MB 上限），整体 sha256 校验：
 
-- **upload**：服务端把工作区文件按 4MB 切块，逐块下发；节点追加写到 `Downloads\LiteCode` 下的 `.part-<transfer_id>` 临时文件，最后一块校验整体 sha256 后改名为唯一文件名。源文件 `resolve()` 后必须落在工作区内，杜绝把服务器任意文件发出去。
+- **upload**：服务端把工作区文件按 4MB 切块，逐块下发；节点追加写到 `Downloads\LiteCode` 下的 `.part-<transfer_id>` 临时文件，最后一块校验整体 sha256 后改名为唯一文件名。源文件相对路径先拼到工作区再 `resolve()`（不按服务进程当前目录解析），必须落在工作区内，杜绝把服务器任意文件发出去。中断的上传会留下 `.part-*`：节点在每次新上传开始（第 0 块）时清理修改时间超过 1 小时的 `.part-*`（进行中的传输每块都会刷新 mtime，不会误删）。服务端失败时不额外下发清理任务——旧代理不认识新的清理动作，且清理只差下一次上传，取舍为只做节点端清理。
 - **download**：节点无状态（任务目录每次执行后删除），先回元数据（size/chunks/sha256/name），再按偏移逐块重读回传；服务端重组并校验 sha256 后落到 `uploads/`。
 
 ## 向后兼容与版本门禁
@@ -136,12 +157,22 @@ LiteCode 定时器 `action_type=agent` 已接入现有 Web 后台轮次。定时
 
 控制端按实际下发的字节计算代理与桌面组件版本（内容哈希前 16 位），随每次轮询返回；设备每次轮询上报正在运行的版本，Web 节点卡片显示“运行版本”。设备空闲时：组件过期即重新下载并丢弃已导入模块，下一次桌面动作使用新代码，无需重启；代理本身过期则下载新代理，哈希与控制端公布一致才原子替换，再借计划任务重启自己。哈希不一致不替换，同一目标版本只尝试一次，避免重启循环。执行中或待回传的动作不会被更新打断。
 
+组件更新是**全有或全无**：先把全部组件下载到节点目录下的 `.update\` 临时目录，按轮询响应新增的 `asset_hashes`（逐文件完整 sha256）逐个校验，再核对整体版本哈希，全部通过才逐个 `os.replace` 到位；任一下载失败或哈希不符则放弃本次更新，旧文件原样保留。代理启动时先请求 `/versions` 拿到公布版本再加载；校验不符但本地已有完整旧组件时先用旧组件。卸载脚本 `uninstall.ps1` 也在更新清单里（`WORKER_FILES` / 代理 `ASSETS` / 路由 `ASSETS` 三处一致，有测试防漂移），落盘时补 UTF-8 BOM 以便 PowerShell 5.1 正确读中文，版本哈希按下发字节（不含 BOM）计算。
+
+节点处于 `updating`（上报版本与控制端不一致，自动更新进行中）时下发新动作，服务端最多等待 90 秒（每 2 秒查一次节点状态，在工具线程里等，不阻塞事件循环），节点以新版本回连后再下发；超时才报“节点正在更新，请稍后重试”。`legacy`（不上报版本的旧代理）仍立即报“代理版本过低”。
+
 2026-10-16 之前安装的代理不上报版本，卡片显示“旧版代理”，需要在该电脑上用安装时的用户、管理员 PowerShell 执行一次 Web 提供的“本机更新命令”（本地用 DPAPI 读出设备凭据，不经 URL 传递），之后即可自动更新。重跑原安装命令也会先停掉旧代理再启动新代理。
 
 ### 断线、锁屏与自启
 
 - **网络断开**：代理按 2 秒起、最长 60 秒的退避无限重连，恢复后自动上线。断线期间未回传的任务过期后不自动重发，避免重复发送消息。
 - **进程异常**：计划任务崩溃后每分钟重启、最多 999 次；另有每 5 分钟一次的补拉触发器，代理因任何原因退出都会在 5 分钟内重新拉起（运行中由 IgnoreNew 忽略，不会多开）。旧安装由代理启动时自行补齐这份配置。凭据被撤销时代理停用自己的计划任务，不再空跑。
+- **撤销判定**：控制端只在真正认证失败（凭据不符、节点已撤销或删除，`AuthError`）时返回 403，并带响应头 `X-LiteCode-Auth: revoked`；其他异常（任务文件损坏、磁盘错误等）返回 500。代理只有**连续 3 次**收到带该标记的 403 才停用计划任务；裸 403（反向代理/WAF）和 5xx 一律按网络错误退避重试。损坏的任务文件会移到 `.secrets/windows_nodes/quarantine/` 并记日志，不影响其他节点；`nodes.json` 与任务文件写入走临时文件 + fsync + `os.replace`。遍历任务文件时容忍并发删除（`wait()` 不持锁删除任务文件，遍历遇到 `FileNotFoundError` 直接跳过）。
+- **长轮询负载**：poll/result/list 中的加锁读写、base64 解码与图片校验放在 `asyncio.to_thread`；`nodes.json` 内容没变就不回写，空闲心跳的 `last_seen` 每 15 秒才刷新一次（离线判定阈值 90 秒）。
+- **桌面就绪状态**：只有带截图的结果（或明确的 `desktop_unavailable`）才更新“桌面可操作”；系统/文件/传输类动作不改它。
+- **大截图**：代理端单张截图超过 8MB（4K/多屏 PNG）时自动转压缩 JPEG 再上报（与 `compress=true` 同一机制，`screen_size` 写 `.screen` 旁车，点击坐标换算不受影响），避免超过控制端单图 12MB / 请求体 24MB 上限。
+- **鼠标角落**：pyautogui 的 FAILSAFE（鼠标在屏幕角落时每个动作都抛异常）已关闭，避免上一个动作把鼠标留在角落后所有动作持续失败。
+- **工作目录**：计划任务启动的进程 cwd 是 `C:\Windows\system32`，导致代理拉起的记事本/WPS“另存为”默认跳到 System32。新安装的计划任务带 `-WorkingDirectory`（节点目录）；代理启动时 `chdir` 到用户主目录（已安装节点无需重装）；`launch_app` 内置映射以“文档”目录（含 OneDrive 重定向，不存在则主目录）为工作目录启动应用。
 - **锁屏**：代理保持在线，桌面动作返回 `desktop_unavailable`，Web 显示“已连接但桌面锁定”。Windows 安全桌面不允许远程解锁。用远程桌面连过这台电脑再断开，会话同样进入锁定状态；断开前可在该会话的管理员终端执行 `tscon %sessionname% /dest:console` 把会话交回本机控制台，保持可操作。
 - **开机**：计划任务在用户登录后启动，桌面操作也必须有已登录且未锁定的会话。重启（包括系统更新重启）后需要有人登录才会上线。若要无人值守，需在这台电脑上配置自动登录并关闭锁屏与屏保超时；这意味着任何能接触这台电脑的人都可以直接使用它，是否开启由电脑所有者决定，LiteCode 不会自动修改这些系统设置。
 

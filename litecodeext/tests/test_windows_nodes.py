@@ -226,7 +226,8 @@ def test_task_receipt_is_distinct_from_verified_business_success(tmp_path):
     nodes.finish(device['id'], device['token'], job_id, {'ok': True}, {})
     assert nodes.list()[0]['last_task']['state'] == 'returned'
     assert 'keys' not in json.dumps(nodes.list())
-    assert nodes.list()[0]['desktop_ready'] is False
+    # 不带截图的结果不是桌面观察, 不改"桌面就绪"状态 (2026-10-17 可靠性修复条目 9)
+    assert nodes.list()[0]['desktop_ready'] is True
 
 
 def test_management_refuses_auth_disabled():

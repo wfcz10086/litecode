@@ -372,6 +372,11 @@ def _scrub_agent_prefix(text: str) -> str:
 @_acm
 async def _lifespan(application):
     # startup
+    try:  # [worktree-iso] 清理 24h 前已合并/已丢弃的子代理工作树残留 (后台线程, 不挡启动)
+        from lib.agent.subagent_worktree import cleanup_stale as _wt_cleanup
+        asyncio.get_running_loop().run_in_executor(None, _wt_cleanup)
+    except Exception as _e:
+        print(f"[lifespan] agent worktree cleanup skipped: {_e}")
     if _WX_AVAILABLE:
         mgr = _wx_manager()
         await mgr.startup()
