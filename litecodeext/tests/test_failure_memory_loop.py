@@ -29,7 +29,7 @@ from lib import turn_context as tc  # noqa: E402
 TASK = "帮我把 config 解析模块重构成异步版本并补上单元测试"
 SIMILAR = "帮我把 config 解析模块重构成异步版本, 再补单元测试"
 UNRELATED = "今天北京天气怎么样，适合出门跑步吗"
-SECRET = "sk-abcdefghijklmnopqrstuvwxyz0123456789"
+SECRET = "sk-EXAMPLEabcdefghijklmnopqrstuvwxyz0123"   # 假密钥 (含 EXAMPLE, 公开版自检放行)
 
 
 class _FakeLLM:
