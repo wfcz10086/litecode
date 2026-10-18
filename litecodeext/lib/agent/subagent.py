@@ -549,7 +549,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
     log.info(f"  \033[33m[subagent:{agent_type}]\033[0m {task[:80]}")
     # [evidence 2026-10-17] 机器采集交付证据 (agent.subagent_evidence 关闭时为 None, 全部短路)
     from .subagent_evidence import start_collector as _ev_start
-    _ev = _ev_start(agent_type)
+    _ev = _ev_start(agent_type, task)
     final_text = ""
     error_streak = 0
 

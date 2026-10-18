@@ -50,6 +50,28 @@ _OP_READBACK = {"inspect_file", "list_dir", "run_powershell", "download"}
 _OP_SYS_CONFIRM = {"processes", "system_info", "services"}
 _OP_CONFIRM = {"screenshot", "ocr"}
 _OP_NEUTRAL = {"windows", "clipboard", "wechat_status", "initialize"}   # 纯查看, 不改界面也不算确认
+# operator 任务里点名的文件 (生产实测 2026-10-18: 操作员被桌面旧文件带偏, 回读了别的文件却判 verified)
+_TARGET_RE = re.compile(r'([^\s\\/:*?"<>|，。、；：“”‘’（）()「」【】\[\]]{1,80}?\.'
+                        r'(?:xlsx|xlsm|xls|csv|docx|doc|pptx|ppt|txt|md|pdf|json|wps|et|dps))(?![A-Za-z0-9])',
+                        re.I)
+_TARGET_MAX = 5
+
+
+def _target_match(target: str, name: str) -> bool:
+    """任务里抽出的名字可能带前置中文 ("在桌面新建op.txt"), 观察到的真实文件名是它的后缀即算同一个。"""
+    name = name.strip().strip("'\"`").lower()
+    return bool(name) and (name == target or (len(name) >= 5 and target.endswith(name)
+                                               and not target[-len(name) - 1].isascii()))
+
+
+def task_targets(task: str) -> List[str]:
+    """任务文本里点名的文档文件名 (小写 basename, 去重保序, 最多 _TARGET_MAX 个)。"""
+    out: List[str] = []
+    for m in _TARGET_RE.finditer(task or ""):
+        name = m.group(1).strip().strip("'\"`").lower()
+        if name and not name.startswith(".") and name not in out:
+            out.append(name)
+    return out[:_TARGET_MAX]
 _ABORT_PREFIXES = ("[子代理超时]", "[子代理已中断]", "[子代理异常]", "[子代理已取消",
                    "[子代理嵌套过深]", "[子代理错误栈]")
 _RUN_KINDS = ("test", "build", "run")
@@ -344,6 +366,8 @@ class EvidenceCollector:
     op_actions: int = 0
     op_confirm_pending: bool = False  # 最后一次界面动作之后尚无截图/OCR/回读确认
     op_last_readback: str = ""
+    op_targets: List[str] = field(default_factory=list)       # 任务点名的文件 (小写 basename)
+    op_target_seen: set = field(default_factory=set)          # 最后一次文件改动之后已确认的点名文件
 
     # ── 观察一次工具调用 ──
     def observe(self, name: str, args: dict, result) -> None:
@@ -389,12 +413,14 @@ class EvidenceCollector:
                     brief = " ".join(result.split())[:150]
                     self.win.append(f"{act} {args.get('path', '') or args.get('script', '')[:40]}: {brief}")
                 if self._operator():
+                    self._note_targets(act, args, result)
                     if act in _OP_READBACK:
                         self.op_file_pending = self.op_confirm_pending = False
                         self.op_last_readback = f"windows_system {act} {args.get('path', '')}".strip()
                     elif act == "upload":
                         self.op_file_changes += 1
                         self.op_file_pending = self.op_confirm_pending = True
+                        self.op_target_seen.clear()
                     elif act == "kill_process":
                         self.op_actions += 1
                         self.op_confirm_pending = True
@@ -410,6 +436,7 @@ class EvidenceCollector:
                     if is_file_change(act, args):
                         self.op_file_changes += 1
                         self.op_file_pending = self.op_confirm_pending = True
+                        self.op_target_seen.clear()
                     elif act in _OP_CONFIRM:
                         self.op_confirm_pending = False
                     elif act not in _OP_NEUTRAL:
@@ -423,7 +450,23 @@ class EvidenceCollector:
         from .subagent_operator import is_operator
         return is_operator(self.agent_type)
 
+    def _note_targets(self, act: str, args: dict, result: str) -> None:
+        """成功的 inspect_file/download (路径即该文件)、list_dir/run_powershell (输出里出现该文件名) 算确认了点名文件。"""
+        if not self.op_targets or act not in _OP_READBACK:
+            return
+        if act in ("inspect_file", "download"):
+            names = [str(args.get("path") or "").replace("\\", "/").rsplit("/", 1)[-1].lower()]
+        else:
+            names = [m.group(1).lower() for m in _TARGET_RE.finditer(result)]
+        for t in self.op_targets:
+            if any(_target_match(t, n) for n in names):
+                self.op_target_seen.add(t)
+
     def _operator_verdict(self) -> Optional[Tuple[bool, str]]:
+        missing = [t for t in self.op_targets if t not in self.op_target_seen]
+        if missing and (self.op_file_changes or self.op_actions):
+            return False, (f"任务点名的文件 {', '.join(missing)} 在最后一次改动之后没有被 inspect_file/list_dir 确认 "
+                           "(可能没生成、存错位置或改的是别的文件)")
         if self.op_file_changes:
             if self.op_file_pending:
                 return False, (f"界面/上传改过文件 {self.op_file_changes} 次, 但最后一次改动之后没有用 "
@@ -602,12 +645,14 @@ class EvidenceCollector:
 
 # ═══════════════════════════ 子代理侧接入 ═══════════════════════════
 
-def start_collector(agent_type: str) -> Optional[EvidenceCollector]:
+def start_collector(agent_type: str, task: str = "") -> Optional[EvidenceCollector]:
     """_run_subagent 开头调用; 开关关闭返回 None (调用方全部短路)。"""
     if not enabled():
         return None
     try:
         col = EvidenceCollector(agent_type=agent_type, write_role=_is_write_role(agent_type))
+        if col._operator():
+            col.op_targets = task_targets(task)
     except Exception:
         return None
     slot = _SLOT.get()

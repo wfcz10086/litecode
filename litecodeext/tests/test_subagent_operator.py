@@ -417,3 +417,57 @@ def test_select_artifacts_unit():
     assert op.select_artifacts([]) == []
     op.note_artifact("not-running", {"filepath": "/x", "op": "screenshot"})   # 非运行中的操作员 sid: 忽略
     assert "not-running" not in op._ARTS
+
+
+# ── 生产实测回归 (2026-10-18 WPS 验收): 任务点名 op_wps_test.xlsx, 操作员被桌面旧文件带偏,
+#    做了界面操作 + 截图 + 回读了别的文件 (销售表.xlsx), 却被判 [已验证]。现在点名文件必须在最后一次改动后被确认。 ──
+def test_evidence_task_named_file_must_be_confirmed():
+    task = "用 WPS 表格新建表格, A4 输入 =SUM(A1:A3), 另存为 桌面\\op_wps_test.xlsx, 最后 inspect_file 回读"
+    assert ev.task_targets(task) == ["op_wps_test.xlsx"]
+
+    def col():
+        c = ev.start_collector("operator", task)
+        assert c is not None and c.op_targets == ["op_wps_test.xlsx"]
+        return c
+    ok = '{"ok": true}'
+    c = col()                                                     # 复现: 回读的是别的文件 → 未验证
+    c.observe("windows_desktop", {"action": "click", "x": 1, "y": 1}, ok)
+    c.observe("windows_desktop", {"action": "screenshot"}, ok)
+    c.observe("windows_system", {"action": "inspect_file", "path": "D:\\LiteCode归档\\销售表.xlsx"}, ok)
+    v = c.verdict()
+    assert not v[0] and "op_wps_test.xlsx" in v[1], v
+    c = col()                                                     # 点名文件读失败 (不存在) 不算确认
+    c.observe("windows_desktop", {"action": "hotkey", "keys": "ctrl+s"}, ok)
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:\\Users\\u\\Desktop\\op_wps_test.xlsx"},
+              "ERROR: windows_system RuntimeError: 读取远端文件失败: 文件不存在")
+    assert not c.verdict()[0]
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:\\Users\\u\\Desktop\\op_wps_test.xlsx"},
+              '{"ok": true, "cells": {"A4": 49.75}}')
+    assert c.verdict()[0], c.verdict()
+    c.observe("windows_desktop", {"action": "hotkey", "keys": "ctrl+s"}, ok)   # 之后又保存 → 需重新确认
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:\\other.xlsx"}, ok)
+    assert not c.verdict()[0] and "op_wps_test.xlsx" in c.verdict()[1]
+    c.observe("windows_system", {"action": "list_dir", "path": "C:\\Users\\u\\Desktop"},
+              '{"ok": true, "entries": [{"name": "op_wps_test.xlsx", "size": 9238}]}')
+    assert c.verdict()[0]
+    c = ev.start_collector("operator", "在桌面新建op_test.txt 写入 hi")   # 中文紧贴文件名
+    c.observe("windows_desktop", {"action": "hotkey", "keys": "ctrl+s"}, ok)
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:/Users/u/Desktop/myop_test.txt"}, ok)
+    assert not c.verdict()[0]                                     # 仅后缀相同的别的文件不算
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:/Users/u/Desktop/op_test.txt"}, ok)
+    assert c.verdict()[0]
+    c = ev.start_collector("operator", "截图看看桌面, 打开 www.example.com")  # 没点名文件 → 旧规则
+    c.observe("windows_desktop", {"action": "click", "x": 1, "y": 1}, ok)
+    c.observe("windows_desktop", {"action": "screenshot"}, ok)
+    assert c.op_targets == [] and c.verdict()[0]
+    c = ev.start_collector("coder", "改 a.txt")                    # 非操作员不受影响
+    assert c is not None and c.op_targets == []
+
+
+def test_evidence_named_file_end_to_end(env):
+    t = _t("另存为 桌面\\op_e2e.xlsx")
+    env.scripts[t] = [("tool", "windows_desktop", {"alias": "vm-a", "action": "hotkey", "keys": "ctrl+s"}),
+                      ("tool", "windows_system", {"alias": "vm-a", "action": "inspect_file", "path": "C:/旧/销售表.xlsx"}),
+                      ("text", "已保存并回读, 合计 49.75"), ("text", "确实完成")]
+    out = _spawn({"agent_type": "operator", "alias": "vm-a", "task": t})
+    assert out.startswith("[未验证: 任务点名的文件 op_e2e.xlsx"), out
