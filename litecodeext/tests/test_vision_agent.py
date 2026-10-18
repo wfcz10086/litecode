@@ -14,11 +14,10 @@ sys.path.insert(0, "/opt/litecode/litecodeext")
 
 from lib.dag_schema import validate_dag_json  # noqa: E402
 
-_SUBAGENT = None
-for _p in ("/opt/litecode/lib/agent/subagent.py",
-           "/opt/litecode/litecodeext/lib/agent/subagent.py"):
-    if Path(_p).exists():
-        _SUBAGENT = Path(_p); break
+# 按本文件位置找 (公开仓库克隆到任意目录也能跑; 原来写死 /opt/litecode)
+_SUBAGENT = Path(__file__).resolve().parent.parent / "lib" / "agent" / "subagent.py"
+if not _SUBAGENT.exists():
+    _SUBAGENT = None
 
 
 class TestVisionAgent(unittest.TestCase):

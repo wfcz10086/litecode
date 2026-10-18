@@ -471,3 +471,22 @@ def test_evidence_named_file_end_to_end(env):
                       ("text", "已保存并回读, 合计 49.75"), ("text", "确实完成")]
     out = _spawn({"agent_type": "operator", "alias": "vm-a", "task": t})
     assert out.startswith("[未验证: 任务点名的文件 op_e2e.xlsx"), out
+
+
+def test_operator_prompt_focus_and_cell_rules():
+    sys_p = op.OPERATOR_CONFIG["system"]
+    assert "只管任务点名的东西" in sys_p and "不能用别处的文件代替" in sys_p
+    assert "ctrl+home" in sys_p and "桌面\\a.xlsx" in sys_p
+    from lib.windows_desktop_actions import HOTKEYS
+    assert "ctrl+home" in HOTKEYS                                  # 提示词里让用的快捷键必须真的支持
+
+
+def test_operator_nudge_names_missing_target():
+    c = ev.start_collector("operator", "另存为 桌面\\op_wps_test2.xlsx 并回读")
+    c.observe("windows_desktop", {"action": "hotkey", "keys": "f12"}, '{"ok": true}')
+    c.observe("windows_system", {"action": "inspect_file", "path": "C:/Users/u/Desktop/op_wps_saved.xlsx"}, '{"ok": true}')
+    n = c.nudge(5, 60)
+    assert n and n.startswith(ev.NUDGE_PREFIX) and "op_wps_test2.xlsx" in n and "不能改用别的名字" in n, n
+    assert c.nudge(6, 60) is None                                  # 仍只补证一次
+    assert "逐字输入" in op.OPERATOR_CONFIG["system"]
+    assert "必须新建空白文档" in op.OPERATOR_CONFIG["system"]

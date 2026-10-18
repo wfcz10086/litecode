@@ -10,17 +10,15 @@
 """
 import sys
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 # 直接把 helpers 当顶层模块 import, 绕开 core.orchestrator.__init__ → dag → blackboard 链
-sys.path.insert(0, "/opt/litecode")                        # core._when_eval (call-time import)
-sys.path.insert(0, "/opt/litecode/core/orchestrator")      # helpers 当顶层
-try:
-    import helpers  # type: ignore  # noqa: E402
-except ImportError:
-    sys.path.insert(0, "/opt/litecode/litecodeext")
-    sys.path.insert(0, "/opt/litecode/litecodeext/core/orchestrator")
-    import helpers  # type: ignore  # noqa: E402
+# 路径按本文件位置算 (公开仓库克隆到任意目录也能跑; 原来写死 /opt/litecode)
+_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_ROOT))                              # core._when_eval (call-time import)
+sys.path.insert(0, str(_ROOT / "core" / "orchestrator"))   # helpers 当顶层
+import helpers  # type: ignore  # noqa: E402
 sub = helpers._substitute_step_placeholders
 
 

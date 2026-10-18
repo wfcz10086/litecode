@@ -571,6 +571,17 @@ class EvidenceCollector:
             return None
         self.nudged = True
         if self._operator():
+            missing = [t for t in self.op_targets if t not in self.op_target_seen]
+            if missing:
+                # 生产实测: 文件名少打一个字符后另存成别的名字, 通用补证提示不会让它回头改名
+                return (
+                    f"{NUDGE_PREFIX} 你准备结束, 但任务点名的文件没有被确认: {', '.join(missing)}。\n"
+                    "先用 windows_system list_dir 查看任务要求的那个目录, 逐字核对文件名 (包括数字和扩展名)。"
+                    "如果文件不在、名字不一致或存到了别处: 回到程序用「另存为」按任务给的原文件名、原位置重新保存 "
+                    "(遇到同名覆盖提示时, 目标就是任务点名的文件则确认覆盖), 不能改用别的名字代替; "
+                    "然后 inspect_file 回读这个点名文件核对内容。做不到就在总结里明确写'未验证'及原因。"
+                    "这是唯一一次补证机会, 之后无论如何都会结束并按实际证据判定。"
+                )
             return (
                 f"{NUDGE_PREFIX} 你准备结束, 但框架没有采集到能证明结论的客观证据: {why}。\n"
                 "结束前请补证: 改过文件的, 用 windows_system inspect_file (或 list_dir / run_powershell) "
