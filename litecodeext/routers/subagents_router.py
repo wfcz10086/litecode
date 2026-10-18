@@ -6,16 +6,18 @@
   POST /api/sessions/{sid}/subagents/{id}/send    给运行中的子代理发补充指令 {"message": "..."}
 
 子代理登记表在 litecode_server 进程, 本 router 只做 登录鉴权 (require_auth) + 会话归属校验
-(require_owner, 与 sessions_router 一致), 然后经 S.aproxy 转发到 gateway/subagents.py。
+(require_owner 语义与 sessions_router 一致; 通过结果按 (用户, sid) 缓存 60s, 会话文件 mtime 变即失效),
+然后经 S.aproxy 转发到 gateway/subagents.py。
 会话隔离在 server 侧按路径 sid 做: 别的会话的子代理 id 一律 404。
 """
+from pathlib import Path
 from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request
 
 from routers.auth_router import require_auth
 from routers.state import S
-from lib.owner import require_owner
+from lib.owner import require_owner_cached
 
 router = APIRouter()
 ORDER = 105  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
@@ -29,9 +31,29 @@ def _wui():
     return web_ui
 
 
+def _mt(p) -> tuple:
+    try:
+        st = Path(p).stat()
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return (0, -1)   # 不存在
+
+
+def _stamp(sid: str) -> tuple:
+    """会话存储指纹: web 缓存文件 + server 会话文件 + 墓碑文件的 mtime/size。
+    改写/删除/转移 owner 都会改动其中之一 → 归属缓存失效。只 stat, 不读内容。"""
+    w = _wui()
+    paths = getattr(w, "CFG", {}).get("paths", {}) if hasattr(w, "CFG") else {}
+    ws = Path(paths.get("workspace_base", "/tmp/litecode_workspace"))
+    srv = Path(paths.get("sessions_dir", str(ws / "sessions"))) / f"{sid}.json"
+    return (_mt(w._sf(sid)), _mt(srv), _mt(getattr(w, "_TOMBSTONE_FILE", "")))
+
+
 def _guard(sid: str, request: Request) -> None:
     require_auth(request)
-    require_owner(_wui().load_session(sid), request)
+    # [owner-cache 2026-10-18] 面板运行中每 3s 轮询, 不再每次 load_session 全量读盘:
+    # 通过结果按 (用户, sid) 缓存 60s, 会话文件/墓碑 mtime 变化即失效; 越权从不缓存。
+    require_owner_cached(sid, request, _wui().load_session, _stamp)
 
 
 def _p(sid: str, rid: str = "", tail: str = "") -> str:

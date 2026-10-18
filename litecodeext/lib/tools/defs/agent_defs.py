@@ -59,7 +59,8 @@ AGENT_DEFS = [
                 "Multiple spawn_agent calls can run the SAME task in different ways; pick the best result.\n"
                 "并行改代码自动隔离: 本次派发有 ≥2 个写类子代理 (coder/analyst/tester/shell/writer) 并行或按 DAG 并发, "
                 "且 workdir 是 git 仓库时, 每个写类子代理在独立 git 工作树 (分支 lc-agent/<id>) 里干活, 互不覆盖; "
-                "结束后自动提交并 merge --no-ff 回主工作区, 冲突则保留分支与工作树并列出冲突文件, "
+                "结束后自动提交并 merge --no-ff 回主工作区, 冲突时先自动解冲突 (工作树内反向合并+校验, 默认开), "
+                "解不了才保留分支与工作树并列出冲突文件与失败原因, "
                 "交你用 agent_worktree 处理。主工作区有未提交改动时不自动合并。\n"
                 "交付证据: 框架从子代理自己的工具调用里机器采集证据 (测试/构建/运行命令的退出码与通过失败数、"
                 "写入文件及是否回读、搜索/读取取证、工作树提交与合并状态), 结果开头标 [已验证] 或 [未验证: 原因], "
@@ -203,12 +204,14 @@ AGENT_DEFS = [
                 "处理子代理留下的隔离工作树 (spawn_agent 并行改代码时创建, 冲突/未合并时保留)。"
                 "action=list 列出待处理工作树 (顺带清理 24 小时前已合并/已丢弃的残留); "
                 "diff 看某个工作树相对基点的改动; merge 再次尝试 merge --no-ff 回主工作区 "
-                "(冲突则 abort 并列出冲突文件, 可手动解决后再 merge 或 discard); discard 删除工作树与分支。"
+                "(冲突则 abort 并列出冲突文件, 可手动解决后再 merge 或 discard); discard 删除工作树与分支; "
+                "resolve 对保留的冲突分支自动解冲突: 在工作树里反向合并主分支, 末尾追加类冲突两边保留, "
+                "其余派解冲突子代理, 校验 (无冲突标记/py 可编译/agent.worktree_verify_cmd) 通过才合并, 否则回退保留并说明原因。"
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "action": {"type": "string", "enum": ["list", "merge", "discard", "diff"],
+                    "action": {"type": "string", "enum": ["list", "merge", "discard", "diff", "resolve"],
                                "description": "操作"},
                     "id":     {"type": "string", "description": "工作树 id (spawn_agent 结果或 list 里的 [工作树 <id>]); list 不需要"},
                 },

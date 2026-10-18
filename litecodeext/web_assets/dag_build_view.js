@@ -161,6 +161,10 @@
       ' border-top:1px solid var(--bd,#e2e8f0); max-height:180px; overflow:hidden;';
     wrap.appendChild(artifacts);
 
+    /* [dag-wt 2026-10-18] 工作树小节 (dag_worktrees.js), job.worktrees 为空时隐藏 */
+    const wtSec = window.DAGWorktrees ? window.DAGWorktrees.create(jobId) : null;
+    if (wtSec) wrap.insertBefore(wtSec.el, artifacts);
+
     head.querySelector('.build-close').addEventListener('click', () => wrap.remove());
     stages.addEventListener('click', e => {
       const row = e.target.closest('.build-stage');
@@ -199,6 +203,7 @@
         _updateStageRow(row, a, _judgeStatus(a));
       });
       Object.values(existing).forEach(r => r.remove());
+      if (wtSec) wtSec.update(job);
     }
 
     function mountArtifacts(list) {
@@ -281,6 +286,10 @@
       'flex:0 0 auto; padding:12px 18px; background:var(--sf2,#f8fafc);' +
       ' border-bottom:1px solid var(--bd,#e2e8f0); display:none; max-height:200px; overflow:hidden;';
     rightCol.appendChild(artifactsBox);
+
+    /* [dag-wt 2026-10-18] 工作树小节: 分支 / 合并状态 / 冲突文件 + 查看差异 / 丢弃 */
+    const wtSec = window.DAGWorktrees ? window.DAGWorktrees.create(jobId) : null;
+    if (wtSec) rightCol.appendChild(wtSec.el);
 
     const logBox = document.createElement('pre');
     logBox.style.cssText =
@@ -388,6 +397,7 @@
         _updateStageRow(row, a, _judgeStatus(a));
       });
       Object.values(existing).forEach(r => r.remove());
+      if (wtSec) wtSec.update(job);
 
       /* 用户没手动 pin, 就用汇总替换 [启动中] 文案 */
       if (!logPinned) {

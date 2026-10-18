@@ -7,7 +7,8 @@
   2. 运行期间经 ContextVar 挂上 WorktreeCtx, subagent._run_subagent 执行工具前调
      rewrite_tool_args 把落在原仓库根下的路径映射到工作树, execute_shell 前置 cd 到工作树
   3. 结束后在工作树 add+commit, 再 (按仓库串行) `git merge --no-ff` 回主工作区;
-     成功则删工作树与分支, 冲突则 abort 并保留, 交主代理用 agent_worktree 工具处理。
+     成功则删工作树与分支, 冲突则 abort; agent.worktree_auto_resolve (默认开) 时交 subagent_resolve
+     在工作树里反向合并 + 确定性/子代理解冲突 + 校验后再合并, 失败才保留交主代理用 agent_worktree 处理。
 元数据落盘 <WORKSPACE>/.agent_worktrees/_meta/<id>.json, 供 agent_worktree list/merge/diff/discard。
 
 execute_shell: 默认 cwd 设为工作树中的 workdir (调用方给的 cwd 在主工作区内 → 映射到工作树对应子目录,
@@ -528,14 +529,27 @@ async def create_worktree(repo: Path, workdir: Path, agent_type: str, task: str 
     return ctx
 
 
+# 运行代码顺手生成的缓存 (目标仓库可能没 .gitignore): 不提交, 也不算"改了别的文件"
+JUNK_PATHSPEC = [":(exclude,glob)**/__pycache__/**", ":(exclude,glob)**/*.py[co]",
+                 ":(exclude,glob)**/.pytest_cache/**", ":(exclude,glob)**/.mypy_cache/**"]
+
+
+def is_junk(path: str) -> bool:
+    parts = path.replace("\\", "/").split("/")
+    return (any(p in ("__pycache__", ".pytest_cache", ".mypy_cache") for p in parts[:-1])
+            or path.endswith((".pyc", ".pyo")))
+
+
 def _commit_sync(ctx: WorktreeCtx, task: str) -> Optional[str]:
-    """在工作树里 add -A + commit; 无改动返回 None。"""
+    """在工作树里 add -A (排除缓存) + commit; 无改动返回 None。"""
     wt = ctx.wt_root
     if not wt.is_dir():
         return None
     if not _git(["status", "--porcelain"], wt).stdout.strip():
         return None
-    _git_ok(["add", "-A"], wt)
+    _git_ok(["add", "-A", "--", "."] + JUNK_PATHSPEC, wt)
+    if _git(["diff", "--cached", "--quiet"], wt).returncode == 0:
+        return None                                   # 只有缓存文件变了
     msg = f"lc-agent {ctx.wid}: {ctx.agent_type} {' '.join(task.split())[:60]}"
     _git_ok(_ident(wt) + ["commit", "-q", "--no-verify", "-m", msg], wt)
     meta = load_meta(ctx.wid) or {}
@@ -571,7 +585,8 @@ def _merge_sync(meta: dict) -> dict:
                              f"合并子代理 {meta['id']} ({meta.get('agent_type', '')})", meta["branch"]],
              repo, timeout=120)
     if r.returncode == 0:
-        meta.update(status="merged", merge_commit=_git(["rev-parse", "HEAD"], repo).stdout.strip())
+        meta.update(status="merged", merge_commit=_git(["rev-parse", "HEAD"], repo).stdout.strip(), note="")
+        meta.pop("auto_resolve_error", None)
         _remove_worktree(repo, meta["path"], meta["branch"])
         return meta
     conflicts = _git(["diff", "--name-only", "--diff-filter=U"], repo).stdout.split()
@@ -606,8 +621,22 @@ async def finalize_worktree(ctx: WorktreeCtx, task: str = "", merge: bool = True
         return meta
     async with _lock_for(ctx.repo_root):
         meta = await asyncio.to_thread(_merge_sync, meta)
+    if meta.get("status") == "conflict" and meta.get("conflicts"):
+        from .subagent_resolve import auto_resolve_enabled
+        if auto_resolve_enabled():          # 冲突自动解决 (工作树内反向合并, 失败回退为保留分支)
+            meta = await _auto_resolve(meta)
     _save_meta(meta)
     return meta
+
+
+async def _auto_resolve(meta: dict) -> dict:
+    from .subagent_resolve import auto_resolve
+    _save_meta(meta)
+    try:
+        return await auto_resolve(meta)
+    except Exception as e:                  # 兜底: 不让自动解冲突的异常吞掉"保留分支"结果
+        meta.update(status="conflict", note=f"合并冲突, 自动解决异常: {e}; 分支与工作树保留")
+        return meta
 
 
 _STATUS_CN = {"merged": "已合并", "conflict": "合并冲突", "pending_dirty": "未合并(主工作区有改动)",
@@ -619,8 +648,12 @@ def format_report(m: dict, short: bool = False) -> str:
     st = m.get("status", "?")
     head = f"[工作树 {m.get('id')}] {_STATUS_CN.get(st, st)}"
     if short:
+        if m.get("auto_resolved") and m.get("note"):
+            head += f" ({m['note']})"
         if st == "conflict":
             head += f" 冲突文件: {', '.join(m.get('conflicts') or [])}"
+            if m.get("auto_resolve_error"):
+                head += f" (自动解决失败: {m['auto_resolve_error'][:200]})"
         if st not in _DONE_STATUSES and m.get("branch"):
             head += f" (保留分支 {m['branch']}, 工作树 {m.get('path', '-')}; 用 agent_worktree diff/merge/discard 处理)"
         return head
@@ -671,8 +704,8 @@ async def agent_worktree_tool(args: dict) -> str:
         if not ms:
             return head + "没有待处理的子代理工作树。"
         return head + f"待处理工作树 {len(ms)} 个:\n" + "\n".join(format_report(m) for m in ms)
-    if action not in ("merge", "discard", "diff"):
-        return f"ERROR: 未知 action={action!r}, 可选 list / merge / discard / diff"
+    if action not in ("merge", "discard", "diff", "resolve"):
+        return f"ERROR: 未知 action={action!r}, 可选 list / merge / discard / diff / resolve"
     meta = load_meta(wid) if wid else None
     if not meta:
         return f"ERROR: 找不到工作树 id={wid!r} (先 agent_worktree list 看)"
@@ -703,5 +736,7 @@ async def agent_worktree_tool(args: dict) -> str:
                 await asyncio.to_thread(_commit_sync, ctx, "agent_worktree merge 前补提交")
                 meta = load_meta(wid) or meta
             meta = await asyncio.to_thread(_merge_sync, meta)
+    if action == "resolve" and meta.get("status") == "conflict":
+        meta = await _auto_resolve(meta)    # 手动触发不看 worktree_auto_resolve 开关
     _save_meta(meta)
     return format_report(meta)

@@ -19,7 +19,8 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 2026-10-17: windows_system 加 inspect_file 回读核对; windows_desktop 描述加回读要求。
 # 2026-10-17: spawn_agent 加 operator 角色 + alias 字段 (顶层与 parallel/pipeline/dag 每项)。
 # 2026-10-17: 命令行开关边界。
-TOOL_DEFS_SHA256 = "64ff3c78a2b14427122f1ca1b4d1ba8042621ba74b018913cf49b38cff2e6e8f"   # 2026-10-18: execute_shell 加可选 cwd (子代理工作树默认 cwd)
+# 2026-10-18: execute_shell 加可选 cwd (子代理工作树默认 cwd)
+TOOL_DEFS_SHA256 = "84bc299c11f00cbbc3eecac2867043c0e6faab3aa6a9085ab91c87dac5531ede"   # 2026-10-18: agent_worktree 加 resolve + spawn_agent 描述 (冲突自动解决)
 
 READ_ONLY_21 = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",
