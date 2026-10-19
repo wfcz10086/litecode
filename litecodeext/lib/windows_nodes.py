@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import subprocess
 import time
 from urllib.parse import urlsplit
 import uuid
@@ -26,6 +27,16 @@ class AuthError(ValueError):
 
 # 设备心跳落盘节流: 状态不变时距上次写入不足这么多秒就不刷新 last_seen (离线判定阈值 90 秒)
 HEARTBEAT_WRITE_INTERVAL = 15
+# [2026-10-19] 等待任务期间节点多久没心跳就判定已离线、提前结束等待。
+# 不能取 20 秒: last_seen 落盘节流 15 秒 + 节点任务心跳间隔 20 秒, 正常执行中的节点最坏会 ~35 秒不刷新。
+NODE_GONE_SECONDS = 45
+NODE_GONE_CHECK_INTERVAL = 2
+
+
+class NodeGoneError(RuntimeError):
+    """等待任务时节点心跳中断 (离线/重启)。调用方不得自动重试, 应提示等节点回连后再观察。"""
+
+
 # 截图上传上限 (原始字节); 代理端超过 windows_node_agent.IMAGE_SOFT_LIMIT 会先转 JPEG 再上报
 IMAGE_LIMIT = 12 * 1024 * 1024
 
@@ -101,7 +112,7 @@ _SHA_HEX = ("function LcSha256([byte[]]$d){$x=[Security.Cryptography.SHA256]::Cr
 _GET_BYTES = "function LcGetBytes($u,$hd){$r=Invoke-WebRequest $u -Headers $hd -UseBasicParsing; ,[byte[]]$r.RawContentStream.ToArray()}; "
 
 
-def install_body(base_url, code, key_fingerprint=''):
+def install_body(base_url, code, key_fingerprint='', ssh_public_key=''):
     """先下载引导脚本并核对安装命令里的 sha256, 一致才执行; 公钥指纹交给引导脚本校验签名公钥。"""
     from lib.windows_node_signing import bootstrap_sha256
     body = ("$ErrorActionPreference='Stop'; $s='" + base_url + "'; $h='" + bootstrap_sha256() + "'; " + _SHA_HEX + _GET_BYTES +
@@ -112,6 +123,10 @@ def install_body(base_url, code, key_fingerprint=''):
             "& ([scriptblock]::Create($b)) -Server $s -Code '" + code + "'")
     if key_fingerprint:
         body += " -KeyFingerprint '" + key_fingerprint + "'"
+    if ssh_public_key:
+        if not re.fullmatch(r'ssh-ed25519 [A-Za-z0-9+/=]+ litecode-node-[a-f0-9]{32}', ssh_public_key):
+            raise ValueError('节点 SSH 公钥格式错误')
+        body += " -SshPublicKey '" + ssh_public_key + "'"
     return body
 
 
@@ -132,6 +147,10 @@ def _write(path, value):
         except OSError:
             pass
         raise
+
+
+# list() 对外 (Web API / windows_nodes 工具) 不输出的字段: 凭据摘要、能力签名、私钥路径。
+_PRIVATE_FIELDS = ('code_hash', 'token_hash', 'expires', 'capabilities_sig', 'ssh_key_file')
 
 
 class Nodes:
@@ -198,7 +217,9 @@ class Nodes:
             if job is not None:
                 yield file, job
 
-    def create(self, alias, base_url, ssh_aliases=()):
+    def create(self, alias, base_url, ssh_aliases=(), *, enable_shell=False):
+        if not isinstance(enable_shell, bool):
+            raise ValueError('enable_shell 必须为布尔值')
         if not isinstance(alias, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,50}', alias):
             raise ValueError('节点别名使用1到50位英文、数字、下划线或连字符')
         base_url = server_url(base_url)
@@ -206,13 +227,26 @@ class Nodes:
         with self.locked() as data:
             if alias in data or alias in ssh_aliases:
                 raise ValueError('节点别名已存在，不覆盖已有机器')
-            data[alias] = {'id': uuid.uuid4().hex, 'alias': alias, 'state': 'awaiting_join',
+            node_id = uuid.uuid4().hex
+            key_file = self.root / 'ssh' / node_id
+            key_file.parent.mkdir(mode=0o700, exist_ok=True)
+            subprocess.run(['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-C', 'litecode-node-' + node_id,
+                            '-f', str(key_file)], check=True, capture_output=True, timeout=15)
+            os.chmod(key_file, 0o600)
+            ssh_public = key_file.with_suffix('.pub').read_text().strip()
+            data[alias] = {'id': node_id, 'alias': alias, 'state': 'awaiting_join',
                            'code_hash': _digest(code), 'expires': time.time() + 600, 'last_seen': 0,
                            'server_url': base_url, 'encrypted_transport': base_url.startswith('https://'),
-                           'capabilities': {'shell': False}}
-            node_id = data[alias]['id']
-        command = _command(install_body(base_url, code, self.key_fingerprint()))
-        return {'alias': alias, 'id': node_id, 'expires_in': 600, 'command': command, 'state': 'awaiting_join'}
+                           'capabilities': {'shell': False}, 'ssh_key_file': str(key_file)}
+            # 仅管理入口可在生成接入命令时明确授权；模型工具沿用默认关闭。
+            # 新节点使用当前有效能力密钥签名，不改变已有节点的授权状态。
+            if enable_shell:
+                capability_key = self._capability_key() or self._new_capability_key()
+                data[alias]['capabilities'] = {'shell': True}
+                data[alias]['capabilities_sig'] = self._capability_sig(capability_key, data[alias], True)
+        command = _command(install_body(base_url, code, self.key_fingerprint(), ssh_public))
+        return {'alias': alias, 'id': node_id, 'expires_in': 600, 'command': command, 'state': 'awaiting_join',
+                'capabilities': {'shell': enable_shell}}
 
     def key_fingerprint(self):
         """签名公钥指纹 (首次调用生成密钥); 控制端缺少 cryptography 时返回空串, 安装命令只带脚本 sha256。"""
@@ -278,7 +312,10 @@ class Nodes:
             current = component_versions()
             key = self._capability_key()
             for node in data.values():
-                item = {k: v for k, v in node.items() if k not in ('code_hash', 'token_hash', 'expires', 'capabilities_sig')}
+                # [2026-10-19] 以前 list() 原样带出 ssh_key_file (节点 SSH 私钥在 .secrets/ 下的绝对路径),
+                # 经 /api/windows/nodes 与 windows_nodes 工具输出直接交给模型。私钥路径/任何 .secrets 路径一律不外露。
+                item = {k: v for k, v in node.items() if k not in _PRIVATE_FIELDS
+                        and not (isinstance(v, str) and '/.secrets/' in v.replace('\\', '/'))}
                 item['capabilities'] = self._verified_capabilities(node, key)
                 if item['state'] == 'online' and time.time() - item['last_seen'] > 90:
                     item['state'] = 'offline'
@@ -379,6 +416,7 @@ class Nodes:
                     node.update(state='revoked')
                     node.pop('token_hash', None)
                     node.pop('code_hash', None)
+                    self._remove_ssh_key(node_id)
                     self._remove_jobs(node_id)
                     if node.get('last_task', {}).get('state') in ('queued', 'running'):
                         _task(node, node['last_task'], 'cancelled')
@@ -395,6 +433,7 @@ class Nodes:
             if node['state'] not in ('revoked', 'uninstalled') and not expired:
                 raise ValueError('请先撤销接入或完全卸载，再删除记录')
             self._remove_jobs(node_id)
+            self._remove_ssh_key(node_id)
             del data[alias]
             return True
 
@@ -403,6 +442,12 @@ class Nodes:
         for file, job in self._jobs():
             if job['node_id'] == node_id:
                 file.unlink(missing_ok=True)
+
+    def _remove_ssh_key(self, node_id):
+        # 从固定目录推导, 不信任可被编辑的节点记录中的 key_file。
+        if re.fullmatch(r'[a-f0-9]{32}', node_id):
+            for suffix in ('', '.pub'):
+                (self.root / 'ssh' / (node_id + suffix)).unlink(missing_ok=True)
 
     def uninstall(self, node_id):
         with self.locked() as data:
@@ -482,6 +527,7 @@ class Nodes:
                 raise ValueError('设备认证失败')
             self._remove_jobs(node_id)
             # 保留结果供 Web 核对，移除凭据、设备身份和截图引用。
+            self._remove_ssh_key(node_id)
             for key in ('token_hash', 'code_hash', 'computer', 'user', 'screenshot', 'last_task'):
                 node.pop(key, None)
             node.update(state='uninstalled', desktop_ok=False, error='', uninstalled_at=time.time())
@@ -587,10 +633,19 @@ class Nodes:
                             observed_at=time.time(), screenshot=result.get('image', node.get('screenshot', '')))
             _task(node, job, 'returned' if result.get('ok') is True else 'failed')
 
+    def _node_silence(self, node_id):
+        """返回 (别名, 距上次心跳秒数); 节点不存在返回 (None, None)。只读, 不改 nodes.json。"""
+        with self.locked() as data:
+            node = next((n for n in data.values() if n.get('id') == node_id), None)
+            if node is None:
+                return None, None
+            return node.get('alias', ''), time.time() - float(node.get('last_seen') or 0)
+
     def wait(self, job_id, timeout):
         path = self.root / ('job-' + job_id + '.json')
         try:
             deadline = time.monotonic() + timeout
+            next_check = time.monotonic() + NODE_GONE_CHECK_INTERVAL
             while time.monotonic() < deadline:
                 job = self._load_job(path)
                 if job is not None:
@@ -598,6 +653,19 @@ class Nodes:
                         return job['result']
                 else:
                     raise RuntimeError('任务已取消或节点已断开授权，未确认动作是否完成')
+                # [2026-10-19] 以前只轮询任务文件不看心跳: 节点在 90 秒"在线"窗口内掉线/重启,
+                # 截图、inspect_file、下载分块要白等满 timeout, 幂等动作再重试 3 次 (≈360 秒空转)。
+                # 节点执行任务时有 20 秒一次的任务心跳 (落盘节流 15 秒), 超过 NODE_GONE_SECONDS 没心跳即判定已走。
+                if time.monotonic() >= next_check:
+                    next_check = time.monotonic() + NODE_GONE_CHECK_INTERVAL
+                    alias, silence = self._node_silence(job['node_id'])
+                    if silence is not None and silence > NODE_GONE_SECONDS:
+                        with self.locked() as data:
+                            for node in data.values():
+                                if node.get('last_task', {}).get('id') == job_id:
+                                    _task(node, node['last_task'], 'unconfirmed')
+                        raise NodeGoneError(f'节点 {alias} 已 {int(silence)} 秒没心跳, 可能离线/重启中; '
+                                            '任务未返回, 未确认动作是否完成; 请等节点重新在线后先截图观察, 勿立即重复发送')
                 time.sleep(0.25)
             with self.locked() as data:
                 for node in data.values():

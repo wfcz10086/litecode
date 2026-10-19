@@ -126,17 +126,32 @@ async def _run_comfy(prompt: str, cfg: dict, defaults: dict) -> tuple[bytes, str
     _ = defaults  # 默认参数已在 workflow 里定义
     timeout = float(cfg.get("timeout_sec") or 180)
     poll = float(cfg.get("poll_interval_sec") or 2)
-    async with httpx.AsyncClient(timeout=timeout) as c:
-        r = await c.post(f"{endpoint}/prompt", json={"prompt": wf})
+    # [2026-10-19] 原来 AsyncClient(timeout=180) 与轮询预算同值: 一次挂住的 GET /history 就能吃满 180s,
+    # 总耗时翻倍; 非 200 (如 404 未知 prompt_id) 也一直轮询到截止。现在: 单请求 ≤ req_timeout,
+    # 总截止从提交时算起严格执行; 4xx 立即失败, 只给 404 留提交后短暂宽限 (队列登记有延迟)。
+    req_timeout = float(cfg.get("request_timeout_sec") or 10)
+    grace_404 = float(cfg.get("not_found_grace_sec") or 10)
+    t_start = time.time()
+    deadline = t_start + timeout
+
+    def _left(cap: float) -> float:
+        return max(0.5, min(cap, deadline - time.time()))
+
+    async with httpx.AsyncClient(timeout=req_timeout) as c:
+        r = await c.post(f"{endpoint}/prompt", json={"prompt": wf}, timeout=_left(max(req_timeout, 30)))
         r.raise_for_status()
         pid = r.json().get("prompt_id")
         if not pid:
             raise RuntimeError("comfyui: no prompt_id in POST /prompt response")
+        submitted = time.time()
         # poll history
-        deadline = time.time() + timeout
+        last_err = ""
         while time.time() < deadline:
-            h = await c.get(f"{endpoint}/history/{pid}")
-            if h.status_code == 200:
+            try:
+                h = await c.get(f"{endpoint}/history/{pid}", timeout=_left(req_timeout))
+            except httpx.TimeoutException as e:   # 单次超时不致命, 截止前继续轮询
+                h, last_err = None, f"GET /history 超时: {e!r}"
+            if h is not None and h.status_code == 200:
                 hist = h.json().get(pid) or {}
                 outputs = hist.get("outputs") or {}
                 for _, node_out in outputs.items():
@@ -146,12 +161,18 @@ async def _run_comfy(prompt: str, cfg: dict, defaults: dict) -> tuple[bytes, str
                         params = {"filename": info["filename"],
                                   "subfolder": info.get("subfolder", ""),
                                   "type": info.get("type", "output")}
-                        img_r = await c.get(f"{endpoint}/view", params=params)
+                        img_r = await c.get(f"{endpoint}/view", params=params,
+                                            timeout=_left(max(req_timeout, 30)))
                         img_r.raise_for_status()
                         return img_r.content, "png"
+            elif h is not None:
+                code = h.status_code
+                last_err = f"GET /history/{pid} → HTTP {code}"
+                if 400 <= code < 500 and not (code == 404 and time.time() - submitted < grace_404):
+                    raise RuntimeError(f"comfyui: {last_err}: {h.text[:200]}")
             import asyncio
-            await asyncio.sleep(poll)
-    raise TimeoutError(f"comfyui prompt {pid} timeout")
+            await asyncio.sleep(min(poll, max(0.0, deadline - time.time())))
+    raise TimeoutError(f"comfyui prompt {pid} timeout ({timeout:.0f}s)" + (f"; 最后错误: {last_err}" if last_err else ""))
 
 
 _DISPATCH = {

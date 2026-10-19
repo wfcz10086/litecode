@@ -2,16 +2,61 @@
 from __future__ import annotations
 
 import asyncio
+import ntpath
 import os
 import re
+import errno
 import shlex
+import stat as _stat
 import time
+import uuid
 from typing import Any
 
 from . import register
 from .ssh_hosts import resolve_ssh_args
 
 _DEFAULT_TIMEOUT = 60
+# [2026-10-19] 主机刚重启时 SSH 握手报 "Error reading SSH protocol banner"/拒连, 原样抛给模型后
+# 它盲 sleep 60/75/90/120/150s 反复试。连接阶段内置短重试 (只重试连接, 命令开始后绝不重跑)。
+_CONNECT_RETRY_BUDGET = 75
+_CONNECT_BACKOFF = (3, 6, 10, 15, 20)
+
+
+class HostNotReady(Exception):
+    """连接/握手阶段失败且重试预算用尽 (主机多半在重启)。"""
+
+
+def _stall_window(timeout: float) -> float:
+    """[2026-10-19] 无输出卡死窗口: wsl.exe docker pull -q 900s 一个字节都没吐, rc=124 白等 15 分钟。
+    timeout ≤120 的短命令窗口 ≥ timeout, 等价不检测, 安静的短命令不受影响。"""
+    return max(120.0, timeout / 3)
+
+
+def _clip(s: str, n: int) -> str:
+    """[2026-10-19] 远程输出只留头部时, 最后的报错 (往往在末尾) 被截掉; 改为保头+尾。"""
+    if len(s) <= n:
+        return s
+    head = n * 2 // 3
+    tail = n - head
+    return s[:head] + f"\n...[truncated {len(s) - n} chars]...\n" + s[-tail:]
+
+
+def _is_not_ready(ex: BaseException) -> bool:
+    """连接/握手阶段的'还没起来'类错误 (可重试); 认证失败/DNS 错误不算。"""
+    name = type(ex).__name__
+    if 'Authentication' in name or 'gaierror' in name:
+        return False
+    if name == 'NoValidConnectionsError':
+        return True
+    if isinstance(ex, (ConnectionRefusedError, ConnectionResetError, ConnectionAbortedError,
+                       EOFError, TimeoutError)):
+        return True
+    if isinstance(ex, OSError) and ex.errno in (errno.EHOSTUNREACH, errno.ENETUNREACH, errno.ECONNREFUSED,
+                                                errno.ECONNRESET):
+        return True
+    msg = str(ex)
+    return any(k in msg for k in ('Error reading SSH protocol banner', 'Connection reset',
+                                  'Connection refused', 'Unable to connect'))
 
 # 检测命令里是否含后台进程 (nohup ... 或 ... &)
 _BG_RE = re.compile(r'(?:(?:^|[;|&{\n]\s*)nohup\s|&\s*(?:#[^\n]*)?\s*$)')
@@ -46,54 +91,23 @@ def _open_jump(jump: dict, host: str, port: int):
 
 
 def _run_ssh(host: str, port: int, user: str, password: str, cmd: str, timeout: int,
-             key_file: str = "", jump: dict | None = None) -> tuple[int, str, str]:
-    import paramiko
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    jc = None
+             key_file: str = "", jump: dict | None = None, stdin_data: bytes | None = None,
+             powershell_script: bytes | None = None) -> tuple[int, str, str]:
+    conn = {"host": host, "port": port, "user": user, "password": password, "key_file": key_file, "jump": jump}
+    t0 = time.monotonic()
+    client, jc = _connect(conn)
     try:
-        sock = None
-        if jump:
-            jc, sock = _open_jump(jump, host, port)
-        client.connect(hostname=host, port=port, username=user, **_auth_kwargs(password, key_file),
-                       sock=sock, timeout=15, banner_timeout=15, auth_timeout=15,
-                       allow_agent=False, look_for_keys=False)
-
-        actual_cmd = _wrap_bg(cmd)
-        stdin, stdout, stderr = client.exec_command(actual_cmd, timeout=timeout, get_pty=False)
-
-        # channel 级别设超时, 防止 recv_exit_status 无限阻塞
-        chan = stdout.channel
-        chan.settimeout(timeout)
-
-        # 轮询读取输出 + 等待 exit status, 避免先 read() 再 recv_exit_status() 的死锁
-        out_chunks: list[bytes] = []
-        err_chunks: list[bytes] = []
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if chan.exit_status_ready():
-                break
-            if chan.recv_ready():
-                data = chan.recv(8192)
-                if data:
-                    out_chunks.append(data)
-            if chan.recv_stderr_ready():
-                data = chan.recv_stderr(8192)
-                if data:
-                    err_chunks.append(data)
-            if not chan.recv_ready() and not chan.recv_stderr_ready():
-                time.sleep(0.05)
-
-        # 排干剩余输出
-        while chan.recv_ready():
-            out_chunks.append(chan.recv(8192))
-        while chan.recv_stderr_ready():
-            err_chunks.append(chan.recv_stderr(8192))
-
-        rc = chan.recv_exit_status() if chan.exit_status_ready() else 0
-        out = b"".join(out_chunks).decode("utf-8", errors="replace")
-        err = b"".join(err_chunks).decode("utf-8", errors="replace")
-        return rc, out, err
+        # [2026-10-19] 跳板机握手 + 连接重试可吃掉 45~75s+, 之后命令仍按完整 timeout 跑, 外层 asyncio
+        # deadline 先到: 调用方报"超时/结果未知", 工作线程却还在远端执行。命令预算从连接前起算,
+        # 至少给外层留 15s 收尾; 连接已耗尽预算就不再执行命令。
+        left = _hard_deadline(timeout) - 15 - (time.monotonic() - t0)
+        if left < 1:
+            raise HostNotReady(f"连接 {host}:{port} 耗时 {int(time.monotonic() - t0)}s, 已用尽 ssh_exec 总预算; "
+                               "命令未执行。稍后重试或先确认主机/跳板状态。")
+        timeout = int(min(timeout, left))
+        if powershell_script is not None:
+            return _run_powershell_file(client, powershell_script, timeout)
+        return _read_ssh_command(client, cmd, timeout, stdin_data)
     finally:
         for c in (client, jc):
             try:
@@ -103,17 +117,156 @@ def _run_ssh(host: str, port: int, user: str, password: str, cmd: str, timeout: 
                 pass
 
 
+def _read_ssh_command(client, cmd: str, timeout: float, stdin_data: bytes | None = None) -> tuple[int, str, str]:
+    actual_cmd = _wrap_bg(cmd)
+    stdin, stdout, stderr = client.exec_command(actual_cmd, timeout=timeout, get_pty=False)
+
+    # channel 级别设超时, 防止 recv_exit_status 无限阻塞
+    chan = stdout.channel
+    chan.settimeout(timeout)
+    start = time.monotonic()
+    deadline = start + timeout
+
+    if stdin_data is None:
+        # [2026-10-19] 不关 stdin 时 cat / read / python REPL / 交互提示会一直等输入直到超时。
+        try:
+            chan.shutdown_write()
+        except Exception:
+            pass
+    else:
+        # WSL 引导先完整读取 ASCII stdin，随后才执行原始 Bash 脚本。
+        # 代码不拼进 Windows 命令行，关闭写侧让 ReadToEnd 收到 EOF。
+        try:
+            stdin.write(stdin_data)
+            stdin.flush()
+            stdin.close()
+        except TimeoutError:
+            chan.close()
+            return 124, '', 'SSH command input timed out; remote completion is unknown. Check the remote process before retrying.'
+
+    # 轮询读取输出 + 等待 exit status, 避免先 read() 再 recv_exit_status() 的死锁
+    out_chunks: list[bytes] = []
+    err_chunks: list[bytes] = []
+    stall = _stall_window(timeout)
+    last_data = start
+    stalled = False
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        if now - last_data >= stall:
+            stalled = True
+            break
+        if chan.exit_status_ready():
+            break
+        if chan.recv_ready():
+            data = chan.recv(8192)
+            if data:
+                out_chunks.append(data)
+                last_data = now
+        if chan.recv_stderr_ready():
+            data = chan.recv_stderr(8192)
+            if data:
+                err_chunks.append(data)
+                last_data = now
+        if not chan.recv_ready() and not chan.recv_stderr_ready():
+            time.sleep(0.05)
+
+    # 排干剩余输出
+    while chan.recv_ready():
+        out_chunks.append(chan.recv(8192))
+    while chan.recv_stderr_ready():
+        err_chunks.append(chan.recv_stderr(8192))
+
+    completed = chan.exit_status_ready()
+    rc = chan.recv_exit_status() if completed else 124
+    out = b"".join(out_chunks).decode("utf-8", errors="replace")
+    err = b"".join(err_chunks).decode("utf-8", errors="replace")
+    if not completed and stalled:
+        chan.close()
+        err += (f"\nSSH command produced no output for {int(stall)}s (stalled); stopped waiting early, "
+                "remote completion is unknown (the process may still be running). For long quiet jobs "
+                "(docker pull / build / big downloads) run in background: "
+                "nohup <cmd> > /tmp/job.log 2>&1 & — then poll the log with tail/ps instead of waiting.\n")
+    elif not completed:
+        chan.close()
+        err += (f"\nSSH command timed out after {timeout}s; remote completion is unknown. "
+                "Check the remote process state before retrying.\n")
+    return rc, out, err
+
+
+def _run_powershell_file(client, script: bytes, timeout: int) -> tuple[int, str, str]:
+    """同一连接探测 Windows 临时目录并独占上传；只删除本次创建的脚本。"""
+    from lib.windows_ssh import powershell_command, powershell_file_command
+
+    deadline = time.monotonic() + timeout
+
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError('PowerShell file delivery deadline exceeded')
+        return value
+
+    probe = powershell_command('[Console]::Out.Write([IO.Path]::GetTempPath())')
+    # [2026-10-19] 原 10s 上限: 冷启动/繁忙 VM 上 powershell.exe 启动就要 10s+, 短脚本能跑而长脚本必挂在探测。
+    rc, output, error = _read_ssh_command(client, probe, min(30, remaining()))
+    if rc != 0:
+        return rc, '', 'Windows temporary directory lookup failed.\n' + error
+    temp = output.strip()
+    if not ntpath.isabs(temp) or any(c in temp for c in '\x00\r\n'):
+        raise ValueError('Windows SSH returned an invalid temporary directory')
+    path = ntpath.join(temp, 'LiteCodeSSH-' + uuid.uuid4().hex + '.ps1')
+    command = powershell_file_command(path)
+    # Windows OpenSSH SFTP 接受 C:/... 绝对路径；父目录来自目标机，不使用 Linux mkdir。
+    sftp_path = path.replace('\\', '/')
+    sftp = client.open_sftp()
+    created = False
+    cleanup_error = ''
+    try:
+        sftp.get_channel().settimeout(min(10, remaining()))
+        handle = sftp.open(sftp_path, 'wx')
+        created = True
+        with handle:
+            handle.write(script)
+            handle.flush()
+        result = _read_ssh_command(client, command, remaining())
+    except TimeoutError:
+        result = (124, '', 'PowerShell script delivery/execution timed out; remote completion is unknown. '
+                           'Check the remote process before retrying.')
+    finally:
+        if created:
+            try:
+                sftp.get_channel().settimeout(3)
+                sftp.remove(sftp_path)
+            except Exception as exc:
+                cleanup_error = (f'\nTemporary PowerShell script cleanup was not confirmed: {path} '
+                                 f'({type(exc).__name__}).')
+        _close(sftp)
+    rc, output, error = result
+    return rc, output, error + cleanup_error
+
+
+def _hard_deadline(timeout: float) -> float:
+    """_ssh 外层 asyncio 总预算; _run_ssh 按同一数字从连接前倒算命令可用时间。"""
+    return timeout + 10 + _CONNECT_RETRY_BUDGET + 60
+
+
 async def _ssh(host: str, port: int, user: str, password: str, cmd: str, timeout: int,
-               key_file: str = "", jump: dict | None = None) -> tuple[int, str, str]:
+               key_file: str = "", jump: dict | None = None, stdin_data: bytes | None = None,
+               powershell_script: bytes | None = None) -> tuple[int, str, str]:
     loop = asyncio.get_event_loop()
-    # asyncio 层硬性 deadline, 防止 executor 线程永久阻塞
+    # asyncio 层硬性 deadline, 防止 executor 线程永久阻塞 (含连接阶段重试预算 + 首末两次连接各 30s)
+    hard = _hard_deadline(timeout)
     try:
         return await asyncio.wait_for(
-            loop.run_in_executor(None, _run_ssh, host, port, user, password, cmd, timeout, key_file, jump),
-            timeout=timeout + 10,
+            loop.run_in_executor(None, _run_ssh, host, port, user, password, cmd, timeout, key_file, jump, stdin_data,
+                                 powershell_script),
+            timeout=hard,
         )
     except asyncio.TimeoutError:
-        raise TimeoutError(f"ssh_exec asyncio deadline: {timeout + 10}s exceeded")
+        cleanup = ' Temporary script cleanup may still be pending.' if powershell_script is not None else ''
+        raise TimeoutError(f"ssh_exec asyncio deadline: {hard}s exceeded; remote completion is unknown. "
+                           "Check the remote process before retrying." + cleanup)
 
 
 @register("ssh_exec")
@@ -123,16 +276,43 @@ async def h_ssh_exec(sid: str, args: dict) -> tuple[str, Any]:
     timeout = int(args.get("timeout") or _DEFAULT_TIMEOUT)
     if not conn or not cmd:
         return f"ERROR: ssh_exec {err or '需要 host + cmd'}", None
+    shell = args.get('shell', 'auto')
+    if shell not in ('auto', 'powershell', 'wsl'):
+        return 'ERROR: ssh_exec shell 只支持 auto / powershell / wsl', None
+    extra = {}
+    if shell == 'wsl':
+        from lib.windows_ssh import wsl_command
+        try:
+            cmd, extra['stdin_data'] = wsl_command(cmd, args.get('wsl_distro'), args.get('wsl_user', ''),
+                                                       timeout=timeout)
+        except ValueError as ex:
+            return 'ERROR: ssh_exec ' + str(ex), None
+    if shell == 'powershell':
+        # Windows OpenSSH 的默认 shell 可能是 cmd 或 PowerShell。直接把脚本拼进
+        # -Command 会被外层再次展开 $, 引号及换行；在工具内编码，模型只需提供原始脚本。
+        from lib.windows_ssh import POWERSHELL_COMMAND_LIMIT, powershell_command, powershell_script
+        script = powershell_script(cmd)
+        cmd = powershell_command(cmd)
+        if len(cmd) > POWERSHELL_COMMAND_LIMIT:
+            extra['powershell_script'] = script.encode('utf-8-sig')
+            cmd = ''  # 连接后上传并生成短引导，不把长脚本送入默认 cmd.exe。
     try:
         rc, out, e = await _ssh(conn["host"], conn["port"], conn["user"], conn["password"], cmd, timeout,
-                                conn["key_file"], conn["jump"])
+                                conn["key_file"], conn["jump"], **extra)
         head = f"[ssh {conn['user']}@{conn['host']}:{conn['port']}] rc={rc}"
         body = ""
         if out:
-            body += f"\n--- stdout ---\n{out[:4000]}" + ("\n...(truncated)" if len(out) > 4000 else "")
+            body += f"\n--- stdout ---\n{_clip(out, 4000)}"
         if e:
-            body += f"\n--- stderr ---\n{e[:2000]}" + ("\n...(truncated)" if len(e) > 2000 else "")
+            body += f"\n--- stderr ---\n{_clip(e, 2000)}"
+        if rc != 0 and shell in ('powershell', 'wsl') and 'NativeCommandError' in (e or ''):
+            # [2026-10-19] Windows PowerShell 5.1 + ErrorActionPreference=Stop 下 `git ... 2>&1` 写 stderr
+            # 就被当成 NativeCommandError 终止, 模型以为 git 本身失败。只在出错路径给提示, 不改全局行为。
+            body += ("\n[hint] 原生命令写 stderr 被 PowerShell 当成错误; "
+                     "脚本里局部 $ErrorActionPreference='Continue' 再调 git 之类")
         return head + (body or "\n(no output)"), None
+    except HostNotReady as ex:
+        return f"ERROR: {ex}", None
     except Exception as ex:
         return f"ERROR: ssh_exec {type(ex).__name__}: {ex}", None
 
@@ -159,7 +339,30 @@ def _conn(args: dict) -> tuple[dict | None, str]:
 
 
 def _connect(conn: dict):
-    """按 conn 连上目标 (可经跳板), 返回 (client, jump_client)。用完调 _close。"""
+    """按 conn 连上目标 (可经跳板), 返回 (client, jump_client)。用完调 _close。
+    握手/拒连类错误在 _CONNECT_RETRY_BUDGET 内退避重试, 用尽抛 HostNotReady。"""
+    t0 = None   # 首次失败才计时, 成功路径不碰 monotonic
+    attempt = 0
+    while True:
+        try:
+            return _connect_once(conn)
+        except Exception as ex:
+            if not _is_not_ready(ex):
+                raise
+            now = time.monotonic()
+            t0 = now if t0 is None else t0
+            elapsed = now - t0
+            wait = _CONNECT_BACKOFF[min(attempt, len(_CONNECT_BACKOFF) - 1)]
+            attempt += 1
+            if elapsed + wait > _CONNECT_RETRY_BUDGET:
+                raise HostNotReady(
+                    f"主机 {conn['host']}:{conn['port']} 还没就绪 (SSH 握手失败, 可能在重启中): "
+                    f"{type(ex).__name__}: {ex}。已在 {int(elapsed)}s 内自动重试 {attempt} 次; "
+                    "别盲目长时间 sleep, 稍后再试一次或先确认主机状态。") from ex
+            time.sleep(wait)
+
+
+def _connect_once(conn: dict):
     import paramiko
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -185,17 +388,37 @@ def _close(*clients) -> None:
             pass
 
 
+def _sftp_replace(sftp, path: str, content, backup: bool) -> None:
+    """[2026-10-19] rename 备份后新建的文件是默认 0644, 丢了 x 位/属主 → ./deploy.sh Permission denied。
+    写前记下原 st_mode/uid/gid, 写完恢复 (chown 非 root 常失败, 忽略)。"""
+    try:
+        st = sftp.stat(path)
+    except Exception:
+        st = None
+    if backup:
+        try:
+            sftp.rename(path, path + ".bak")
+        except Exception:
+            pass
+    with sftp.open(path, "w") as f:
+        f.write(content)
+    if st is not None and st.st_mode is not None:
+        try:
+            sftp.chmod(path, _stat.S_IMODE(st.st_mode))
+        except Exception:
+            pass
+        if st.st_uid is not None and st.st_gid is not None:
+            try:
+                sftp.chown(path, st.st_uid, st.st_gid)
+            except Exception:
+                pass
+
+
 def _sftp_write(conn: dict, path: str, content: str, backup: bool) -> str:
     client, jc = _connect(conn)
     try:
         sftp = client.open_sftp()
-        if backup:
-            try:
-                sftp.rename(path, path + ".bak")
-            except Exception:
-                pass
-        with sftp.open(path, "w") as f:
-            f.write(content)
+        _sftp_replace(sftp, path, content, backup)
         size = len(content.encode())
         sftp.close()
         return f"OK: wrote {size} bytes → {path}" + (f" (backup: {path}.bak)" if backup else "")
@@ -208,7 +431,9 @@ def _tag(conn: dict) -> str:
 
 
 async def _in_thread(fn, timeout: int):
-    return await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, fn), timeout=timeout)
+    # 外层 deadline 留出 _connect 握手重试预算, 否则重试没跑完就被 wait_for 截断
+    return await asyncio.wait_for(asyncio.get_event_loop().run_in_executor(None, fn),
+                                  timeout=timeout + _CONNECT_RETRY_BUDGET + 60)
 
 
 @register("ssh_write_file")
@@ -239,13 +464,7 @@ async def h_ssh_sync_files(sid: str, args: dict) -> tuple[str, Any]:
             sftp = client.open_sftp()
             for path, content in files.items():
                 try:
-                    if backup:
-                        try:
-                            sftp.rename(path, path + ".bak")
-                        except Exception:
-                            pass
-                    with sftp.open(path, "w") as f:
-                        f.write(content)
+                    _sftp_replace(sftp, path, content, backup)
                     results.append(f"  ✓ {path} ({len((content or '').encode())} bytes)")
                 except Exception as e:
                     results.append(f"  ✗ {path}: {e}")
@@ -270,19 +489,27 @@ async def h_ssh_read_file(sid: str, args: dict) -> tuple[str, Any]:
         return f"ERROR: ssh_read_file {err or '需要 host + path'}", None
 
     def _do_read():
+        # [2026-10-19] 原来按解码后字符数判截断: 中文 3 字节/字, 读 max_chars*2 字节只解出 ~2/3 字符,
+        # 40KB+ 中文文件被截了却不标 truncated。改按字节: 读到的字节 < 远端大小 (或读满上限) 即截断。
+        limit = max_chars * 2  # bytes, UTF-8 may be multi-byte
         client, jc = _connect(conn)
         try:
             sftp = client.open_sftp()
+            try:
+                size = sftp.stat(path).st_size
+            except Exception:
+                size = None
             with sftp.open(path, "r") as f:
-                content = f.read(max_chars * 2)  # bytes, UTF-8 may be multi-byte
+                raw = f.read(limit)
             sftp.close()
-            return content.decode("utf-8", errors="replace")[:max_chars]
+            text = raw.decode("utf-8", errors="replace")
+            cut = len(text) > max_chars or (len(raw) < size if isinstance(size, int) else len(raw) >= limit)
+            return text[:max_chars], cut
         finally:
             _close(client, jc)
 
     try:
-        content = await _in_thread(_do_read, 30)
-        truncated = len(content) >= max_chars
+        content, truncated = await _in_thread(_do_read, 30)
         return (f"[sftp {_tag(conn)}] {path} ({len(content)} chars):\n{content}"
                 + ("\n...(truncated)" if truncated else "")), None
     except Exception as e:
@@ -313,12 +540,7 @@ async def h_ssh_str_replace(sid: str, args: dict) -> tuple[str, Any]:
             if count > 1:
                 return False, f"AMBIGUOUS: old_str matches {count} times; make it more specific"
             new_content = content.replace(old_str, new_str, 1)
-            try:
-                sftp.rename(path, path + ".bak")        # backup
-            except Exception:
-                pass
-            with sftp.open(path, "w") as f:
-                f.write(new_content)
+            _sftp_replace(sftp, path, new_content, True)     # backup + 保留权限
             sftp.close()
             return True, f"OK: replaced 1 occurrence in {path} ({len(content)}→{len(new_content)} chars)"
         finally:
@@ -346,7 +568,7 @@ async def h_docker_remote_ps(sid: str, args: dict) -> tuple[str, Any]:
     try:
         rc, out, e = await _ssh_conn(conn, cmd, 30)
         if rc != 0:
-            return f"ERROR: docker ps rc={rc}\n{e[:500]}", None
+            return f"ERROR: docker ps rc={rc}\n{_clip(e, 500)}", None
         return f"[docker@{conn['host']}] ps:\n{out}", None
     except Exception as ex:
         return f"ERROR: docker_remote_ps {type(ex).__name__}: {ex}", None
@@ -363,10 +585,19 @@ async def h_docker_remote_inspect(sid: str, args: dict) -> tuple[str, Any]:
     try:
         rc, out, e = await _ssh_conn(conn, cmd, 30)
         if rc != 0:
-            return f"ERROR: docker inspect rc={rc}\n{e[:500]}", None
-        return f"[docker@{conn['host']}] inspect {container}:\n{out[:6000]}" + ("\n...(truncated)" if len(out) > 6000 else ""), None
+            return f"ERROR: docker inspect rc={rc}\n{_clip(e, 500)}", None
+        return f"[docker@{conn['host']}] inspect {container}:\n{_clip(out, 6000)}", None
     except Exception as ex:
         return f"ERROR: docker_remote_inspect {type(ex).__name__}: {ex}", None
+
+
+def _has_detach(run_flags: str) -> bool:
+    try:
+        toks = shlex.split(run_flags)
+    except ValueError:
+        toks = run_flags.split()
+    return any(t in ("-d", "--detach") or t.startswith("--detach=") or re.fullmatch(r"-[a-zA-Z]*d[a-zA-Z]*", t)
+               for t in toks)
 
 
 @register("docker_remote_recreate")
@@ -391,14 +622,23 @@ async def h_docker_remote_recreate(sid: str, args: dict) -> tuple[str, Any]:
     if not conn or not container or not image:
         return f"ERROR: docker_remote_recreate {err or '需要 host + container + image'}", None
     ep_flag = f"--entrypoint {shlex.quote(entrypoint)} " if entrypoint else ""
+    # [2026-10-19] 不带 -d 时 docker run 前台跑服务, 卡满 120s 才超时; 缺就补上。
+    if not _has_detach(run_flags):
+        run_flags = ("-d " + run_flags).strip()
+    # [2026-10-19] 原来每步 `| tail -N` 且无 pipefail, docker run 失败也报 rc=0。
+    # 现在 bash -o pipefail 执行; stop/rm 失败 (容器本就不存在) 显式容忍, run 失败则整体 rc≠0。
     steps = [
-        f"echo '=== stop {container} ==='; docker stop {shlex.quote(container)} 2>&1 | tail -3",
-        f"echo '=== rm {container} ==='; docker rm {shlex.quote(container)} 2>&1 | tail -3",
-        f"echo '=== run {container} ==='; docker run {run_flags} {ep_flag}{shlex.quote(image)} {cmd} 2>&1 | tail -6",
-        f"echo '=== ps ==='; sleep 3; docker ps --filter name=^{shlex.quote(container)}$ --format 'table {{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}'",
+        f"{{ echo '=== stop {container} ==='; docker stop {shlex.quote(container)} 2>&1 | tail -3 || echo '(stop skipped)'; }}",
+        f"{{ echo '=== rm {container} ==='; docker rm {shlex.quote(container)} 2>&1 | tail -3 || echo '(rm skipped)'; }}",
+        f"echo '=== run {container} ===' && docker run {run_flags} {ep_flag}{shlex.quote(image)} {cmd} 2>&1 | tail -6",
+        f"echo '=== ps ===' && sleep 3 && docker ps --filter name=^{shlex.quote(container)}$ --format 'table {{{{.Names}}}}\\t{{{{.Status}}}}\\t{{{{.Ports}}}}'",
     ]
+    script = "set -o pipefail\n" + " && ".join(steps)
     try:
-        rc, out, e = await _ssh_conn(conn, " && ".join(steps), 120)
-        return f"[docker@{conn['host']}] recreate {container} rc={rc}\n{out[:3000]}\n{e[:1000]}", None
+        rc, out, e = await _ssh_conn(conn, "bash -c " + shlex.quote(script), 120)
+        text = f"[docker@{conn['host']}] recreate {container} rc={rc}\n{_clip(out, 3000)}\n{_clip(e, 1000)}"
+        return (text if rc == 0 else f"ERROR: docker_remote_recreate rc={rc}\n" + text), None
+    except HostNotReady as ex:
+        return f"ERROR: {ex}", None
     except Exception as ex:
         return f"ERROR: docker_remote_recreate {type(ex).__name__}: {ex}", None

@@ -130,7 +130,9 @@ def test_agent_self_update_verifies_hash_before_replace(tmp_path):
     # 哈希一致: 原子替换并通过计划任务重启自己
     calls, popen = _run_agent(tmp_path, [{'job': None, 'versions': {'agent': good}}], served)
     assert (tmp_path / 'agent.py').read_bytes() == new
-    assert "Start-ScheduledTask -TaskName 'LiteCode-Node-" + 'a' * 32 in popen.call_args.args[0][-1]
+    assert any("Start-ScheduledTask -TaskName 'LiteCode-Update-" + 'a' * 32 in c.args[0]
+               for c in _run_agent.shell.call_args_list)
+    assert "Start-ScheduledTask -TaskName 'LiteCode-Node-" + 'a' * 32 in (tmp_path / 'update-restart.ps1').read_text(encoding='utf-8-sig')
 
 
 def test_agent_does_not_update_while_job_running(tmp_path):
@@ -140,12 +142,13 @@ def test_agent_does_not_update_while_job_running(tmp_path):
     assert '/assets/agent.py' not in calls and not popen.called
 
 
-def test_task_hardened_once_and_disabled_after_revoke(tmp_path):
+def test_task_repaired_on_each_start_and_disabled_after_revoke(tmp_path):
     idle = {'job': None, 'versions': {}}
     _run_agent(tmp_path, [idle], lambda p: b'# c')
     scripts = [c.args[0] for c in _run_agent.shell.call_args_list]
-    assert 'RestartCount 999' in scripts[0] and 'RepetitionInterval (New-TimeSpan -Minutes 5)' in scripts[0]
+    assert 'RestartCount 999' in scripts[0] and 'RepetitionInterval (New-TimeSpan -Minutes 1)' in scripts[0]
     assert "Disable-ScheduledTask -TaskName 'LiteCode-Node-" + 'a' * 32 in scripts[-1]   # 轮询 403 → 停用
-    assert (tmp_path / agent.TASK_HARDENED).exists()
+    # [2026-10-19] task-hardened-v2 标记早已没有代码读取, 不再写也不再断言; 计划任务改为运行回滚启动器
+    assert str(tmp_path / agent.LAUNCHER_FILE) in scripts[0]
     _run_agent(tmp_path, [idle], lambda p: b'# c')
-    assert not any('RestartCount' in c.args[0] for c in _run_agent.shell.call_args_list)  # 只修一次
+    assert any('RestartCount' in c.args[0] for c in _run_agent.shell.call_args_list)  # 每次启动都修复, 不信任旧标记

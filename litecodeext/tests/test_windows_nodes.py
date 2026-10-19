@@ -69,6 +69,76 @@ def test_expired_code_cannot_enroll(tmp_path):
         nodes.redeem(code, {})
 
 
+def test_enrollment_shell_opt_in_is_signed_and_survives_first_poll(tmp_path):
+    nodes = Nodes(tmp_path)
+    _, _, existing = enroll(nodes, 'existing')
+    nodes.set_capability(existing['id'], 'shell', True)
+    created = nodes.create('opt-in', 'https://example.test', enable_shell=True)
+    script = base64.b64decode(created['command'].split()[-1]).decode('utf-16le')
+    code = re.search(r"-Code '([^']+)'", script)[1]
+    device = nodes.redeem(code, {'computer': 'new', 'user': 'new'})
+    assert nodes.node_capabilities(existing['id']) == {'shell': True}
+    assert nodes.node_capabilities(device['id']) == {'shell': True}
+    complete_initial(nodes, device)
+    assert nodes.node_capabilities(device['id']) == {'shell': True}
+    nodes.set_capability(device['id'], 'shell', False)
+    assert nodes.node_capabilities(device['id']) == {'shell': False}
+    assert nodes.node_capabilities(existing['id']) == {'shell': True}
+
+
+@pytest.mark.parametrize('value', ['true', 'false', 0, 1, None])
+def test_enrollment_rejects_ambiguous_shell_authorization(tmp_path, value):
+    nodes = Nodes(tmp_path)
+    with pytest.raises(ValueError, match='布尔值'):
+        nodes.create('invalid', 'https://example.test', enable_shell=value)
+    assert nodes.list() == []
+
+
+def test_model_node_creation_cannot_grant_itself_shell(tmp_path, monkeypatch):
+    import asyncio
+    from lib import config
+    from core.tools.handlers import ssh_hosts
+    from core.tools.handlers.windows_nodes import h_windows_nodes
+    monkeypatch.setattr(config, 'WORKSPACE', tmp_path)
+    monkeypatch.setattr(ssh_hosts, '_load', lambda: {})
+    text, _ = asyncio.run(h_windows_nodes('test', {'action': 'create', 'alias': 'model-created',
+                            'server_url': 'https://example.test', 'enable_shell': True}))
+    assert not text.startswith('ERROR')
+    assert Nodes(tmp_path).list()[0]['capabilities'] == {'shell': False}
+
+
+def test_management_enrollment_accepts_only_boolean_shell_opt_in(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import windows_nodes_router as router
+    nodes = Nodes(tmp_path)
+    app = FastAPI()
+    app.include_router(router.router)
+    with patch.object(router, 'manager', return_value=nodes), patch.object(router, 'require_auth'), \
+         patch('plugins.auth.core._AUTH_ENABLED', True), patch('core.tools.handlers.ssh_hosts._load', return_value={}):
+        client = TestClient(app)
+        for value in ('false', 1, None):
+            assert client.post('/api/windows/nodes', json={'alias': 'bad', 'server_url': 'https://example.test',
+                                                          'enable_shell': value}).status_code == 400
+        response = client.post('/api/windows/nodes', json={'alias': 'allowed', 'server_url': 'https://example.test',
+                                                          'enable_shell': True})
+        assert response.status_code == 200
+        assert nodes.node_capabilities(response.json()['id']) == {'shell': True}
+
+
+def test_enrolled_device_reconnects_after_an_hour_and_controller_restart(tmp_path):
+    nodes = Nodes(tmp_path)
+    _, _, device = enroll(nodes)
+    complete_initial(nodes, device)
+    later = time.time() + 3601
+    with patch('lib.windows_nodes.time.time', return_value=later):
+        restarted = Nodes(tmp_path)
+        assert restarted.list()[0]['state'] == 'offline'
+        restarted.authenticate(device['id'], device['token'])
+        restarted.heartbeat(device['id'], device['token'])
+        assert restarted.list()[0]['state'] == 'online'
+
+
 def test_initial_screenshot_and_revocation(tmp_path):
     nodes = Nodes(tmp_path)
     _, _, device = enroll(nodes)
@@ -156,6 +226,33 @@ def test_api_authentication_and_assets(tmp_path):
                                json={'result': {'ok': False, 'state': 'desktop_unavailable'}, 'images': {}})
         assert response.status_code == 200
         assert nodes.list()[0]['desktop_state'] == 'desktop_unavailable'
+
+
+def test_private_device_returns_ocr_over_outbound_api_without_ssh(tmp_path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from routers import windows_nodes_router as router
+    nodes = Nodes(tmp_path)
+    _, _, device = enroll(nodes)
+    complete_initial(nodes, device)
+    with nodes.locked() as data:
+        data['test-node']['computer'] = 'PRIVATE-WINDOWS'
+    app = FastAPI()
+    app.include_router(router.router)
+    with patch.object(router, 'manager', return_value=nodes), \
+         patch('core.tools.handlers.remote._connect', side_effect=OSError('no inbound route')) as ssh:
+        client = TestClient(app, client=('192.168.50.25', 53000))
+        prefix = '/api/windows/device/' + device['id']
+        headers = {'Authorization': 'Bearer ' + device['token']}
+        job = nodes.job('test-node', 'ocr', {})
+        claimed = client.get(prefix + '/poll', headers=headers).json()['job']
+        assert claimed['id'] == job and claimed['action'] == 'ocr'
+        result = {'ok': True, 'state': 'ocr_ready', 'lines': [{'text': 'private desktop'}]}
+        response = client.post(prefix + '/result/' + job, headers=headers,
+                               json={'result': result, 'images': {}})
+        assert response.status_code == 200
+        assert nodes.wait(job, 1)['lines'] == result['lines']
+    ssh.assert_not_called()
 
 
 def test_complete_uninstall_requires_device_receipt(tmp_path):
@@ -282,12 +379,13 @@ def test_agent_cleans_screenshots_and_never_writes_request(tmp_path):
     assert not list((tmp_path / 'jobs').iterdir())
 
 
-def test_bootstrap_can_resume_without_ssh():
+def test_bootstrap_can_resume_and_installs_ssh_with_automatic_startup():
     source = (ROOT / 'lib/windows_node_bootstrap.ps1').read_text()
     assert 'Get-AuthenticodeSignature' in source
     assert 'Test-Path $configFile' in source
     assert '-LogonType Interactive -RunLevel Highest' in source
-    assert 'New-NetFirewallRule' not in source and 'Add-WindowsCapability' not in source
+    assert 'Add-WindowsCapability' in source and 'Set-Service -Name sshd -StartupType Automatic' in source
+    assert 'Start-Service -Name sshd' in source and '-RemoteAddress LocalSubnet' in source
 
 
 def test_remove_only_finished_nodes_and_frees_alias(tmp_path):

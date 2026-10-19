@@ -68,6 +68,7 @@ SHELL_DEFS = [
         "function": {
             "name": "desktop_exec",
             "description": (
+                "仅操作 LiteCode 控制容器的 Linux :99 桌面；远程 Windows 必须使用 windows_desktop 并显式传入 alias。"
                 "在 noVNC 桌面 (DISPLAY=:99) 执行 shell 命令. 用户能在 noVNC 看到结果窗口."
                 "何时用: 用户说'打开 chromium/打开网页/打开文件/在桌面跑 xxx'."
                 "典型用例: "
@@ -92,6 +93,7 @@ SHELL_DEFS = [
         "function": {
             "name": "desktop_screenshot",
             "description": (
+                "仅操作 LiteCode 控制容器的 Linux :99 桌面；远程 Windows 必须使用 windows_desktop 并显式传入 alias。"
                 "截当前 :99 桌面到 PNG. 让用户/你看到桌面当前状态."
                 "何时用: 调 desktop_exec 后等几秒, 截图确认页面/窗口已打开."
                 "返回 {ok, path, bytes}, path 可在聊天里直接引用 (前端会自动渲染图片)."
@@ -109,6 +111,7 @@ SHELL_DEFS = [
         "function": {
             "name": "desktop_key",
             "description": (
+                "仅操作 LiteCode 控制容器的 Linux :99 桌面；远程 Windows 必须使用 windows_desktop 并显式传入 alias。"
                 "向 :99 桌面发送按键组合 (xdotool). 用于浏览器/编辑器快捷键."
                 "key 语法: 'ctrl+t' (新标签) / 'ctrl+l' (地址栏) / 'Return' / 'Escape' / 'F11' / 'alt+F4'."
                 "典型: 先点焦点元素或 desktop_exec 起浏览器 → desktop_key('ctrl+l') → desktop_type(url) → desktop_key('Return')."
@@ -127,6 +130,7 @@ SHELL_DEFS = [
         "function": {
             "name": "desktop_type",
             "description": (
+                "仅操作 LiteCode 控制容器的 Linux :99 桌面；远程 Windows 必须使用 windows_desktop 并显式传入 alias。"
                 "向 :99 桌面键入文本 (xdotool type). 模拟用户键盘输入."
                 "典型: 在地址栏键入 URL / 在搜索框键入关键词. 中文目前无输入法不可靠, 用英文/URL."
             ),
@@ -144,6 +148,7 @@ SHELL_DEFS = [
         "function": {
             "name": "desktop_click",
             "description": (
+                "仅操作 LiteCode 控制容器的 Linux :99 桌面；远程 Windows 必须使用 windows_desktop 并显式传入 alias。"
                 "[A 2026-05-22] 鼠标点击 (x,y) — xdotool mousemove + click."
                 "用法: 先 desktop_screenshot 截图 → 你 (多模态模型) 看截图 → 估出按钮像素坐标 → desktop_click(x=X, y=Y)."
                 "桌面分辨率 1280x720; (0,0)=左上, (1280,720)=右下."

@@ -211,13 +211,53 @@ def test_observe_same_batch_order():
 
     def tc(i, name, args):
         return {"id": f"x{i}", "function": {"name": name, "arguments": json.dumps(args)}}
-    ok = [{"tool_call_id": "x0", "content": "{}"}, {"tool_call_id": "x1", "content": "{}"}]
+    ok = [{"tool_call_id": "x0", "content": '{"ok":true}'}, {"tool_call_id": "x1", "content": '{"ok":true}'}]
     ctx = SimpleNamespace()
     rb.observe(ctx, [tc(0, *DESKTOP_EDIT), tc(1, *INSPECT)], ok)
     assert rb.check(ctx) is None
     ctx = SimpleNamespace()
     rb.observe(ctx, [tc(0, *INSPECT), tc(1, *DESKTOP_EDIT)], ok)
     assert rb.check(ctx) == rb.INJECT_TEXT and rb.check(ctx) is None
+
+
+def test_another_windows_node_cannot_clear_readback(env, monkeypatch):
+    wrong_host = ('windows_system', {**INSPECT[1], 'alias': 'other-windows'})
+    turns = [('tool', DESKTOP_SAVE), ('tool', wrong_host), ('text', WRONG),
+             ('tool', INSPECT), ('text', RIGHT)]
+    _, fake = _drive(monkeypatch, turns)
+    assert fake.calls == 5 and len(_injections(fake)) == 1
+
+
+@pytest.mark.parametrize('failed', [None, '', '{}', '{"ok":false}', '{"ok":true,"exit_code":1}',
+                                  '{"ok":true', 'TIMEOUT: no result'])
+def test_missing_or_failed_json_result_cannot_clear_readback(failed, monkeypatch):
+    from types import SimpleNamespace
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    calls = [
+        {'id': 'edit', 'function': {'name': DESKTOP_SAVE[0], 'arguments': json.dumps(DESKTOP_SAVE[1])}},
+        {'id': 'read', 'function': {'name': INSPECT[0], 'arguments': json.dumps(INSPECT[1])}},
+    ]
+    results = [{'tool_call_id': 'edit', 'content': '{"ok":true}'}]
+    if failed is not None:
+        results.append({'tool_call_id': 'read', 'content': failed})
+    rb.observe(ctx, calls, results)
+    assert rb.check(ctx) == rb.INJECT_TEXT
+
+
+def test_each_changed_node_needs_its_own_readback(monkeypatch):
+    from types import SimpleNamespace
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    def observe(i, tool, args):
+        rb.observe(ctx, [{'id': str(i), 'function': {'name': tool, 'arguments': json.dumps(args)}}],
+                   [{'tool_call_id': str(i), 'content': '{"ok":true}'}])
+    observe(0, *DESKTOP_SAVE)
+    observe(1, DESKTOP_SAVE[0], {**DESKTOP_SAVE[1], 'alias': 'other-windows'})
+    observe(2, *INSPECT)
+    assert ctx.readback.pending_aliases == {'other-windows'}
+    observe(3, INSPECT[0], {**INSPECT[1], 'alias': 'other-windows'})
+    assert not ctx.readback.pending_change and rb.check(ctx) is None
 
 
 def test_chat_typing_does_not_trigger(env, monkeypatch):

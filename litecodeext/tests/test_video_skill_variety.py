@@ -183,7 +183,7 @@ class TestVoices(unittest.TestCase):
         m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
         src = open(os.path.join(SCRIPTS, "tts.py"), encoding="utf-8").read()
         self.assertIn("V.plan(sj)", src)
-        self.assertIn("pitch=p[\"pitch\"]", src)
+        self.assertIn("V.sentences(", src)          # 默认逐句合成
 
 
 class TestBgm(unittest.TestCase):

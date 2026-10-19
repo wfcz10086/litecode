@@ -63,6 +63,7 @@ BACKEND_TYPE     = _MDL.get("backend_type", "vllm")
 # chat_template_kwargs 和 max_tokens+=budget 补偿双双跳过。把 deployment 也带进 _LIVE,
 # 由 thinking_adapter 两者取一判定服务栈。
 DEPLOYMENT       = str(_MDL.get("deployment", "") or "").strip().lower()
+REASONING_EFFORT_MAP = dict(_MDL.get("reasoning_effort_map") or {})
 # [wire-name 2026-08-26] config 里的 `id` 原来同时当两件事用: 界面/切换用的显示名, 和
 # 发给上游 API 的 model 字段。二者不一定相同 —— 自建 vLLM 的 --served-model-name 是固定的
 # (如 deepseek-v4-flash), 而同名的中转线路也要占这个 id, 于是"自建 + 中转"两条无法共存
@@ -144,6 +145,7 @@ _LIVE = {
     "context_window":     CONTEXT_WINDOW,
     "backend_type":       BACKEND_TYPE,
     "deployment":         DEPLOYMENT,
+    "reasoning_effort_map": dict(REASONING_EFFORT_MAP),
     "served_model_name":  SERVED_MODEL_NAME,
     "supports_vision":    SUPPORTS_VISION,
     "vision_fallback_id": VISION_FALLBACK_ID,
@@ -194,6 +196,9 @@ def reload_model(target: dict):
     # 切模型时 deployment 必须跟着换, 不能沿用旧值 —— 从 vllm 切到 deepseek 若还留着
     # "vllm" 会给 deepseek 发 chat_template_kwargs (无害但脏) 并错误加大 max_tokens.
     DEPLOYMENT      = str(target.get("deployment", "") or "").strip().lower()
+    global REASONING_EFFORT_MAP
+    # 模型级兼容配置不能沿用上一个模型的映射。
+    REASONING_EFFORT_MAP = dict(target.get("reasoning_effort_map") or {})
     global SERVED_MODEL_NAME
     # 同 DEPLOYMENT: 切模型时必须跟着换, 不能沿用旧值 (否则会把上一个模型的线路名发给新后端)
     SERVED_MODEL_NAME = str(target.get("served_model_name", "") or "").strip() or MODEL_ID
@@ -206,6 +211,7 @@ def reload_model(target: dict):
         "thinking_budget": THINKING_BUDGET, "context_window": CONTEXT_WINDOW,
         "backend_type": BACKEND_TYPE, "supports_vision": SUPPORTS_VISION,
         "deployment": DEPLOYMENT, "served_model_name": SERVED_MODEL_NAME,
+        "reasoning_effort_map": dict(REASONING_EFFORT_MAP),
     })
     # [v12.8-fix] 切换时同步 thinking_adapter._active, 避免首请求仍走旧缓存
     try:

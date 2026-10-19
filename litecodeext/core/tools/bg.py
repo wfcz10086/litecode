@@ -36,15 +36,44 @@ _bg_lock  = threading.Lock()
 
 
 
-def _as_bash(cmd: str) -> str:
+BG_EXIT_MARK = "[BG-EXIT code="
+
+
+def _as_bash(cmd: str, mark_exit: bool = False) -> str:
     """把模型给的整条命令交给 bash -c 执行。
     nohup/timeout 只能 exec 可执行文件: `nohup cd x && y` 里 nohup 去执行 cd 必然失败,
-    `&&` 后面的服务永远起不来。末尾的 `&` 和开头的 nohup 由调用方负责, 这里剥掉。"""
+    `&&` 后面的服务永远起不来。末尾的 `&` 和开头的 nohup 由调用方负责, 这里剥掉。
+    mark_exit=True: 命令结束时往日志末尾追加一行 `[BG-EXIT code=N]`, 等后台任务的人
+    grep 这行就知道"跑完了没、成没成", 不用 pgrep (pgrep -f 会匹配到等待命令自己, 永远等不到)。"""
     c = cmd.strip()
     while c.endswith("&") and not c.endswith("&&"):
         c = c[:-1].rstrip()
     c = re.sub(r"^nohup\s+", "", c)
+    if mark_exit:
+        # trap EXIT 而不是在末尾 echo: `set -e` 失败 / 中途 `exit 3` 时末尾那行根本跑不到, 等的人要空等 900s
+        c = "trap 'echo \"" + BG_EXIT_MARK + "$?]\"' EXIT\n" + c
     return f"bash -c {shlex.quote(c)}"
+
+
+def bg_exit_code(log_path) -> "int | None":
+    """日志里有 [BG-EXIT code=N] → N; 还在跑 / 老进程没这行 → None"""
+    try:
+        p = Path(log_path)
+        sz = p.stat().st_size
+        with open(p, "rb") as f:
+            f.seek(max(0, sz - 4096))
+            tail = f.read().decode(errors="replace")
+        m = re.findall(r"\[BG-EXIT code=(\d+)\]", tail)
+        return int(m[-1]) if m else None
+    except Exception:
+        return None
+
+
+def wait_hint(log_file) -> str:
+    """起后台任务时告诉模型怎么等它结束 (一条前台命令, 不轮询、不 pgrep)"""
+    return (f"等它结束: execute_shell(command=\"until grep -q 'BG-EXIT' {log_file}; do sleep 5; done; "
+            f"tail -20 {log_file}\", timeout=900) —— 日志最后一行 [BG-EXIT code=0] 是成功, 非 0 是失败。"
+            f"别用 pgrep -f 判断是否结束 (会匹配到等待命令自己)。")
 
 def _bg_state_path() -> Path:
     """BG registry 持久化文件，server 重启后可恢复"""
@@ -193,7 +222,7 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
     # 子进程会持有原 shell 的 stdout fd 不让关 → 10s 超时. 改用 readline 只取 PID 行,
     # 拿到 PID 就走, 不等 shell 完整结束.
     # </dev/null 关闭 stdin 防止 chrome 等 stdin.
-    bg_cmd = f"nohup {_as_bash(cmd)} </dev/null >{log_file} 2>&1 & echo $!"
+    bg_cmd = f"nohup {_as_bash(cmd, mark_exit=not keep and not health_url)} </dev/null >{log_file} 2>&1 & echo $!"
     try:
         proc = await asyncio.create_subprocess_shell(
             bg_cmd,
@@ -227,6 +256,7 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
         return (
             f"Background started pid={pid}\n"
             f"log_file={log_file}\n"
+            + ("" if keep else wait_hint(log_file) + "\n") +
             f"--- stdout/stderr ---\n{proc_log[:800]}"
         )
 
@@ -239,33 +269,14 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
         if not alive:
             proc_log = _read_log()
             _unregister_bg(pid)
-            # [FIX] 日志为空时 (nohup > /dev/null 或重定向被覆盖) 做 fallback:
-            # 同步重跑一次 timeout 5 <cmd> 2>&1 捕获 stderr, 让 agent 看到真实错误
+            # [2026-10-19] 不再"同步重跑 5s 捕获 stderr": 原来在 WORKSPACE (而不是启动时的 cwd) 里
+            # 重跑模型的命令, 相对路径全错 → 报出与真实原因无关的误导性错误; 而且会把非幂等命令
+            # (迁移/写库/发请求) 再执行一遍。现在只如实报告日志, 日志为空就明说。
             _diag = proc_log
             _stripped = proc_log.strip() if proc_log else ""
-            if not _stripped or _stripped == "(no log)" or _stripped == "(log unreadable)" or len(_stripped) < 40:
-                try:
-                    _cmd_diag = cmd.rstrip()
-                    while _cmd_diag.endswith("&"):
-                        _cmd_diag = _cmd_diag[:-1].rstrip()
-                    import re as _re_d
-                    _cmd_diag = _re_d.sub(r"^\s*nohup\s+", "", _cmd_diag)
-                    _cmd_diag = _re_d.sub(r"\s*>\s*\S+\s*2>&1\s*$", "", _cmd_diag)
-                    _cmd_diag = _re_d.sub(r"\s*>\s*\S+\s*2>\s*\S+\s*$", "", _cmd_diag)
-                    _dp = await asyncio.create_subprocess_shell(
-                        f"timeout 5 {_as_bash(_cmd_diag)} 2>&1",
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.STDOUT,
-                        cwd=str(WORKSPACE),
-                    )
-                    _dout, _ = await asyncio.wait_for(_dp.communicate(), timeout=8)
-                    _dout_s = _dout.decode(errors="replace")
-                    if _dout_s.strip():
-                        _diag = f"(原 log 为空, 已 strip 末尾 & + nohup/重定向, 重跑 5s 捕获如下)\n{_dout_s}"
-                    else:
-                        _diag = f"(原 log 为空, 同步重跑 5s 也无输出. 可能进程根本没启动. cmd_diag={_cmd_diag!r})"
-                except Exception as _de:
-                    _diag += f"\n(重跑也失败: {_de})"
+            if not _stripped or _stripped in ("(no log)", "(log unreadable)"):
+                _diag = ("(日志为空: 进程没输出任何内容就退出了。可能命令本身立即失败 / 输出被重定向到别处 / "
+                         f"启动目录不对 (启动目录 {cwd or WORKSPACE})。前台直接跑一次同样的命令看报错)")
             return (
                 f"ERROR: Background process pid={pid} died after {i+1}s\n"
                 f"cmd: {cmd[:200]}\n"
@@ -286,11 +297,22 @@ async def _exec_bg(cmd: str, health_url: str = None, sid: str = None, keep: bool
             pass
 
     # Timeout: return full log so model can self-diagnose
+    # [2026-10-19] 原提示写死 "python3 main.py" 并说"不要重试 background", 慢启动服务 (模型加载/编译)
+    # 30s 没就绪其实还在正常启动, 模型却被引导去杀进程、换前台重跑 → 来回空转。
+    # 进程还活着 → 说明仍在启动, 给日志路径和等待方法; 已死 → 才按失败处理。
     proc_log = _read_log()
+    if await _check_pid_alive(pid):
+        return (
+            f"Background still starting pid={pid}: health_url={health_url} 30s 内未就绪, 但进程仍在运行 (不是失败)。\n"
+            f"log_file={log_file}\n"
+            f"等它就绪: execute_shell(command=\"until curl -s -o /dev/null {health_url}; do "
+            f"kill -0 {pid} 2>/dev/null || {{ echo '[BG-EXIT] pid {pid} 已退出'; break; }}; sleep 3; done; "
+            f"tail -20 {log_file}\", timeout=600) —— 别重复启动同一个服务 (端口会冲突)。\n"
+            f"--- 当前日志 ---\n{proc_log[-1500:]}"
+        )
+    _unregister_bg(pid)
     return (
-        f"ERROR: health_url={health_url} not responding after 30s (pid={pid})\n"
-        f"--- process log (read carefully, diagnose the failure) ---\n{proc_log[-2000:]}\n"
-        f"HINT: Do NOT retry background=true again. Instead run in foreground first to see the actual error:\n"
-        f"  execute_shell('cd <project_dir> && timeout 5 python3 main.py 2>&1')\n"
-        f"Fix the error, then try background=true again (max 1 more attempt)."
+        f"ERROR: health_url={health_url} not responding after 30s, 且进程 pid={pid} 已退出\n"
+        f"log_file: {log_file}\n"
+        f"--- process log (read carefully, diagnose the failure) ---\n{proc_log[-2000:]}"
     )

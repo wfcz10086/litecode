@@ -10,6 +10,12 @@
   let offlineTries = 0;
   const observed = new Map();
   let polling = false;
+  /* [2026-10-19] 刚结束的本页轮次曾被巡检再追加一遍: _streamTurn 收尾先置 streaming=false, afterTurn 还在
+   * await runStatus 时 pollBackground 看到 observed 仍是旧 started, 就把本轮从会话里重新 addMsg 一次 (重复气泡)。
+   * 现在 afterTurn 同步登记 settling + 递增 turnSeq; 巡检遇到 settling 跳过, 任一 await 后发现 turnSeq 变了即放弃。 */
+  const settling = new Set();
+  let turnSeq = 0;
+  const pageTail = () => (typeof LC_PAGE_SIZE === 'number' ? `?tail=${LC_PAGE_SIZE}` : '');
 
   async function runStatus(sid) {
     try {
@@ -39,8 +45,7 @@
     if (cur !== sid || streaming) return;
     let msgs;
     // [perf 2026-10] 与 swS 一致只拉最近一段 (带全局 index), 更早的由 chat_paging.js 按需加载
-    const tail = typeof LC_PAGE_SIZE === 'number' ? `?tail=${LC_PAGE_SIZE}` : '';
-    try { msgs = (await (await fetch(`/api/sessions/${sid}${tail}`)).json()).messages || []; }
+    try { msgs = (await (await fetch(`/api/sessions/${sid}${pageTail()}`)).json()).messages || []; }
     catch (e) { setTimeout(() => afterTurn(sid), RETRY_MS); return; }
     if (cur !== sid || streaming) return;
     renderMsgs(msgs); sbot(true);
@@ -48,13 +53,17 @@
   }
 
   async function afterTurn(sid) {
+    turnSeq++; settling.add(sid);                  // 同步登记, 先于任何 await (见 settling 注释)
     const st = await runStatus(sid);
     if (st === null) {
+      // 断网重试期间保持 settling, 直到拿到本轮 started; 放弃重试才解除
       if (offlineTries++ < MAX_OFFLINE_TRIES) setTimeout(() => afterTurn(sid), RETRY_MS);
+      else settling.delete(sid);
       return;
     }
     offlineTries = 0;
     observed.set(sid, st.started);
+    settling.delete(sid);
     if (!st.running) return;
     setTimeout(() => { if (cur === sid && !streaming) resume(sid); }, RETRY_MS);
   }
@@ -62,16 +71,20 @@
   async function pollBackground() {
     if (polling || typeof cur === 'undefined' || !cur || streaming || document.hidden) return;
     const sid = cur;
+    if (settling.has(sid)) return;
+    const seq = turnSeq;
+    const stale = () => cur !== sid || streaming || settling.has(sid) || seq !== turnSeq;
     polling = true;
     try {
       const st = await runStatus(sid);
-      if (!st || !st.started || cur !== sid || streaming) return;
+      if (!st || !st.started || stale()) return;
       if (!observed.has(sid)) { if (!st.running) { observed.set(sid, st.started); return; } }
       else if (observed.get(sid) === st.started) return;
-      const resp = await fetch(`/api/sessions/${sid}`);
+      // 只拉最近一段 (与 resume 一致); 新轮次的 user 不在这段里时 findIndex<0 会走 resume 整段重绘
+      const resp = await fetch(`/api/sessions/${sid}${pageTail()}`);
       if (!resp.ok) return;
       const msgs = (await resp.json()).messages || [];
-      if (cur !== sid || streaming) return;
+      if (stale()) return;
       const first = msgs.findIndex(m => m.role === 'user' && m.ts === st.user_ts);
       if (first < 0) { await resume(sid); return; }
       // 只追加新轮次，避免定时巡检反复重绘、语法高亮整段历史。

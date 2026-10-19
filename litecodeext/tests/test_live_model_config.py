@@ -40,9 +40,37 @@ def test_budget_follows_reload_model():
                              "max_tokens": saved.get("max_tokens"), "enable_thinking": saved.get("enable_thinking"),
                              "thinking_budget": saved.get("thinking_budget"), "backend_type": saved.get("backend_type"),
                              "deployment": saved.get("deployment", ""), "served_model_name": saved.get("served_model_name", ""),
+                             "reasoning_effort_map": saved.get("reasoning_effort_map", {}),
                              "supports_vision": saved.get("supports_vision", False)})
     assert _trimmed(small)
     assert not _trimmed(big)
+
+
+def test_effort_map_follows_model_reload_and_clears_on_switch(monkeypatch):
+    from lib import thinking_adapter
+
+    # 独立运行时副本：不修改配置文件，也不把测试模型留给其它用例。
+    monkeypatch.setattr(config, "_LIVE", dict(config._LIVE))
+    for name in ("MODEL_ID", "BACKEND_URL", "API_KEY", "MAX_TOKENS", "ENABLE_THINKING",
+                 "THINKING_BUDGET", "CONTEXT_WINDOW", "BACKEND_TYPE", "DEPLOYMENT",
+                 "SERVED_MODEL_NAME", "SUPPORTS_VISION", "REASONING_EFFORT_MAP"):
+        monkeypatch.setattr(config, name, getattr(config, name))
+    monkeypatch.setattr(thinking_adapter, "_active", thinking_adapter._active)
+    target = {"id": "test-qwen", "backend_url": "http://127.0.0.1:9/v1", "api_key": "unused",
+              "backend_type": "openai", "deployment": "vllm", "enable_thinking": True,
+              "thinking_budget": 16384, "reasoning_effort_map": {"high": "xhigh"}}
+
+    config.reload_model(target)
+    assert config.REASONING_EFFORT_MAP == {"high": "xhigh"}
+    assert config._LIVE["reasoning_effort_map"] == {"high": "xhigh"}
+    assert thinking_adapter.inject_params({})["reasoning_effort"] == "xhigh"
+
+    config.reload_model({k: v for k, v in dict(target, id="test-other").items()
+                         if k != "reasoning_effort_map"})
+    assert config.REASONING_EFFORT_MAP == {}
+    assert config._LIVE["reasoning_effort_map"] == {}
+    assert thinking_adapter.get().reasoning_effort_map == {}
+    assert thinking_adapter.inject_params({})["reasoning_effort"] == "high"
 
 
 def test_no_snapshot_imports_left_in_agent_modules():

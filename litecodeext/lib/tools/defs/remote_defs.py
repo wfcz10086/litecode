@@ -5,7 +5,7 @@ REMOTE_DEFS = [
         "type": "function",
         "function": {
             "name": "ssh_exec",
-            "description": "SSH 到远程主机执行命令 (基于 paramiko, 密码认证). 用于远程排查/修改远程 docker/vllm/服务. 返回 rc + stdout + stderr.",
+            "description": "SSH 执行命令，支持已存别名、密钥和跳板。Windows 脚本用 shell=powershell；Windows 内 WSL Bash 用 shell=wsl 并指定 wsl_distro，cmd 直接填原始 Bash。工具处理编码、无 BOM/LF 和原生退出码，不安装或重建发行版。返回 rc + stdout + stderr；stderr 警告不等于非零退出。",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -16,7 +16,10 @@ REMOTE_DEFS = [
                     "key_file": {"type": "string", "description": "私钥路径, 如 /root/.ssh/id_ed25519_example; 给了就优先用密钥登录"},
                     "alias":    {"type": "string", "description": "已存主机别名 (ssh_save_host), 填了可省 host/port/user/密码/密钥/跳板"},
                     "jump":     {"type": "string", "description": "跳板主机别名: 目标只在跳板内网可达时用 (等价 ssh -J)"},
-                    "cmd":      {"type": "string", "description": "要执行的 shell 命令 (可 && 串多条)"},
+                    "cmd":      {"type": "string", "description": "auto 填远端 shell 命令；powershell 填原始 PowerShell（多句用换行或分号）；wsl 填原始 Bash，按脚本最后退出码返回，安装脚本自行设置 set -e"},
+                    "shell":    {"type": "string", "enum": ["auto", "powershell", "wsl"], "default": "auto", "description": "auto 用远端默认 shell；powershell 编码 Windows 脚本并启用 Stop；wsl 在 Windows 已安装的 WSL 发行版内执行 Bash，stdout/stderr 分流并保留原生退出码"},
+                    "wsl_distro": {"type": "string", "description": "shell=wsl 必填，明确目标发行版，如 Ubuntu；不会安装或更改默认发行版"},
+                    "wsl_user": {"type": "string", "description": "shell=wsl 可选的 Linux 用户，如 root；省略则使用该发行版的默认用户"},
                     "timeout":  {"type": "integer", "description": "命令超时秒, 默认 60", "default": 60},
                 },
                 "required": ["cmd"],

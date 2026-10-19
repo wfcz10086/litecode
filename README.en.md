@@ -18,34 +18,32 @@
 
 ## 🆕 What's new
 
-### v1.10.16.89 "Errand" (跑腿)
+### v1.10.16.90 "Brisk" (利索)
+
+> *Lisuo* means quick and neat, no dawdling: it knows what it is waiting for, does not spin its wheels on errors, and calls in helpers when one pair of hands is not enough.
+
+- 👥 **Background helpers**: one sentence spawns background sub-agents, with a web panel to watch progress, read results, send follow-up instructions or stop them. Coding helpers each work in their own git worktree in parallel and merge back automatically, resolving conflicts on their own; every delivery must carry evidence and is marked *verified* or *unverified*. "Operator" helpers can drive several Windows PCs at once.
+- ⏱️ **No more idle waiting**: we went through 30 days of real runs and fixed a batch of "looks busy, actually just waiting" problems —
+  - background jobs now emit a clear finish marker, so waits no longer guess at timings or get fooled by their own status checks;
+  - timeout rules actually apply (`sleep`, tests and builds each get a sensible limit), and a timeout returns the last output;
+  - stale results are no longer reused as fresh ones, and normal polling is no longer flagged as a loop;
+  - parallel web searches no longer fight over one browser page; browser and vision tools that failed to start are fixed.
+- 🎬 **Videos with more substance**: 8 script styles chosen by topic (follow-the-money, root-cause, contrarian, revisionist history…), plus a script gate — every scene must answer "why", no filler phrases, no saving the best part for "next episode". Narration now rises and falls sentence by sentence (questions go up, key numbers slow down, short punchlines get a pause) and subtitles follow each sentence's real timing. 12 color themes, 6 backgrounds, multi-voice narration; on-screen numbers are cross-checked against the narration.
+- 🪟 **Steadier, safer Windows control**: file changes are read back and verified; the command-line switch is now a real permission boundary (VS Code, Task Manager and the Explorer address bar can no longer be used to get around it); code delivered to PCs is signature-checked; a broken agent update rolls back to the previous version by itself; uninstall restores SSH according to what setup recorded; waits stop quickly when a PC goes offline. PowerShell / WSL commands over SSH are supported.
+- ⚡ **Smoother long chats**: chunked rendering, paged loading, lazy images with thumbnails.
+- 🐛 **Fixed**: a whole turn failing after the model server switched templates and rejected the reasoning-effort value (it now falls back to a supported level); exit codes occasionally lost with non-UTF-8 output; passwords no longer go through the clipboard.
+
+<details>
+<summary>Previous: v1.10.16.89 "Errand" (跑腿)</summary>
 
 > *Paotui* means running errands for someone. Say one sentence and it gets the errand done on your own Windows PC: send a WeChat message, drop a comment and a gift in a live stream, scroll back through a chat and copy the original text to you.
 
-- 🪟 **One-command Windows onboarding**: in the web UI, *Connect → Add Windows* gives you one command; paste it into an admin terminal on that PC. The PC only connects outward — no open ports, no SSH — and its device credential is encrypted with Windows' own DPAPI. *Complete uninstall* wipes it clean, verified on a real machine.
+- 🪟 **One-command Windows onboarding**: *Connect → Add Windows* generates an admin PowerShell command. The desktop agent connects outward; setup also installs OpenSSH Server with automatic service startup and a separate key per node. Newly installed SSH uses public-key authentication and a local-subnet firewall rule. Existing SSH configurations are preserved. Device credentials use Windows DPAPI; automatic sign-in and lock policies are configured separately by the owner.
 - 🤖 **General desktop control**: WeChat, QQ, Chrome, Douyin live rooms… it reads screenshots and clicks, types, scrolls, right-clicks to copy and reads the clipboard, so you get the original text instead of a transcription. No app-specific scripts; a new app works the same way.
-- 🔄 **Self-updating, self-healing agent**: when the server updates, the PC catches up while idle (hash-verified before replacing); it restarts after crashes and is re-launched every 5 minutes if it ever stops; it disables itself once revoked. The web UI shows which version each PC runs.
+- 🔄 **Self-updating, self-healing agent**: when the server updates, the PC catches up while idle (hash-verified before replacing); it restarts after crashes and is re-launched every minute if it ever stops; it disables itself once revoked. The web UI shows which version each PC runs.
 - 🛡️ **Safer messaging**: if several contacts match, it lists them and asks instead of picking one; it never clears a draft already in the input box; it checks the chat title before sending.
 - 🐛 **Fixed**: mouse wheel ignored by new WeChat (it used to send 1/12 of a notch, now whole notches); personal WeChat opening as WeCom; the last reply duplicated after a page reload; "you didn't change any files" nags on look-only desktop tasks.
 - 🧹 Revoked or uninstalled PCs can be deleted from the list, freeing their name.
-
-<details>
-<summary>Previous: v1.10.16.88 "Hanbao" (憨包)</summary>
-
-> *Hanbao* is southwest-Chinese slang for a lovable simpleton: not flashy, but it never drops the job. Close the tab and it keeps working, it nags less, and one sentence gets you a video ready to post.
-
-- 🎬 **New skill: one sentence → a short video for Douyin**. Say *"make a Douyin explainer about Buffett"*. It writes the voice-over script, records the narration, animates the scenes and adds music. You get three things back: a vertical `final.mp4`, a cover image and a publishing pack (titles, caption, hashtags). Everything uses local tools, so there are no licensing issues. Sample: *The Fall of a Genius Trader*, about 85 s.
-- 🚦 **Three gates before any video ships**, all enforced by scripts:
-  - **Fact check**: years, "N years later", counts and amounts in the narration must match a sourced fact list.
-  - **Layout check**: it catches overlapping text, text running off screen and subtitles stuck on one line.
-  - **Final-video check**: it samples 3 frames per scene from the finished video for review.
-
-  A one-command pipeline now stops at the first failing step and resumes from it once fixed. The sample *Fall of a Genius Trader* was remade through these gates, fixing a miscalculated year, unsourced details, stuck subtitles and several overlaps.
-- 🔌 **Closing the page no longer stops the task**: chat turns now run in the background. Refresh, close the browser, lose the network or switch to another chat, and the task keeps running; when you come back it picks up where it is. Other tabs, and other people viewing the same chat, see it live. The stop button always matches what is really happening.
-- 🧯 **More accurate, quieter system nudges**: creating many tasks or writing many files in a row is no longer treated as a loop. The "write a test" reminder fires once per file. Re-running the same command after editing a file is no longer blocked.
-- 🛡️ **Disable tools per request**: add `disabled_tools: ["web"]` to a request and the model gets no web tools for that call. Useful for offline mode and fair benchmarks. When a shell command fails, only network commands are retried automatically. Old tool output is trimmed only when the context is actually close to full.
-- 📏 **Benchmarks**: an official SWE-bench Verified runner is included. Web access is off by default, and any instance where the model went online anyway is not scored.
-
 
 </details>
 
@@ -166,14 +164,14 @@ And a side no other agent has:
 A tool only exists while you're holding it. An employee is *there*. LiteCode is built to the employee standard:
 
 - **It remembers** — preferences you stated, things you discussed. New sessions don't start with introductions.
-- **It has skills** — 94 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
+- **It has skills** — 95 of them, from code and reports to slides and novels; teach it a new trade by dropping in one skill file.
 - **It works unsupervised** — timers fire on schedule, big jobs split themselves into pipelines, failures retry with lessons learned.
 - **It's always reachable** — browser, terminal, WeChat; start a chat in one place, continue in another.
 - **It serves only you** — your machine, your model, data never leaves. It has no other master.
 
 ### Numbers first
 
-| 76 | 94 | 9 | 14 | 5 | 4 | 3 | 1 |
+| 79 | 95 | 9 | 14 | 5 | 4 | 3 | 1 |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
 | tools | skills | agent types | search engines | model backends | memory tiers | fronts | container |
 
@@ -212,7 +210,7 @@ Free APIs → a local SearXNG aggregator → 14 engines in parallel → a real b
 
 ### 🔗 Buff every AI tool you already own
 
-The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 94 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
+The gateway speaks standard OpenAI. Take any client with a custom base_url — translation plugins, ChatBox, Dify, LangChain — and point it at `http://your-box:18789/v1`. Its model instantly learns to call tools, search the web, and remember you, plus 95 skills. **One URL change, everything upgraded, free.** Pass a fixed `user` field and it even remembers your last conversation.
 
 ---
 

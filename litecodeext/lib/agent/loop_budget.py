@@ -3,6 +3,7 @@
 从 litecode_server.py 原样搬出 (拆分大文件), 函数体未改动; litecode_server 仍 re-export 这些名字。
 """
 from lib import config as _cfg   # 模型热切换后读当前值 (reload_model 更新其模块变量), 不在导入时拷快照
+from copy import deepcopy
 import json
 from history_utils import _sanitize_history
 from lib import context_pressure as _cp
@@ -16,6 +17,21 @@ from lib.config import log
 from lib.config import mem_get as _mem_get
 from lib.tools.defs import TOOL_DEFS
 _AGT = CFG.get("agent", {})
+
+
+def sanitize_model_copy(messages: list) -> list:
+    """[2026-10-19] 主循环每轮对 ctx.messages 原地 _sanitize_history, 而这些 dict 与 new_msgs/历史共享:
+    落盘证据被改写 (content None→"", arguments 被规范化/坏 JSON 变 "{}", 未答复的 tool_calls 被删)。
+    只给模型列表换副本: 会被改写的消息 (带 tool_calls, 或 assistant content=None) 拷一份再清理,
+    其余消息仍复用原对象 (不改它们, 省掉整段 deepcopy)。返回新列表。"""
+    out = []
+    for m in messages:
+        if isinstance(m, dict) and (m.get("tool_calls") or (m.get("role") == "assistant" and m.get("content") is None)):
+            m = {**m}
+            if m.get("tool_calls"):
+                m["tool_calls"] = deepcopy(m["tool_calls"])
+        out.append(m)
+    return _sanitize_history(out)
 
 
 # ── [AGENT_STREAM_REFACTOR M7d 2026-09-18] 循环顶部上下文治理家族之一:
@@ -43,11 +59,12 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
                 _old_content = _msg.get("content", "")
                 if isinstance(_old_content, str) and len(_old_content) > 120:
                     _first_line = _old_content.split("\n", 1)[0][:120]
-                    _msg["content"] = _first_line + " [trimmed]"
+                    # messages 与 new_msgs/历史可能共享 dict；只替换模型输入，保留落盘证据。
+                    ctx.messages[_mi] = {**_msg, "content": _first_line + " [trimmed]"}
                     _trimmed_count += 1
             elif _msg.get("role") == "assistant" and isinstance(_msg.get("content"), str):
                 if len(_msg["content"]) > 200:
-                    _msg["content"] = _msg["content"][:150] + "..."
+                    ctx.messages[_mi] = {**_msg, "content": _msg["content"][:150] + "..."}
                     _trimmed_count += 1
         if _trimmed_count > 0:
             log.info(f"  [SLIDING-WINDOW] trimmed {_trimmed_count} old msgs at iter {iteration} (keep_recent={_sw_keep})")
@@ -103,7 +120,8 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
             if _removed:
                 # 在被删位置插一条标记, 防止 tool_calls/tool pair 残缺导致 400
                 ctx.messages.insert(2, {"role": "user", "content": f"[SYSTEM: trimmed {_removed} old msgs to fit token budget {_tb_budget}t]"})
-                _sanitize_history(ctx.messages)
+                # 清理 dangling calls 会原地改嵌套 tool_calls；先隔离持久化消息。
+                ctx.messages = _sanitize_history(deepcopy(ctx.messages))
                 log.warning(f"  [TOKEN-BUDGET] removed {_removed} msgs, {_cur_tokens}t/{_tb_budget}t")
 
     return _fixed_overhead
@@ -179,11 +197,11 @@ def _loop_context_budget(ctx, fixed_overhead):
             _cc = str(_cm.get("content", ""))
             if len(_cc) > 100:
                 if _cm.get("role") == "tool":
-                    _cm["content"] = _cc.split("\n", 1)[0][:100] + " [budget-trimmed]"
+                    ctx.messages[_ci] = {**_cm, "content": _cc.split("\n", 1)[0][:100] + " [budget-trimmed]"}
                 elif _cm.get("role") == "user" and "[SYSTEM" in _cc:
-                    _cm["content"] = _cc[:80] + " [trimmed]"
+                    ctx.messages[_ci] = {**_cm, "content": _cc[:80] + " [trimmed]"}
                 elif _cm.get("role") == "assistant" and isinstance(_cc, str):
-                    _cm["content"] = _cc[:120] + "..."
+                    ctx.messages[_ci] = {**_cm, "content": _cc[:120] + "..."}
                 _ctx_trimmed += 1
             # 重新估算
             _ctx_est2 = sum(est_tokens(m.get("content", "")) + est_tokens(m.get("tool_calls", "")) + est_tokens(m.get("reasoning_content",""))

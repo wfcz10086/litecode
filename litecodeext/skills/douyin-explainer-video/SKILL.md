@@ -23,14 +23,19 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 
 ## 流程 (用 task_create 建好再逐个推进)
 
-1. **核对事实 + 写文案** → `$P/script.json` (先读 `copywriting.md`)。
+1. **选风格 + 核对事实 + 写文案** → `$P/script.json` (先读 `copywriting.md`)。
+   **先按题材定 `style`** (财经→chaizhang 拆账, 社会议题→benzhi, 科技→fangongshi, 历史→fanan, 冷知识→jiemi, 消费→bikeng, 人物→lezige/beiju),
+   每场回答一个"为什么/所以呢", 一场一个主数字, 结论本期讲完。
    **先查资料再动笔**: 年份 / 金额 / 次数 / 名言逐条写进 `facts` (带 source), 查不到可靠出处的说法就不写。
 2. **配画面**: `cp $SK/templates/video.html $SK/templates/engine.js $P/`; 选一套配色预设 + 声音组合 (见下, 别和上一条片子撞);
    题材专属画面写 `custom.js` (见下)。通用版式够用时不写也行, 但**题材画面是质感的来源**。
 3. **一键跑** (background=true): `cd $P && python3 $SK/scripts/run.py`
-   依次: fact 事实闸 → tts 配音 → check 版面自检 → render 逐帧 → bgm → mix → final → qa 成片抽帧。
+   依次: copy 文案闸 → fact 事实闸 → tts 配音 → check 版面自检 → render 逐帧 → bgm → mix → final → qa 成片抽帧。
    任一关卡失败立即停, 日志写明哪步、怎么修; 修完 `run.py --from <那一步>` 接着跑。
-   等渲染时并行做 4/5, 别干等。
+   等渲染时并行做 4/5; run.py 最后一定打一行 `RUN-END ok` 或 `RUN-END fail step=…`, 等结束就
+   `until grep -q '^RUN-END' run.log; do sleep 5; done; tail -15 run.log` (timeout=900),
+   **别用 `pgrep -f` / `sleep N` 猜** (原片三次各空等 7-15 分钟)。
+   **改了版面先前台跑 `run.py --only check` (约 5 秒)**, 过了再后台重渲, 别每改一次就整条重跑。
 4. **封面** 1080x1440: 参照 `examples/livermore/cover.html` 写 `cover.html`,
    `python3 $SK/scripts/shot.py cover.html cover.png 1080 1440` (自带版面自检), 再 vision_ocr 打分 ≥8。
 5. **发布包** `publish.md`: 标题 x3 + 正文 + 话题 8-10 个 + 置顶评论 + checklist (见 `examples/livermore/publish.md`)。
@@ -42,6 +47,7 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 ## 三道关 (都是脚本硬闸, 不靠自觉)
 | 关 | 脚本 | 抓什么 | 来历 |
 |---|---|---|---|
+| 文案闸 | `stylecheck.py` | 没写 style / 分析类风格不到一半场景讲"为什么" / 废话词 / 把干货推到下期 | 2027 经济片 7 场每场念一个数, 结尾"下期拆跟你钱包最近的三条" |
 | 事实闸 | `factcheck.py` (+ `numcheck.py`) | 旁白年份不在 facts / "N年后"算错 / "第N次"没核实 / 金额对不上 / **画面数字与旁白数字矛盾** | 原片把 1929→1940 写成"十四年后"; 样片画面「428 秒」旁白「约八分二十秒」 |
 | 版面自检 | `render.py check` | 配色对比度 (WCAG AA) + 每场 4 个时刻量实际文字框: 互相压住 / 出屏 / 撑破框 / **字幕卡住** | 原片印章叠印章、金句压纸条、每场字幕卡第一句 |
 | 成片终检 | `qa_final.py` + vision | 规格 (1080x1920/有音轨/时长) + 抽帧拼图人眼复查 | 预览帧只截中点, 后改的遮挡看不到 |
@@ -65,12 +71,13 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 ```json
 {
  "title": "天才交易员的陨落",
+ "style": "beiju",                     // 必填: 文案风格 (copywriting.md), 文案闸查
  "topic": "财经人物 悲剧",              // 可选: 自动选配色时一起参考的关键词
  "theme": "burgundy",                   // 配色预设名 (见下表); 不写 = 按 title/topic/mood 自动挑
  "bg_style": "radial",                  // 可选: 覆盖预设推荐的背景样式
  "mood": "dark",                        // BGM 情绪; 不写 = 用预设推荐的
  "voices": {"narrator": "云健", "quote": "晓晓"},   // 多角色; 只要一个声音时写 "voice": "zh-CN-YunxiNeural"
- "rate": "+14%", "gap": 0.7, "prosody": "auto",
+ "rate": "+6%", "gap": 0.7, "prosody": "auto",      // 默认逐句合成 ("tts_mode": "scene" 回到整场一次)
  "facts": [{"year": 1929, "fact": "股灾期间做空净赚约一亿美元", "source": "Wikipedia"}],   // 事实闸对账用
  "highlight": {"gold": ["一亿美元"], "red": ["破产"]},   // 字幕关键词上色 (gold→accent 色, red→alert 色)
  "scenes": [
@@ -132,7 +139,8 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 - **韵律**: `"prosody": "auto"` (默认) 按段落类型微调: 钩子 (第一场/hook) rate +6% pitch +2Hz, 转折 (以"然而/没想到/直到…"开头,
   或 `"beat": "twist"`) rate -6% pitch -2Hz, 结尾 (最后一场/quote) rate -5% pitch -1Hz。场景可直接写
   `"rate": "+20%"` `"pitch": "-3Hz"` `"volume": "+10%"` 覆盖; `"prosody": "off"` 全片匀速。
-- **选声建议**: 科技/财经 → 云扬旁白 + 晓晓引用; 人物悲剧/商战 → 云健旁白 + 云希引用; 历史故事 → 云希 + 云健 (古人原话);
+- **逐句韵律 (默认)**: tts.py 按句子合成, 问句上扬+句后停顿、带数字句放慢、短句前顿一下, 句子真实起止写进 timeline 的 `subs`, 字幕按它对齐。
+- **选声建议**: 云扬是新闻播音腔, 偏平, 只在要"新闻感"时用; 科技/财经默认 → 云希或云健旁白 + 晓晓引用; 人物悲剧/商战 → 云健旁白 + 云希引用; 历史故事 → 云希 + 云健 (古人原话);
   美食/生活 → 晓伊 (+ 晓妮/晓北 方言彩蛋一场); 情感治愈 → 晓晓 / 晓雨; 儿童科普 → 云夏 + 晓伊。同样**不要每条都用云希**。
 
 ### BGM 情绪 `mood` (numpy 合成, 无版权)

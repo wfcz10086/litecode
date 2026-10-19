@@ -185,19 +185,24 @@ def services(args):
     args = args or {}
     needle = _norm(args.get('name', ''))
     rows = []
+    unavailable = 0
     for service in psutil.win_service_iter():
         try:
-            info = service.as_dict()
-        except psutil.Error:
+            # as_dict 还会查询 description；部分 Windows 服务的该配置不存在，
+            # QueryServiceConfig2W 会抛原生 OSError，使整次只读查询失败。
+            name = service.name()
+            display = service.display_name() or name
+            if needle and needle not in (name + display).lower():
+                continue
+            rows.append({'name': name, 'display_name': display,
+                         'status': service.status(), 'start_type': service.start_type()})
+        except (psutil.Error, OSError):
+            unavailable += 1
             continue
-        display = info.get('display_name') or info.get('name') or ''
-        if needle and needle not in (info.get('name', '') + display).lower():
-            continue
-        rows.append({'name': info.get('name'), 'display_name': display,
-                     'status': info.get('status'), 'start_type': info.get('start_type')})
     rows.sort(key=lambda r: (r['name'] or '').lower())
     # 代理以普通用户运行，无权启停服务；此处只读列出。
-    return {'ok': True, 'state': 'services', 'count': len(rows), 'services': rows[:500]}
+    return {'ok': True, 'state': 'services', 'count': len(rows), 'services': rows[:500],
+            'unavailable_count': unavailable}
 
 
 # 固定前缀: 把控制台与管道输出统一到 UTF-8, 避免中文 Windows 默认 GBK/OEM 产生乱码。

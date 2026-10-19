@@ -24,6 +24,7 @@ from __future__ import annotations
 from collections import deque
 from typing import Optional
 import json as _json
+import hashlib as _hashlib
 import re as _re
 
 
@@ -79,10 +80,36 @@ def compute_sig(fn: str, args: dict) -> str:
             cmd = (args.get("command") or args.get("cmd") or args.get("code") or "")[:300]
             norm = _re.sub(r"\d+", lambda m: f"<{int(m.group()) // 100}>", cmd)
             return f"{fn}::{norm[:160]}"
-        # 其他工具用全 args sig
-        return f"{fn}::{_json.dumps(args, sort_keys=True, ensure_ascii=False)[:200]}"
+        # 其他工具用完整参数判重；只截显示文本。长 SSH 命令的文件名或
+        # -Tail 参数可能在公共路径前缀之后，截断签名会把不同调用误判为重复。
+        payload = _json.dumps(args, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return f"{fn}::sha256:{_hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
     except Exception:
         return f"{fn}::?"
+
+
+# [2026-10-19] 封禁提示原样回显工具参数 JSON: ssh_exec 的 password、API 的 token/api_key 明文进了对话和落盘历史。
+_SECRET_KEYS = frozenset({"password", "passwd", "pwd", "passphrase", "key", "token", "secret", "api_key",
+                          "apikey", "access_token", "refresh_token", "private_key", "auth", "authorization",
+                          "client_secret", "cookie"})
+_SECRET_SUFFIX = ("_password", "_passwd", "_token", "_secret", "_api_key", "_apikey", "_private_key")
+
+
+def _is_secret_key(k) -> bool:
+    k = str(k).strip().lower().replace("-", "_")
+    return k in _SECRET_KEYS or k.endswith(_SECRET_SUFFIX)
+
+
+def _redact(v, depth: int = 0):
+    """递归把敏感键的值换成 ***, 只用于展示 (判重签名仍用原参数)。"""
+    if depth > 20:
+        return v
+    if isinstance(v, dict):
+        return {k: ("***" if _is_secret_key(k) and val not in (None, "") else _redact(val, depth + 1))
+                for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_redact(x, depth + 1) for x in v]
+    return v
 
 
 def raw_display(fn: str, args: dict) -> str:
@@ -97,7 +124,7 @@ def raw_display(fn: str, args: dict) -> str:
             return args.get("filepath") or args.get("path", "")
         if fn in ("execute_shell", "execute_python", "run_python"):
             return (args.get("command") or args.get("cmd") or args.get("code") or "")[:160]
-        return _json.dumps(args, sort_keys=True, ensure_ascii=False)[:200]
+        return _json.dumps(_redact(args), sort_keys=True, ensure_ascii=False)[:200]
     except Exception:
         return "?"
 

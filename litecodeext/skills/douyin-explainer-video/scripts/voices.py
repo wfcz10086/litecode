@@ -14,7 +14,7 @@ import difflib
 import re
 
 DEFAULT_VOICE = "zh-CN-YunxiNeural"
-DEFAULT_RATE = "+14%"
+DEFAULT_RATE = "+6%"     # 2026-10-19 从 +14% 降下来: 太快一口气念完, 听不出重点
 
 # 全部来自 edge-tts list_voices (2026-10 实测可用的中文声音; 晓辰/晓涵等 Azure 付费声音 edge-tts 不提供)
 VOICES = {
@@ -127,6 +127,40 @@ def plan(sj):
         _num(rate, "%"), _num(pitch, "Hz"), _num(volume, "%")       # 格式校验
         out.append({"voice": voice, "rate": rate, "pitch": pitch, "volume": volume, "role": role, "beat": beat})
     return out, tips
+
+
+SENT_RE = re.compile(r"(?<=[。！？；!?;])")
+NUM_RE = re.compile(r"\d|[一二三四五六七八九十百千万亿两半]成|百分之|[一二三四五六七八九十]+(?:倍|万|亿)")
+
+
+def sentences(text, highlight=None, auto=True):
+    """一场旁白 → 逐句韵律 [{"text", "dr" 语速增量%, "dp" 音高增量Hz, "dv" 音量增量%, "pause" 句后停顿秒}]。
+    整场一个语速念到底听着像播报; 逐句才有起伏 (纯函数, tts.py 按这个逐句合成再拼):
+      问句 → 音高上扬, 句后停 0.45s 留悬念     带数字/高亮词 → 放慢 6%, 句后停 0.3s
+      短句 (≤10 字, 非首句) → 放慢 8% 加重, 句前停 0.35s 当"砸下来"   感叹句 → 音量 +5%
+    auto=False → 全部 0 增量, 句间 0.15s。"""
+    parts = [p.strip() for p in SENT_RE.split(text or "") if p.strip()]
+    keys = [w for k in ("gold", "red") for w in (highlight or {}).get(k, [])]
+    out = []
+    for i, p in enumerate(parts):
+        core = re.sub(r"[，。！？；：、,.!?;:\s“”\"']", "", p)
+        dr = dp = dv = 0
+        pause = .15 if not auto else .2
+        if auto:
+            if p.endswith(("？", "?")):
+                dp, pause = 3, .45
+            if NUM_RE.search(p) or any(k in p for k in keys):
+                dr, pause = -6, max(pause, .3)
+            if i > 0 and len(core) <= 10:
+                dr = min(dr, -8)
+                if out:
+                    out[-1]["pause"] = max(out[-1]["pause"], .35)
+            if p.endswith(("！", "!")):
+                dv = 5
+        out.append({"text": p, "dr": dr, "dp": dp, "dv": dv, "pause": pause})
+    if out:
+        out[-1]["pause"] = 0
+    return out
 
 
 def main():

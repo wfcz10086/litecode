@@ -66,7 +66,7 @@ async def h_ssh_save_host(sid: str, args: dict) -> tuple[str, Any]:
     }
     data[alias] = entry
     _save(data)
-    masked = entry["password"][:2] + "***" if entry["password"] else "(none)"
+    masked = "(saved)" if entry["password"] else "(none)"
     return f"[ssh_save_host] 已保存: {alias} → {entry['user']}@{entry['host']}:{entry['port']} pwd={masked}", None
 
 
@@ -81,7 +81,7 @@ async def h_ssh_list_hosts(sid: str, args: dict) -> tuple[str, Any]:
         if cfg.get("key_file"):
             auth.append("密钥")
         if cfg.get("password"):
-            auth.append("密码 " + cfg["password"][:2] + "***")
+            auth.append("密码已保存")
         via = f" 经跳板 {cfg['jump']}" if cfg.get("jump") else ""
         note = f"  # {cfg['note']}" if cfg.get("note") else ""
         lines.append(f"  {alias}: {cfg.get('user','root')}@{cfg.get('host','')}:{cfg.get('port',22)}"

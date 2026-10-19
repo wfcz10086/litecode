@@ -75,6 +75,19 @@ class TestSshKeyJump(unittest.TestCase):
         out = asyncio.run(ssh_hosts.h_ssh_list_hosts("t", {}))[0]
         self.assertIn("lh2: root@127.0.0.1:22 经跳板 lh1 [密钥]", out)
 
+    def test_password_output_never_reveals_even_short_secrets(self):
+        for secret in ("ZX-super-secret", "Q", "墨密"):
+            out = asyncio.run(ssh_hosts.h_ssh_save_host("t", {
+                "alias": "private", "host": "test.example", "password": secret,
+            }))[0]
+            listed = asyncio.run(ssh_hosts.h_ssh_list_hosts("t", {}))[0]
+            self.assertIn("pwd=(saved)", out)
+            self.assertIn("密码已保存", listed)
+            for text in (out, listed):
+                self.assertNotIn(secret, text)
+                self.assertNotIn(secret[:2], text)
+            self.assertEqual(ssh_hosts.get_ssh_creds("private")["password"], secret)
+
     def test_store_not_in_code_dir(self):
         self.assertNotIn("litecodeext", str(ssh_hosts._STORE_PATH).replace(tempfile.gettempdir(), ""))
 

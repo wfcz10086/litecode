@@ -21,6 +21,15 @@ if os.name == 'nt':
                 _dll_handles.append(os.add_dll_directory(str(directory)))
 
 
+
+def _launch_detached(command, cwd):
+    """[2026-10-19] 微信也要脱离节点计划任务的作业对象, 否则代理自更新后旧任务一直 Running、节点离线 (同 launch_app)"""
+    try:
+        from windows_desktop_actions import detached_popen
+    except ImportError:
+        return subprocess.Popen(command, cwd=str(cwd))
+    return detached_popen(command, cwd=str(cwd))
+
 def desktop_ready():
     """锁屏或安全桌面不允许误报为可操作桌面。"""
     user = ctypes.windll.user32
@@ -71,14 +80,14 @@ def open_wechat():
             if is_wechat_title(link.stem):
                 shortcut = shell.CreateShortcut(str(link))
                 if Path(shortcut.TargetPath).is_file() and Path(shortcut.TargetPath).name.lower() in WECHAT_EXES:
-                    subprocess.Popen([shortcut.TargetPath], cwd=str(Path(shortcut.TargetPath).parent))
+                    _launch_detached([shortcut.TargetPath], Path(shortcut.TargetPath).parent)
                     return
     for env in ('ProgramFiles', 'ProgramFiles(x86)', 'LOCALAPPDATA'):
         root = Path(os.environ.get(env, 'C:/'))
         for relative in ('Tencent/Weixin/Weixin.exe', 'Tencent/WeChat/WeChat.exe'):
             exe = root / relative
             if exe.is_file():
-                subprocess.Popen([str(exe)], cwd=str(exe.parent))
+                _launch_detached([str(exe)], exe.parent)
                 return
     raise RuntimeError('未发现微信安装路径或快捷方式')
 

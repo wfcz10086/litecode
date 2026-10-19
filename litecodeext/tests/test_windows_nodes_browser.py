@@ -5,7 +5,8 @@ from pathlib import Path
 import pytest
 
 
-def test_enrollment_panel_and_revocation():
+@pytest.mark.parametrize('allow_shell', [False, True])
+def test_enrollment_panel_and_revocation(allow_shell):
     playwright = pytest.importorskip('playwright.sync_api')
     with playwright.sync_playwright() as p:
         executable = p.chromium.executable_path
@@ -29,8 +30,10 @@ def test_enrollment_panel_and_revocation():
                 elif method == 'POST':
                     data = request.request.post_data_json
                     assert data['server_url'] == 'https://node.test'
+                    assert data['enable_shell'] is allow_shell
                     nodes.append({'id': 'test', 'alias': data['alias'], 'state': 'online',
                                   'desktop_state': 'desktop_ready', 'screenshot': '/uploads/test.png',
+                                  'capabilities': {'shell': allow_shell},
                                   'update_state': 'legacy',
                                   'error': '<img src=x onerror=alert(1)>'})
                     result = {'command': 'powershell.exe -EncodedCommand TEST'}
@@ -50,6 +53,10 @@ def test_enrollment_panel_and_revocation():
             page.add_script_tag(path=str(Path(__file__).resolve().parents[1] / 'web_assets/windows_nodes.js'))
             page.evaluate('openWindowsNodes()')
             page.get_by_placeholder('节点别名，例如 win-office').fill('win-new')
+            shell_choice = page.get_by_label('初始化时允许 PowerShell 命令执行')
+            assert not shell_choice.is_checked()
+            if allow_shell:
+                shell_choice.check()
             page.get_by_role('button', name='生成接入命令').click()
             page.wait_for_function('document.querySelector("textarea").value.includes("EncodedCommand")')
             assert page.get_by_text('win-new · 在线', exact=True).count() == 1

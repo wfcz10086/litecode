@@ -88,6 +88,10 @@ class AgentRecord:
     instructions: List[str] = field(default_factory=list)   # 已送达的补充指令原文 (历史压缩后据此重新附上)
     tool_running: str = ""            # 正在执行的工具调用 (tool_begin 置, note_tool 清)
     tool_started: Optional[float] = None
+    # [2026-10-19] wait 超时要给出"最近进展", 否则主代理只会再 wait 一次 (实测 wait 280 → wait 300, 子代理 544s 失败)
+    last_progress: float = field(default_factory=time.time)   # 最近一次迭代推进/工具开始/工具结束的时刻
+    last_tool_at: Optional[float] = None                      # 最近一次工具调用结束时刻
+    last_output: str = ""                                     # 最近一条模型/工具输出片段 (tick 时从 messages 取)
 
     @property
     def brief(self) -> str:
@@ -389,6 +393,13 @@ def tick(messages: list, it: int, max_iter: int, agent_type: str) -> Optional[st
     if rec is None:
         return None
     rec.iteration, rec.max_iter = it + 1, max_iter
+    rec.last_progress = time.time()
+    try:
+        _snip = _last_output_snippet(messages)
+        if _snip:
+            rec.last_output = _snip
+    except Exception:
+        pass
     if rec.stop_requested:
         _log().warning(f"  [subagent:{agent_type}] {rec.id} 主代理请求停止, 于 iter={it + 1} 结束")
         return (f"[子代理已中断] {rec.stop_reason}, 子代理 {agent_type} ({rec.id}) "
@@ -404,6 +415,20 @@ def tick(messages: list, it: int, max_iter: int, agent_type: str) -> Optional[st
         rec.instructions.append(text)
         _log().info(f"  [subagent:{agent_type}] {rec.id} 收到主代理补充指令 @iter={it + 1}: {text[:120]}")
     return None
+
+
+def _last_output_snippet(messages: list, n: int = 160) -> str:
+    """最近一条 assistant 文本 / tool 结果的单行片段 (跳过注入的 user 指令)。"""
+    for m in (messages or [])[-6:][::-1]:
+        if not isinstance(m, dict) or m.get("role") not in ("assistant", "tool"):
+            continue
+        c = m.get("content")
+        if isinstance(c, list):
+            c = " ".join(str(x.get("text", "")) for x in c if isinstance(x, dict))
+        t = " ".join(str(c or "").split())
+        if t:
+            return ("工具结果: " if m.get("role") == "tool" else "") + (t[:n] + ("…" if len(t) > n else ""))
+    return ""
 
 
 def stop_session(sid: Optional[str], reason: str = "用户在界面点了停止") -> int:
@@ -437,6 +462,7 @@ def tool_begin(fn_name: str, fn_args) -> None:
     r = _CURRENT.get()
     if r is not None:
         r.tool_running, r.tool_started = _tool_label(fn_name, fn_args), time.time()
+        r.last_progress = r.tool_started
 
 
 def note_tool(fn_name: str, fn_args) -> None:
@@ -446,6 +472,7 @@ def note_tool(fn_name: str, fn_args) -> None:
     r.tool_calls += 1
     r.last_tool = _tool_label(fn_name, fn_args)
     r.tool_running, r.tool_started = "", None
+    r.last_tool_at = r.last_progress = time.time()
 
 
 def pin_instructions(messages: list) -> list:
@@ -709,8 +736,30 @@ async def _wait(sid: Optional[str], rid: str, timeout) -> str:
     if left:
         why = "主会话被用户中断, 停止等待" if interrupted else f"等待 {t:g}s 超时"
         parts.append(f"[{why}] 仍在运行 {len(left)} 个 (不是错误, 子代理继续在后台跑; 可稍后再 wait, "
-                     "或先做别的、send 补充指令、stop 叫停):\n" + "\n".join("- " + _progress(r) for r in left))
+                     "或先做别的、send 补充指令、stop 叫停):\n"
+                     + "\n".join("- " + _progress(r) + _stall_note(r) for r in left))
     return "\n\n".join(parts)
+
+
+STALL_HINT_SEC = 120   # 连续这么久没有进展才提示"可 stop 后换方案"
+
+
+def _stall_note(r: AgentRecord) -> str:
+    """[2026-10-19] wait 超时时附上子代理的最近活动, 让主代理判断是"在干活"还是"卡住了"。"""
+    now = time.time()
+    idle = int(now - (r.last_progress or r.started))
+    bits = [f"距上次进展 {idle}s"]
+    if r.last_tool:
+        bits.append(f"最后完成工具 {r.last_tool}"
+                    + (f" ({int(now - r.last_tool_at)}s 前)" if r.last_tool_at else ""))
+    if r.last_output:
+        bits.append(f"最近输出: {r.last_output}")
+    note = "\n    最近活动: " + "; ".join(bits)
+    if idle >= STALL_HINT_SEC:
+        busy = _running_tool(r)
+        note += (f"\n    ⚠ 已连续 {idle} 秒无进展" + (f" (卡在 {busy})" if busy else "")
+                 + ", 别只是再 wait: 可 stop 后换方案, 或 send 补充指令让它收尾交付已有结果。")
+    return note
 
 
 # ═══════════════════════════ 回合边界 ═══════════════════════════

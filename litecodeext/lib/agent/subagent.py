@@ -786,9 +786,10 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 error_streak += 1
                 if error_streak < MAX_ERROR_STREAK:
                     result += (
-                        "\n\n[SYSTEM: 这是一个错误，不是终止信号。"
-                        "分析根因，制定新方案，继续执行任务。"
-                        "禁止输出'无法继续'或等待用户指令。]"
+                        "\n\n[SYSTEM: 保留失败结果，定位原因，继续可独立执行的步骤。"
+                        "同类错误重复两次后先检查连接、进程或日志，不重复相同命令。"
+                        "环境仍阻塞时返回证据、已完成和未完成项及下一步；"
+                        "不得绕过权限、重建系统或宣称成功。]"
                     )
                 else:
                     # v1.0: 错误栈弹回 — 超过阈值时构建结构化错误栈
@@ -857,7 +858,7 @@ _SUBAGENT_DEPTH: _cvar.ContextVar[int] = _cvar.ContextVar('subagent_depth', defa
 _SUBAGENT_MAX_DEPTH = 2
 
 _SUBAGENT_CACHE: Dict[str, Tuple[float, str]] = {}
-_SUBAGENT_CACHE_TTL = 3600
+_SUBAGENT_CACHE_TTL = 1800
 _SUBAGENT_CACHE_MAX = 200
 
 
@@ -869,6 +870,16 @@ def _subagent_cache_key(agent_type: str, task: str, context: str) -> str:
     h.update(b"\x00")
     h.update(context.encode("utf-8", errors="replace"))
     return h.hexdigest()[:16]
+
+
+def _cacheable(agent_type: str) -> bool:
+    """[2026-10-19] 只有纯联网查资料的角色 (工具全是 web_*/browser_*) 能复用缓存结果。
+    原来除 operator 外全缓存 1 小时: tester 第一次报 "2 failed", 模型改完代码再派同样的任务,
+    秒回的还是那条旧失败, 模型就一直"修"; coder 命中缓存则直接返回"已完成"却一个文件都没写。"""
+    cfg = _SUBAGENT_CONFIGS.get(agent_type)
+    if not cfg:
+        return False
+    return all(t.startswith(("web_", "browser_")) for t in cfg["allowed"])
 
 
 def _subagent_cache_get(key: str) -> Optional[str]:
@@ -937,7 +948,7 @@ async def _run_subagent_safe(task: str, agent_type: str, context: str = "",
     try:
         _t0 = time.time()
         _cache_key = _subagent_cache_key(agent_type, task, context or "")
-        _cached = None if _is_operator(agent_type) else _subagent_cache_get(_cache_key)   # GUI 有副作用, 不缓存
+        _cached = _subagent_cache_get(_cache_key) if _cacheable(agent_type) else None   # 读写文件/执行/GUI 的角色不缓存
         if _cached is not None:
             log.info(f"  [subagent:{agent_type}] cache HIT (key {_cache_key[:8]})")
             _emit_subagent_telemetry(agent_type, task, "ok", 0, len(_cached), error="(cache)")
@@ -948,7 +959,7 @@ async def _run_subagent_safe(task: str, agent_type: str, context: str = "",
                 timeout=timeout,
             )
             _emit_subagent_telemetry(agent_type, task, "ok", (time.time() - _t0) * 1000, len(result))
-            if result and not result.startswith("[子代理") and not _is_operator(agent_type) and not _reg.steered():
+            if result and not result.startswith("[子代理") and _cacheable(agent_type) and not _reg.steered():
                 _subagent_cache_put(_cache_key, result)
             return result
         except asyncio.TimeoutError:

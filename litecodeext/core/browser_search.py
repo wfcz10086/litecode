@@ -25,6 +25,7 @@ import base64
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -48,28 +49,43 @@ _BROWSER_URL = f"http://127.0.0.1:{_BROWSER_PORT}"
 #  2. 不下 chromium binary (省 200MB + 国内访问障碍)
 #  3. 单例 + 用完即关 (idle 5min 自动 close ctx, 见 browser_server.js _cleanupSession)
 #  4. /cleanup endpoint 主动关 session
-def _resolve_browser_server_path() -> tuple:
-    """返回 (启动命令 list, 描述). 优先找 Node 版, 回退 Python 老版."""
+def _resolve_browser_server_candidates() -> list:
+    """返回候选启动方式 [(cmd list, 描述, cwd), ...], 按优先级: Node 版 → Python 老版.
+    [2026-10-19] 原来只返回一个: /opt/browser_node 不存在时挑了 skills/ 下的 browser_server.js,
+    却仍用 cwd=/opt/browser_node → Popen 直接报目录不存在 (skills 目录也没有 node_modules),
+    且从不回退 Python 版, 浏览器工具全挂. 现在返回全部候选, cwd 取脚本自己所在目录.
+    """
+    out = []
+    _node_ok = bool(shutil.which("node"))
     # 1) Node 版优先 (在 /opt/browser_node/ 装了 puppeteer-core + express)
     node_js = Path("/opt/browser_node/browser_server.js")
-    if node_js.exists():
-        return (["node", str(node_js)], f"node:{node_js}")
+    if _node_ok and node_js.exists():
+        out.append((["node", str(node_js)], f"node:{node_js}", str(node_js.parent)))
     # 1b) Node 版也可能在 skills/ 下 (host mount 同步过去)
     node_alt = Path(__file__).resolve().parent.parent / "skills" / "browser-automation" / "browser_server.js"
-    if node_alt.exists():
-        return (["node", str(node_alt)], f"node:{node_alt}")
-    # 2) 老 Python 版 fallback (chromium 装好的环境下还能用)
+    if _node_ok and node_alt.exists():
+        out.append((["node", str(node_alt)], f"node:{node_alt}", str(node_alt.parent)))
+    # 2) 老 Python 版 fallback (chromium 装好的环境下还能用), 同端口 BROWSER_AGENT_PORT
     env_p = os.environ.get("BROWSER_SERVER_PATH", "")
-    if env_p and Path(env_p).exists():
-        return ([sys.executable, env_p], f"python:{env_p}")
     home = os.environ.get("LITECODE_HOME", "/opt/litecode")
-    p = Path(home) / "skills" / "browser-automation" / "browser_server.py"
-    if p.exists():
-        return ([sys.executable, str(p)], f"python:{p}")
-    p2 = Path(__file__).resolve().parent.parent / "skills" / "browser-automation" / "browser_server.py"
-    if p2.exists():
-        return ([sys.executable, str(p2)], f"python:{p2}")
-    return ([], "<not-found>")
+    seen = set()
+    for _p in (Path(env_p) if env_p else None,
+               Path(home) / "skills" / "browser-automation" / "browser_server.py",
+               Path(__file__).resolve().parent.parent / "skills" / "browser-automation" / "browser_server.py"):
+        if _p is None or not _p.exists():
+            continue
+        _rp = str(_p.resolve())
+        if _rp in seen:
+            continue
+        seen.add(_rp)
+        out.append(([sys.executable, str(_p)], f"python:{_p}", str(_p.parent)))
+    return out
+
+
+def _resolve_browser_server_path() -> tuple:
+    """兼容旧接口: 返回首选 (启动命令 list, 描述)."""
+    c = _resolve_browser_server_candidates()
+    return (c[0][0], c[0][1]) if c else ([], "<not-found>")
 
 _BROWSER_LAUNCH_CMD, _BROWSER_DESC = _resolve_browser_server_path()
 
@@ -158,47 +174,85 @@ def _ensure_browser_server(timeout: float = 10.0) -> bool:
             return True
     except Exception as _he:
         _BROWSER_LAST_ERR = f"health 检查失败: {_he}"
-    # 不在跑 → 启动 (Node 版或 Python 老版, 由 _resolve_browser_server_path 决定)
-    if not _BROWSER_LAUNCH_CMD:
+    # [2026-10-19] 启动失败记忆: 原来每次浏览器调用都重新 spawn + 干等 10s, 一轮里调 N 次就空等 N×10s.
+    # 60s 内已失败过 → 直接返回上次错误, 不再拉起.
+    if time.time() < _BROWSER_FAIL_UNTIL:
+        _BROWSER_LAST_ERR = (f"browser_server 最近 {int(_BROWSER_FAIL_TTL)}s 内启动失败过, 不重复拉起 "
+                             f"(上次原因: {_BROWSER_FAIL_REASON})")
+        return False
+    cands = _resolve_browser_server_candidates()
+    if not cands:
         _BROWSER_LAST_ERR = f"browser_server 未找到 (检索: node ./browser_server.js / python browser_server.py 均不存在)"
+        _set_browser_fail(_BROWSER_LAST_ERR)
         return False
     log_path = Path("/tmp/browser_server.log")
-    log = log_path.open("a")
+    deadline = time.time() + timeout
+    errs = []
+    for cmd, desc, cwd in cands:
+        if time.time() >= deadline:
+            break
+        ok, err = _try_start_browser(cmd, desc, cwd, log_path, deadline)
+        if ok:
+            _BROWSER_LAST_ERR = ""
+            return True
+        errs.append(err)
+    _BROWSER_LAST_ERR = "\n".join(errs) or f"{timeout}s 内 browser_server 未就绪"
+    _set_browser_fail(_BROWSER_LAST_ERR)
+    return False
+
+
+_BROWSER_FAIL_TTL = 60.0
+_BROWSER_FAIL_UNTIL = 0.0
+_BROWSER_FAIL_REASON = ""
+
+
+def _set_browser_fail(reason: str) -> None:
+    global _BROWSER_FAIL_UNTIL, _BROWSER_FAIL_REASON
+    _BROWSER_FAIL_UNTIL = time.time() + _BROWSER_FAIL_TTL
+    _BROWSER_FAIL_REASON = (reason or "")[-400:]
+
+
+def _try_start_browser(cmd, desc, cwd, log_path, deadline) -> tuple:
+    """拉起一个候选并等 /health. 进程提前退出 → 立刻返回失败让调用方换下一个候选. 返回 (ok, err)."""
     try:
-        # [2026-05-25] Node 版需要在 /opt/browser_node 目录跑 (node_modules 在那)
-        _cwd = "/opt/browser_node" if _BROWSER_DESC.startswith("node:") else None
-        subprocess.Popen(
-            _BROWSER_LAUNCH_CMD,
-            stdout=log, stderr=log,
-            cwd=_cwd,
+        log = log_path.open("a")
+    except Exception:
+        log = subprocess.DEVNULL
+    try:
+        proc = subprocess.Popen(
+            cmd, stdout=log, stderr=log,
+            cwd=cwd if cwd and os.path.isdir(cwd) else None,
             env={**os.environ, "BROWSER_AGENT_PORT": str(_BROWSER_PORT)},
             start_new_session=True,   # 完全 daemon 化, 不随父进程退出
         )
     except Exception as _spe:
-        _BROWSER_LAST_ERR = f"subprocess.Popen 失败 ({_BROWSER_DESC}): {_spe}"
-        return False
-    # 等健康检查
-    t0 = time.time()
-    while time.time() - t0 < timeout:
+        return False, f"subprocess.Popen 失败 ({desc}): {_spe}"
+    finally:
+        if log is not subprocess.DEVNULL:
+            try:
+                log.close()
+            except Exception:
+                pass
+    while time.time() < deadline:
         try:
             if httpx.get(f"{_BROWSER_URL}/health", timeout=1.5).status_code == 200:
-                _BROWSER_LAST_ERR = ""
-                return True
+                return True, ""
         except Exception:
             pass
+        if proc.poll() is not None:
+            break
         time.sleep(0.5)
-    # 超时: 尝试捞日志尾巴
     _tail = ""
     try:
         if log_path.exists():
             _tail = log_path.read_text(errors="replace")[-600:]
     except Exception:
         pass
-    _BROWSER_LAST_ERR = (
-        f"{timeout}s 内 http://127.0.0.1:{_BROWSER_PORT}/health 未就绪"
-        + (f"\n[log tail]\n{_tail}" if _tail else "")
-    )
-    return False
+    if proc.poll() is not None:
+        head = f"{desc} 启动后立即退出 (exit={proc.returncode})"
+    else:
+        head = f"{desc}: http://127.0.0.1:{_BROWSER_PORT}/health 到时未就绪"
+    return False, head + (f"\n[log tail]\n{_tail}" if _tail else "")
 
 
 def _post_act(action: str, params: dict, session: str = "default",
@@ -408,10 +462,13 @@ def browser_search(query: str, engine: str = "bing", top_k: int = 5,
 
     cfg = _ENGINES.get(engine.lower(), _ENGINES["bing"])
     url = cfg["url"].replace("{q}", quote_plus(query))
-    session = "search-bot"
+    # [2026-10-19] 每个引擎单独一个页面: web_search 会并行跑 duckduckgo/bing/sogou, 原来共用 "search-bot"
+    # 一个页面, 互相把对方导航走, 抓取拿错页面的选择器 → 全部"空结果"
+    session = f"search-bot-{engine.lower()}"
 
     # 1. 打开搜索 URL (不截图, 省带宽)
-    goto = _post_act("goto", {"url": url}, session=session, wait_ms=0, want_shot=False)
+    # 服务端 goto 最坏 30s(networkidle2)+15s 兜底; 客户端原来 30s 先放弃 → 报"goto 失败"让模型重试同一页
+    goto = _post_act("goto", {"url": url}, session=session, wait_ms=0, want_shot=False, timeout=50.0)
     if not goto.get("ok"):
         return {"ok": False, "message": f"ERROR: goto 失败: {goto.get('msg','')}"}
 
@@ -562,7 +619,7 @@ def browser_read(url: str, wait_for: Optional[str] = None,
         return {"ok": False, "message": f"ERROR: 无效 URL: {url!r}"}
 
     session = "reader-bot"
-    goto = _post_act("goto", {"url": url}, session=session, wait_ms=0, want_shot=False)
+    goto = _post_act("goto", {"url": url}, session=session, wait_ms=0, want_shot=False, timeout=50.0)
     if not goto.get("ok"):
         return {"ok": False, "message": f"ERROR: goto 失败: {goto.get('msg','')}"}
 

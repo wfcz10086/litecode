@@ -9,7 +9,7 @@
 状态挂在 TurnContext.readback 上 (每回合新建), 主循环零改动:
   observe() 由 after_tools._after_tool_batch 调用, check() 由 text_reply._handle_text_reply 调用。
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import re
 
@@ -49,6 +49,7 @@ INJECT_TEXT = (
 class ReadbackState:
     used_desktop: bool = False
     pending_change: bool = False   # 有改动类动作且其后尚无成功的回读
+    pending_aliases: set = field(default_factory=set)  # 各电脑分别确认, 不能用另一台的文件充数
     injected: bool = False
 
 
@@ -65,7 +66,43 @@ def _state(ctx) -> ReadbackState:
 def _ok(content) -> bool:
     """工具确实执行了且未报错: 被守卫拦下 ([SYSTEM-...]) 或 ERROR 开头都不算。"""
     text = (content if isinstance(content, str) else str(content or "")).lstrip()
-    return not (text.startswith("ERROR") or text.startswith("[SYSTEM"))
+    if not text or text.startswith(("ERROR", "[SYSTEM", "TIMEOUT", "EXEC_ERROR")):
+        return False
+    if text.startswith('{'):
+        try:
+            result, _ = json.JSONDecoder().raw_decode(text)
+        except ValueError:
+            return False
+        return result.get('ok') is True and result.get('exit_code', 0) == 0
+    return True
+
+
+def _alias(ctx, args, content) -> str:
+    """[2026-10-19] 原先直接比模型原始 alias: 操作员子代理不传 alias 时 check_windows_call 在服务端补成
+    分配的电脑, 而这里读到空串 → 改动记在 "" 名下, 回读记在 "gpu-vm" 名下, 永远对不上, 误注入回读提示;
+    "GPU-VM " 与 "gpu-vm" 也被当成两台。两边统一: 优先用工具结果里服务端回填的 alias, 其次模型参数,
+    缺省按工具同样的规则取本会话分配的电脑; 最后 strip + lower。"""
+    alias = ''
+    text = content if isinstance(content, str) else ''
+    body = text.lstrip()
+    if body.startswith('ERROR: '):
+        body = body[7:].split(' ', 1)[-1].lstrip()
+    if body.startswith('{'):
+        try:
+            result, _ = json.JSONDecoder().raw_decode(body)
+            if isinstance(result, dict) and isinstance(result.get('alias'), str):
+                alias = result['alias']
+        except ValueError:
+            pass
+    if not alias.strip() and isinstance(args, dict):
+        alias = str(args.get('alias') or '')
+    if not alias.strip():
+        try:
+            from lib.agent.subagent_operator import assigned_alias
+            alias = assigned_alias(getattr(ctx, 'session_id', None) or '') or ''
+        except Exception:
+            alias = ''
+    return alias.strip().lower()
 
 
 def observe(ctx, tool_call_list, tool_results) -> None:
@@ -85,12 +122,15 @@ def observe(ctx, tool_call_list, tool_results) -> None:
             args = {}
         action = (args if isinstance(args, dict) else {}).get("action")
         content = results.get(tc.get("id"))
+        alias = _alias(ctx, args, content)
         if name == "windows_desktop":
             st.used_desktop = True
             if is_file_change(action, args if isinstance(args, dict) else {}) and _ok(content):
+                st.pending_aliases.add(alias)
                 st.pending_change = True
         elif action in READBACK_ACTIONS and _ok(content):
-            st.pending_change = False
+            st.pending_aliases.discard(alias)
+            st.pending_change = bool(st.pending_aliases)
 
 
 def check(ctx):

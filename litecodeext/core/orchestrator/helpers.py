@@ -238,11 +238,17 @@ async def _run_tool_step(spec, prior_results, sse_emit, label):
         ret = await registry.call(name, args if isinstance(args, dict) else {}, ctx)
     except Exception as e:
         return f"[tool-error] {name} crashed: {e!r}"
+    # [2026-10-19] 工具约定用 "ERROR: …" 字符串报错; 原来原样包成 "[tool] x → ERROR…" 被判成功,
+    # 失败结果当正常产物传给下游步骤
     if not isinstance(ret, dict):
+        if isinstance(ret, str) and ret.lstrip().startswith("ERROR"):
+            return f"[tool-error] {name}: {ret}"
         return f"[tool] {name} → {ret}"
     if ret.get("ok") is False:
         return f"[tool-error] {name}: {ret.get('error') or ret}"
     head = ret.get("result") or "ok"
+    if isinstance(head, str) and head.lstrip().startswith("ERROR"):
+        return f"[tool-error] {name}: {head}"
     files = ret.get("files") or []
     tail = ""
     if files:

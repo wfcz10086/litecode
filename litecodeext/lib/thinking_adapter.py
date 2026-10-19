@@ -14,7 +14,7 @@ lib/thinking_adapter.py — 统一推理参数适配器
 """
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 log = logging.getLogger("openclaw")
@@ -33,6 +33,9 @@ class ThinkingConfig:
     # [thinking-route 2026-08-26] 见下方 stack() —— backend_type 只说线路协议,
     # deployment 说服务栈, 判 thinking 参数格式必须看后者。
     deployment: str = ""
+    # 模型/端点可配置所接受的强度名称，例如 {"high": "xhigh"}。
+    # 不配置时沿用默认 budget -> effort 映射。
+    reasoning_effort_map: dict[str, str] = field(default_factory=dict)
 
     def stack(self) -> str:
         """真正决定 thinking 参数格式的"服务栈"。
@@ -81,6 +84,7 @@ def init(model_cfg: dict):
         budget=model_cfg.get("thinking_budget", 8192),
         backend_type=model_cfg.get("backend_type", "vllm"),
         deployment=str(model_cfg.get("deployment", "") or "").strip().lower(),
+        reasoning_effort_map=dict(model_cfg.get("reasoning_effort_map") or {}),
     )
     log.debug(f"[thinking] init: type={_active.backend_type} "
               f"enabled={_active.enabled} budget={_active.budget}")
@@ -92,6 +96,7 @@ def init(model_cfg: dict):
         live["thinking_budget"] = int(_active.budget)
         live["backend_type"]    = str(_active.backend_type)
         live["deployment"]      = str(_active.deployment)
+        live["reasoning_effort_map"] = dict(_active.reasoning_effort_map)
 
 
 def update(model_cfg: dict):
@@ -121,12 +126,14 @@ def _live_cfg(force_disable: bool = False) -> ThinkingConfig:
                 budget=int(live.get("thinking_budget", 8192)),
                 backend_type=str(live.get("backend_type", "vllm")),
                 deployment=str(live.get("deployment", "") or ""),
+                reasoning_effort_map=dict(live.get("reasoning_effort_map") or {}),
             )
         return ThinkingConfig(
             enabled=bool(live.get("enable_thinking", False)) and not force_disable,
             budget=int(live.get("thinking_budget", 8192)),
             backend_type=str(live.get("backend_type", "vllm")),
             deployment=str(live.get("deployment", "") or ""),
+            reasoning_effort_map=dict(live.get("reasoning_effort_map") or {}),
         )
     cfg = get()
     return ThinkingConfig(
@@ -134,6 +141,7 @@ def _live_cfg(force_disable: bool = False) -> ThinkingConfig:
         budget=cfg.budget,
         backend_type=cfg.backend_type,
         deployment=cfg.deployment,
+        reasoning_effort_map=dict(cfg.reasoning_effort_map),
     )
 
 
@@ -167,12 +175,15 @@ def inject_params(payload: dict, *, force_disable: bool = False) -> dict:
             #  none/low/high 量乱序 — 见 commit body); 但认 effort 的上游 (标准 vLLM 新版)
             #  会据此自动分级。budget→effort 映射, 与前端 🧠 chip 档位对齐:
             #    ≤2048=low(前端"低") / ≤8000=medium(前端"中") / >8000=high(前端"高")。
-            # 若调用方已显式传 reasoning_effort, 尊重它不覆盖。
+            # 若调用方已显式传 reasoning_effort，不用 budget 覆盖其强度。
             if "reasoning_effort" not in payload:
                 _b = cfg.budget
                 payload["reasoning_effort"] = ("low" if _b <= 2048
                                                else "medium" if _b <= 8000
                                                else "high")
+            # 显式和自动强度都使用当前模型接受的名称；未配置的值原样保留。
+            effort = payload["reasoning_effort"]
+            payload["reasoning_effort"] = cfg.reasoning_effort_map.get(effort, effort)
 
     elif _stack == "anthropic":
         if enabled:

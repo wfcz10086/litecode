@@ -25,7 +25,8 @@
     dialog.append(close, el('h3', '添加 Windows'));
     dialog.append(el('p', '① 复制接入命令 → ② 在新电脑运行 → ③ 自动发现电脑并显示桌面。'));
     dialog.append(el('p', '新电脑：右键开始按钮 → 终端（管理员）→ 粘贴命令并回车。电脑名字和登录用户会自动识别。'));
-    dialog.append(el('small', '代理使用安装用户可用的最高权限运行；设备凭据由 Windows 为该用户加密保存。'));
+    dialog.append(el('p', '安装后自动启动并保持连接；代理和功能组件在空闲时自动更新。重启电脑后，进入安装用户桌面即可恢复，桌面操作需要解锁。'));
+    dialog.append(el('small', '代理使用安装用户可用的最高权限运行；设备凭据由 Windows 加密保存。初始化包含开机自启的 OpenSSH Server，每节点使用独立 SSH 密钥，私钥保留在控制端。'));
     const form = el('form');
     const alias = el('input');
     alias.placeholder = '节点别名，例如 win-office';
@@ -66,7 +67,12 @@
       transport.textContent = url.value.startsWith('https://') ? '连接使用 HTTPS 加密。' : '当前地址使用 HTTP，凭据和截图在网络上传输时未加密。长期使用请配置 HTTPS。';
     };
     url.addEventListener('input', showTransport); showTransport();
-    form.append(el('label', '电脑代号（已自动生成，可改）'), alias, advanced, transport, create);
+    const allowShell = el('input');
+    allowShell.type = 'checkbox';
+    const shellChoice = el('label');
+    shellChoice.style.cssText = 'display:block;margin:12px 0';
+    shellChoice.append(allowShell, document.createTextNode(' 初始化时允许 PowerShell 命令执行'));
+    form.append(el('label', '电脑代号（已自动生成，可改）'), alias, advanced, transport, shellChoice, create);
     form.onsubmit = async event => {
       event.preventDefault();
       create.disabled = true;
@@ -75,7 +81,7 @@
           advanced.open = true;
           throw new Error('当前地址只指向本机，请填写新电脑能够访问的 LiteCode Web 地址。');
         }
-        const data = await api('', {method: 'POST', body: JSON.stringify({alias: alias.value.trim(), server_url: url.value.trim()})});
+        const data = await api('', {method: 'POST', body: JSON.stringify({alias: alias.value.trim(), server_url: url.value.trim(), enable_shell: allowShell.checked})});
         commandKind = 'join';
         command.value = data.command;
         command.style.display = 'block';
@@ -87,9 +93,9 @@
     };
     const list = el('div');
     dialog.append(form, command, copy, message, el('h4', '已登记节点'), list);
-    dialog.append(el('small', '完全卸载会删除本节点代理、启动任务、独立运行环境和本机凭据；已有软件、历史对话和任务截图保留。仅撤销授权不会删除本机文件。'));
+    dialog.append(el('small', '完全卸载会删除本节点代理、启动任务、独立运行环境、本机凭据及本节点 SSH 公钥；系统 SSH 服务、其它密钥、已有软件、历史对话和任务截图保留。仅撤销授权不会删除本机文件。'));
     const states = {awaiting_join: '等待执行命令', expired: '接入码已过期', installing: '安装中', online: '在线', offline: '离线', error: '安装或连接失败', revoked: '已撤销', uninstall_pending: '等待电脑接收卸载', uninstalling: '正在卸载，等待清理回执', uninstall_failed: '卸载未完成', uninstalled: '已完全卸载'};
-    const stages = {enrolled: '已发现电脑', python: '准备独立 Python 环境', packages: '安装桌面组件', agent: '启动桌面代理'};
+    const stages = {enrolled: '已发现电脑', ssh: '准备 SSH Server 与开机启动', python: '准备独立 Python 环境', packages: '安装桌面组件', agent: '启动桌面代理'};
     const taskStates = {queued: '等待电脑领取', running: '电脑正在执行', returned: '动作已返回，业务结果请看截图验收', failed: '动作失败', cancelled: '已取消派发，已执行的动作无法撤回', unconfirmed: '未确认是否完成，请先检查桌面，勿重复发送'};
     const actions = {screenshot: '截图检查', initialize: '初始化', windows: '查看窗口', click: '点击', double_click: '双击', right_click: '右键', hover: '悬停', click_text: '点击文字', scroll: '滚动', drag: '拖动', hotkey: '快捷键', type_text: '输入文字', type_secret: '输入已保存凭据', open_url: '打开网页', wechat_login: '微信登录', wechat_status: '检查微信', ocr: '识别文字', clipboard: '读取剪贴板', focus_window: '切换窗口', close_window: '关闭窗口'};
     const busy = new Set();

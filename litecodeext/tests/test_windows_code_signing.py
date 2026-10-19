@@ -233,7 +233,8 @@ def _run_main(tmp_path, polls, served):
          patch.object(agent, 'startup_assets', side_effect=lambda c, r: agent.load_trust(r)), \
          patch.object(agent.time, 'sleep'), patch.object(agent.os, 'chdir'), \
          patch.object(agent, 'harden_task'), \
-         patch.object(agent.subprocess, 'Popen') as popen:
+         patch.object(agent, 'powershell') as popen:
+        popen.return_value.returncode = 0
         try:
             agent.main()          # 自更新成功会安排重启并返回
         except KeyboardInterrupt:

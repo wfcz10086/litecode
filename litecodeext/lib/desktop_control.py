@@ -13,6 +13,7 @@ desktop_control.py — 桌面操控 (LITE 版, 2026-05)
 """
 from __future__ import annotations
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -39,7 +40,9 @@ def exec(cmd: str, bg: bool = True, timeout: int = 20) -> dict:
     try:
         if bg:
             # 后台运行 — chromium / xdg-open 这种持续进程必须用
-            full = f"nohup bash -lc {subprocess.list2cmdline([cmd])} > /tmp/desktop_exec.log 2>&1 &"
+            # shlex.quote 而不是 list2cmdline: 后者是 Windows 引号规则, 包出来是 "...",
+            # 外层 sh 会先把里面的 $VAR 展开成空 (`B=x; echo $B` 打印空) —— 2026-10-19 同类 bug
+            full = f"nohup bash -lc {shlex.quote(cmd)} > /tmp/desktop_exec.log 2>&1 &"
             subprocess.Popen(full, shell=True, env=_env(),
                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                              start_new_session=True)
@@ -47,7 +50,8 @@ def exec(cmd: str, bg: bool = True, timeout: int = 20) -> dict:
         else:
             r = subprocess.run(["bash", "-lc", cmd], env=_env(),
                                capture_output=True, text=True, timeout=timeout)
-            return {"ok": r.returncode == 0, "msg": (r.stdout or r.stderr or "").strip()[:2000],
+            both = ((r.stdout or "").strip() + ("\n[stderr]\n" + r.stderr.strip() if (r.stderr or "").strip() else "")).strip()
+            return {"ok": r.returncode == 0, "msg": both[-3000:],
                     "exit": r.returncode, "bg": False}
     except subprocess.TimeoutExpired:
         return {"ok": False, "msg": f"ERROR: 超时 {timeout}s"}

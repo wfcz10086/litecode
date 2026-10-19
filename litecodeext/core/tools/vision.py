@@ -69,7 +69,9 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
             im = _Im.open(_io.BytesIO(img_bytes))
             if im.mode not in ("RGB", "L"):
                 im = im.convert("RGB")
-            w, h = im.size; scale = 1280 / max(w, h)
+            # [2026-10-19] 按总像素限 (~2MP) 而不是长边 1280: 竖长拼图 (视频抽帧 7 行×3 帧 930x3360)
+            # 按长边缩会缩到 352 宽, 每帧字幕只剩几个像素, 视觉模型根本看不清。
+            w, h = im.size; scale = min(1280 / max(w, h) * 2.2, (2_000_000 / (w * h)) ** 0.5)
             if scale < 1.0:
                 im = im.resize((int(w*scale), int(h*scale)), RESAMPLE)
             out = _io.BytesIO()
@@ -138,6 +140,9 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
                 httpx.WriteTimeout, httpx.WriteError,
                 httpx.PoolTimeout, httpx.ConnectTimeout) as e:
             last_err = e
+            # [2026-10-19] 读超时 = 模型 120s 没答完, 再问 3 遍多半一样 (原来最坏要等 8 分钟才报错); 只再试一次
+            if isinstance(e, httpx.ReadTimeout) and attempt >= 1:
+                return f"ERROR: vision_ocr 模型 {attempt+1} 次都 120s 没答完 (ReadTimeout), 换小一点的图或稍后再试"
             if attempt >= _max_retries:
                 return f"ERROR: vision_ocr 请求失败 (重试 {_max_retries} 次): {type(e).__name__}: {e}"
             wait = 1.5 ** attempt
@@ -153,15 +158,27 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
 
     try:
         data = r.json()
-        msg = data["choices"][0]["message"]
+        choice = data["choices"][0]
+        msg = choice["message"]
         content = msg.get("content") or ""
+        # [2026-10-19] 思考把 max_tokens 吃光 (finish=length) 时正文是空的 → 关思考重问一次。
+        # 生产: 7 行逐条检查的长提示词连续两次 "返回空内容", 终检只能跳过。
+        if not content.strip() and choice.get("finish_reason") == "length" \
+                and "chat_template_kwargs" not in payload:
+            payload["chat_template_kwargs"] = {"enable_thinking": False}
+            log.warning("  [vision_ocr] 思考耗尽 max_tokens 正文为空, 关思考重试")
+            async with httpx.AsyncClient(timeout=120) as client:
+                r2 = await client.post(url, json=payload, headers=headers)
+            if r2.status_code == 200:
+                msg = r2.json()["choices"][0]["message"]
+                content = msg.get("content") or ""
         # 剥 <think>
         if "<think>" in content or "</think>" in content:
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
             if "</think>" in content:
                 content = content.split("</think>", 1)[-1].strip()
         if not content:
-            rc = msg.get("reasoning_content") or ""
+            rc = msg.get("reasoning_content") or msg.get("reasoning") or ""   # 新版 vLLM 字段名是 reasoning
             if rc:
                 content = rc.strip()
         return content or "ERROR: vision_ocr 返回空内容"

@@ -3,7 +3,7 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/ubuntu:24.04
 
 LABEL maintainer="LiteCode v12-r1 + WeChat Bridge"
 LABEL description="LiteCode OpenClaw AI Agent - Ubuntu 24.04 (国内源加速版)"
-LABEL version="v1.10.16.89-errand"
+LABEL version="v1.10.16.90-brisk"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
@@ -185,6 +185,9 @@ RUN if [ -d /root/.cache/ms-playwright/chromium-1217 ] || \
         python3 -m playwright install chromium 2>/dev/null || \
         echo "WARNING: playwright chromium install failed"; \
     fi
+# pip 装的 playwright 版本不固定, 它要的浏览器 revision 常和 vendor 缓存对不上 → 软链补齐
+COPY scripts/playwright_link_browsers.py /tmp/playwright_link_browsers.py
+RUN python3 /tmp/playwright_link_browsers.py || echo "WARN: playwright 浏览器软链失败"
 
 # ── 代码部署（单包，无热补丁层）─────────────────────────────
 WORKDIR /opt/litecode

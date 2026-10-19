@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import time
 from typing import Callable, Dict, List, Optional, Tuple
 
@@ -10,6 +11,29 @@ from lib.retry import DEFAULT_POLICY, sleep_backoff
 
 from .helpers import _run_tool_step, _run_dag_step, _sse_content, _sse_step_status
 from .types import StepAction, StepResult, StepSpec, StepStatus
+
+
+# [2026-10-19] 子代理失败标记: 原来只认 [子代理异常]/[子代理已中断], "[子代理超时] …" / "[子代理错误栈] …"
+# 被当成功写进黑板, 下游步骤拿着失败文本继续跑
+_SUBAGENT_FAIL_RE = re.compile(r"^\s*\[子代理(超时|异常|已中断|中断|已取消|嵌套过深|错误栈)")
+
+# 永久性错误: 重跑同样的东西只会同样失败 (权限/路径/工具不存在/用户中断), 不值得带反思重试
+_PERMANENT_SIGNALS = (
+    "permission denied", "no such file", "command not found",
+    "host unreachable", "dns", "name resolution",
+    "not registered", "tool_name empty", "dag_name empty",
+    "[子代理已中断]", "[子代理中断]", "[子代理已取消", "[子代理嵌套过深]",
+)
+
+
+def _classify_step_error(text: str) -> str:
+    """失败输出 → 'permanent' | 'timeout' | 'retryable'。规则匹配, 不耗 token。"""
+    t = (text or "").lower()
+    if any(s in t for s in _PERMANENT_SIGNALS):
+        return "permanent"
+    if "超时" in t or "timeout" in t or "timed out" in t:
+        return "timeout"
+    return "retryable"
 
 
 class _StepMixin:
@@ -58,7 +82,9 @@ class _StepMixin:
         _step_t0 = time.time()
         output = ""
         elapsed = 0.0
+        attempts_used = 0
         for attempt in range(1, spec.max_retries + 2):  # +1 for initial attempt
+            attempts_used = attempt
             # 构建 context: 黑板数据 + 依赖步骤输出
             context = self._build_step_context(spec, prior_results)
 
@@ -97,7 +123,9 @@ class _StepMixin:
                         _run_tool_step(spec, prior_results, sse_emit, label),
                         timeout=spec.timeout,
                     )
-                    success = bool(output and not output.startswith("[tool-error]"))
+                    # [2026-10-19] 工具返回 "ERROR: …" 字符串也是失败 (helpers 已转成 [tool-error], 这里兜底)
+                    success = bool(output and not output.startswith("[tool-error]")
+                                   and not output.lstrip().startswith("ERROR"))
                 elif spec.agent_type == "dag":
                     # [#2 2026-09-05] 子 DAG 步: 跑 spec.dag_name 指向的另一个 DAG (嵌套 orchestrator)
                     output = await asyncio.wait_for(
@@ -112,8 +140,7 @@ class _StepMixin:
                                   parent_sid=self._parent_sid),  # type: ignore[attr-defined]
                         timeout=spec.timeout,
                     )
-                    success = bool(output and not output.startswith("[子代理异常]")
-                                   and not output.startswith("[子代理已中断]"))
+                    success = bool(output and not _SUBAGENT_FAIL_RE.match(output))
                 try:
                     import logging as _olog
                     _olog.getLogger("openclaw").info(
@@ -181,7 +208,18 @@ class _StepMixin:
             error_msg = output[:300]
             error_stack.append(f"[attempt {attempt}] {error_msg}")
 
-            if attempt <= spec.max_retries:
+            # [2026-10-19] 在循环内先分类再决定重试: 原来不管什么错都跑满 max_retries+1 次才交给
+            # _evaluate_failure 分类 — 超时步每次都吃满 spec.timeout (实测 3×300s≈15 分钟空转),
+            # "permission denied"/"not registered" 这类永久错误还带"失败反思"重试, 结果必然一样。
+            # 永久错误不重试; 超时最多再试 1 次; 其余照 max_retries。
+            _kind = _classify_step_error(output)
+            _retry_limit = spec.max_retries
+            if _kind == "permanent":
+                _retry_limit = 0
+            elif _kind == "timeout":
+                _retry_limit = min(spec.max_retries, 1)
+
+            if attempt <= _retry_limit:
                 # 还有重试机会
                 if sse_emit:
                     await sse_emit(_sse_step_status(
@@ -201,14 +239,17 @@ class _StepMixin:
                 await sleep_backoff(attempt - 1, DEFAULT_POLICY)
             else:
                 if sse_emit:
+                    _why = {"permanent": "永久性错误, 不再重试", "timeout": "超时, 不再重试"}.get(
+                        _kind, f"{attempt}次尝试全部失败")
                     await sse_emit(_sse_step_status(
                         spec.id, label, "failed",
-                        f"❌ {spec.max_retries+1}次尝试全部失败",
+                        f"❌ {_why}",
                     ))
                     await sse_emit(_sse_step_status(
                         spec.id, label, "failed", "",
                         phase="end", elapsed_ms=int((time.time() - _step_t0) * 1000),
                     ))
+                break
 
         # [v1.1] itrace: DAG 步骤失败
         try:
@@ -223,7 +264,7 @@ class _StepMixin:
                 fields={
                     "step_id": spec.id, "label": label[:40],
                     "agent_type": spec.agent_type,
-                    "status": "failed", "attempts": spec.max_retries + 1,
+                    "status": "failed", "attempts": attempts_used,
                     "error_summary": (error_stack[-1] if error_stack else "")[:200],
                 },
                 jsonl="dag.jsonl",
@@ -236,7 +277,7 @@ class _StepMixin:
             agent_type=spec.agent_type, task=spec.task,
             status=StepStatus.FAILED, output=output,
             error=output[:300], elapsed=elapsed,
-            attempts=spec.max_retries + 1,
+            attempts=attempts_used,
             error_stack=error_stack,
         )
 
@@ -329,17 +370,14 @@ class _StepMixin:
         基于规则的快速判断，不消耗 LLM token。
         """
         error = result.error.lower()
+        _kind = _classify_step_error(error)
 
         # 永久性错误 → 终止
-        permanent_signals = [
-            "permission denied", "no such file", "command not found",
-            "host unreachable", "dns", "name resolution",
-        ]
-        if any(s in error for s in permanent_signals):
+        if _kind == "permanent":
             return StepAction.ABORT
 
         # 超时 → 如果非关键步骤，跳过
-        if "超时" in error or "timeout" in error:
+        if _kind == "timeout":
             return StepAction.ABORT if spec.critical else StepAction.SKIP
 
         # 已多次重试仍失败 → 终止

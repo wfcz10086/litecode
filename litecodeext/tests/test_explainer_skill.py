@@ -79,7 +79,7 @@ class TestExplainerSkill(unittest.TestCase):
 
     def test_pipeline_order_has_gates_first(self):
         steps = self._mod("run").NAMES
-        self.assertEqual(steps[:3], ["fact", "tts", "check"])
+        self.assertEqual(steps[:4], ["copy", "fact", "tts", "check"])
         self.assertLess(steps.index("check"), steps.index("render"))
         self.assertEqual(steps[-1], "qa")
 

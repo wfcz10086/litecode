@@ -87,5 +87,41 @@ class TestLoopGuardApplyBlocks(unittest.TestCase):
         self.assertTrue(g2.check(*same)[0])                      # 同一块连打 3 次照拦
 
 
+class TestLoopGuardFullArguments(unittest.TestCase):
+    def test_long_ssh_log_queries_do_not_collide(self):
+        # VS Code 日志的公共目录很长，文件名与 Tail 差异在旧签名的 200 字之后。
+        directory = (r"C:\Users\litecode\AppData\Roaming\Code\logs\20261019T161500"
+                     "\\window1\\exthost\\ms-vscode-remote.remote-containers\\"
+                     "开发容器诊断\\" + "long-log-directory-" * 8)
+        guard = ToolLoopGuard()
+        signatures = []
+        for name, tail in (("devContainers.log", 30), ("extension.log", 30),
+                           ("extension.log", 80), ("devContainers.log", 80)):
+            args = {"alias": "win11-devtest", "shell": "powershell", "timeout": 40,
+                    "cmd": f"Get-Content -LiteralPath '{directory}\\{name}' -Tail {tail}"}
+            blocked, warning, signature = guard.check("ssh_exec", args)
+            self.assertFalse(blocked)
+            self.assertIsNone(warning)
+            signatures.append(signature)
+        self.assertEqual(len(set(signatures)), 4)
+        self.assertEqual(guard.block_count, 0)
+
+    def test_identical_long_ssh_query_is_still_blocked(self):
+        args = {"alias": "win11-devtest", "shell": "powershell", "timeout": 40,
+                "cmd": "Get-Content -LiteralPath 'C:\\logs\\" + "same-directory\\" * 30
+                       + "devContainers.log' -Tail 80"}
+        guard = ToolLoopGuard()
+        self.assertFalse(guard.check("ssh_exec", args)[0])
+        # JSON object key order is irrelevant to tool semantics and signatures.
+        reordered = dict(reversed(list(args.items())))
+        self.assertFalse(guard.check("ssh_exec", reordered)[0])
+        blocked, warning, signature = guard.check("ssh_exec", args)
+        self.assertTrue(blocked)
+        self.assertIn("SYSTEM-LOOP-GUARD", warning)
+        self.assertIn(signature, guard.break_sent)
+        self.assertTrue(guard.check("ssh_exec", reordered)[0])
+        self.assertEqual(guard.block_count, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

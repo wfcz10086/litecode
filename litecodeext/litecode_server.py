@@ -358,7 +358,10 @@ async def agent_stream(
 
                 # [FIX] 每轮前统一调用 _sanitize_history 清理非法 arguments + dangling tool_calls
                 # 覆盖 Qwen3.5 本地 vLLM 和 MiniMax 2.5 两种后端的严格校验
-                _sanitize_history(_ctx.messages)
+                # [2026-10-19] 原地清理会改写与 new_msgs 共享的消息 (落盘证据丢 tool_calls/原始 arguments),
+                # 改为只清理模型输入副本, 见 loop_budget.sanitize_model_copy。
+                from lib.agent.loop_budget import sanitize_model_copy as _sanitize_model_copy
+                _ctx.messages = _sanitize_model_copy(_ctx.messages)
 
                 # ── [CONTEXT-BUDGET] LLM 调用前检查 token 预算，超限则裁剪老消息 ──
                 _loop_context_budget(_ctx, _fixed_overhead)

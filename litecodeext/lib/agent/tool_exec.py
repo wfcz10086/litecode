@@ -88,6 +88,7 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                                   result=_reject_result, elapsed=0, is_error=True)
                 continue
 
+            _tool_t0 = time.time()   # 单次工具耗时起点 (trace 里的 elapsed 原来是"本轮开始到现在", 统计全失真)
             detail_str = f"{fn_name}: {_fmt_args(fn_name, fn_args)}"
             # [FIX] 原日志截 100 字 → shell 多行命令看不全; 现在对 execute_shell
             # 特殊处理: 完整命令多行缩进展示, 其他工具保留单行但放宽到 240c
@@ -191,16 +192,17 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                     _name_or_id = fn_args.get("name") or fn_args.get("id") or ""
                     yield sse_meta(_ev, _op, _name_or_id)
 
-            # ── 错误注入强制继续 ──
+            # ── 错误后诊断并继续可独立执行的步骤 ──
             if is_err:
                 error_streak += 1
                 # [OPT] 增强错误提示: 根据错误类型注入调试建议
                 result = _enhance_tool_error(fn_name, result, fn_args)
                 if error_streak < MAX_ERROR_STREAK:
                     result += (
-                        "\n\n[SYSTEM: 这是一个错误，不是终止信号。"
-                        "分析根因，制定新方案，继续执行任务的其余部分。"
-                        "禁止输出'无法继续'或等待用户指令。]"
+                        "\n\n[SYSTEM: 保留这个失败结果，先定位原因，再继续不依赖它的步骤。"
+                        "同类错误重复两次后先检查连接、进程或日志，不重复相同命令。"
+                        "若环境仍阻塞，说明证据、已完成和未完成项及下一步；"
+                        "不得为继续执行而绕过权限、重建系统或宣称成功。]"
                     )
                 else:
                     result += (
@@ -213,7 +215,7 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
             # ── Trace: 工具调用记录 ──
             _ctx.tracer.tool_call(
                 name=fn_name, args=fn_args, result=result,
-                elapsed=time.time() - _usage.t0,  # 粗略
+                elapsed=time.time() - _tool_t0,
                 is_error=is_err,
             )
             # [OPT] P1-B: 如果检测到循环模式，注入策略变更提示
@@ -233,11 +235,16 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                 for _tid in _recent_tool_ids[-3:]:
                     if _tid < len(_ctx.messages):
                         _old = _ctx.messages[_tid].get("content") or ""
-                        _ctx.messages[_tid]["content"] = f"[CLEARED: loop detected, {len(_old)}c removed]"
+                        # 模型上下文清理不能改写 new_msgs/WAL 待提交的原始工具证据。
+                        _ctx.messages[_tid] = {**_ctx.messages[_tid],
+                                               "content": f"[CLEARED: loop detected, {len(_old)}c removed]"}
                 _ctx.tracer.reset_loop()
                 # 注入强制策略切换消息到 tool result
+                # [2026-10-19] 保留这次的真实结果 (原来整个替换掉: 子代理刚等到的最终结果被冲掉, 只能再等一遍)
+                _keep = result if len(result) <= 1500 else result[:1500] + f"\n...[本次结果 {len(result)} 字已截断]"
                 result = (
-                    "[SYSTEM OVERRIDE] 检测到死循环, 已清除重复结果。"
+                    f"{_keep}\n\n"
+                    "[SYSTEM OVERRIDE] 检测到死循环, 已清除前几次重复结果。"
                     "你必须立刻停止当前方法, 用完全不同的策略继续:\n"
                     "- 写作任务: 跳过当前章节, 写下一章\n"
                     "- 调试任务: 用 write_file 完全重写, 不要再 patch\n"

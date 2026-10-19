@@ -221,20 +221,38 @@ def _add_artifact(sid, data):
         _add_artifact_fn(sid, data)
 
 
+_SERVICE_HEADS = ("uvicorn", "gunicorn", "flask run", "fastapi run", "nodemon", "npm start", "yarn start",
+                  "streamlit run", "jupyter notebook", "jupyter lab", "jupyter-lab", "jupyter server",
+                  "python -m http.server", "python3 -m http.server")
+
+
+def _is_service_cmd(cmd: str) -> bool:
+    """[2026-10-19] 原来是整串子串匹配: `pip install uvicorn` / `grep -r uvicorn .` / `cat uvicorn.log`
+    都被当成长服务转后台, 模型拿不到结果只能 tail_log 轮询。现在只看每一段命令真正执行的是什么。"""
+    import re as _re
+    for seg in _re.split(r"&&|\|\||[;|&\n]", cmd.lower()):
+        seg = _re.sub(r"^\s*((sudo|nohup|exec|env|time)\s+|\w+=\S*\s+)*", "", seg).strip()
+        if any(seg == h or seg.startswith(h + " ") for h in _SERVICE_HEADS):
+            return True
+        if _re.match(r"(python3?\s+-m\s+)?uvicorn\b|node\s+(server|app|index|main|daemon)(\.\w+)?\b", seg):
+            return True
+    return False
+
+
 def _infer_timeout(cmd: str) -> Optional[int]:
-    c = cmd.lower()
-    if any(k in c for k in ["uvicorn", "gunicorn", "flask run", "fastapi run",
-                             "nodemon ", "npm start", "yarn start",
-                             "streamlit run", "jupyter ", "tornado",
-                             "python -m http", "python3 -m http"]):
+    """None = 长服务 (转后台); 否则前台超时秒数。
+    [2026-10-19] 数字交给 executor_v4.infer_timeout (sleep 时长 / pytest 120 / 编译 300 …)。原来这里
+    无论如何都给个数 (默认 30) 当成"用户指定"传下去, 下层那些规则全部失效, `sleep 45` 照样 30s 被杀。"""
+    if _is_service_cmd(cmd):
         return None
-    # node 单独判断: node -e '...' / node script.js 是一次性脚本给 120s;
-    # 只有 node server.js / app.js / index.js 等服务入口才当长服务
+    c = cmd.lower()
     if "node " in c:
-        import re as _re_node
-        if _re_node.search(r'node\s+(server|app|index|main|daemon)\b', c):
-            return None
         return 120
+    if HAS_EXECUTOR:
+        from executor_v4 import infer_timeout as _it
+        t = _it(cmd)
+        if t is not None:
+            return t
     if any(k in c for k in ["apt-get install", "apt install", "pip install",
                              "npm install", "yarn install", "docker pull", "docker build"]):
         return 300
@@ -383,6 +401,8 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
                             "已自动以 background=True 跑. 下次起服务请直接传 background=true."), None
         else:
             t = timeout if timeout is not None else _inferred
+            if not t or t <= 0:                  # timeout=0 原来会变成"不限时", 卡死整个会话
+                t = _FOREGROUND_HARD_LIMIT
             t = min(t, _FOREGROUND_HARD_LIMIT)  # 用户给的 timeout 也受硬上限约束
             _misuse_hint = ""
         if HAS_EXECUTOR:
@@ -596,10 +616,12 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
                 bg = bool(args.get("bg", True))
                 # [FIX 2026-05] bg=true 改走 LiteCode 的 _exec_bg, 让 chrome 等长进程
                 # 进 bg pool — list_bg 能看到, tail_log 能看日志, session 结束自动清理.
-                # ⚠ _exec_bg 内部 nohup <cmd>, nohup 不解析 shell 语法,
-                #   所以 "DISPLAY=:99 cmd" 会被当成可执行文件名找不到. 用 `env` 包.
+                # _exec_bg 会把整条命令交给 bash -c, 这里用 export 设显示环境再接原命令。
+                # [2026-10-19] 原来是 `env DISPLAY=:99 XAUTHORITY=... {cmd}`: 命令以 `B=url; for ...` 开头时
+                #   拼成 `env DISPLAY=.. B=url;` —— B 成了 env 的参数没赋给 shell, 后面 $B 全空,
+                #   轮询生图结果的循环空转了 17 分钟 (图 97 秒前就出好了)。
                 if bg:
-                    cmd_with_display = f"env DISPLAY=:99 XAUTHORITY=/root/.Xauthority {cmd}"
+                    cmd_with_display = f"export DISPLAY=:99 XAUTHORITY=/root/.Xauthority\n{cmd}"
                     r_msg = await _exec_bg(cmd_with_display, sid=sid, keep=False)
                     return r_msg, None
                 # bg=false: 同步等待 stdout, 走原逻辑
@@ -608,7 +630,10 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
                     loop.run_in_executor(None, lambda: _dc.exec(cmd, bg=False)),
                     timeout=30,
                 )
-                return (r.get("msg") or "(no msg)"), None
+                # [2026-10-19] 原来只回 msg (有 stdout 就不给 stderr), 退出码丢了, 失败看着像成功
+                if r.get("ok"):
+                    return (r.get("msg") or "(exit 0, 无输出)"), None
+                return f"ERROR[EXIT={r.get('exit', '?')}]: {r.get('msg') or '(无输出)'}", None
             elif name == "desktop_screenshot":
                 path = args.get("path") or None
                 loop = asyncio.get_event_loop()

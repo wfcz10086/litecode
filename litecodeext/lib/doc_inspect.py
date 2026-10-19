@@ -4,7 +4,7 @@
   xlsx: 各 sheet 单元格 (地址/公式/缓存值, 共享字符串已解引用) + formulas 列表
   docx: 段落文本、段落数、字数 (中文按字计)
   pptx: 按 presentation.xml 的 sldIdLst 顺序输出每页文字
-  txt/csv/md/json/log: utf-8 解码失败回退 gbk, 前 8000 字
+  txt/csv/md/json/log/py: utf-8 解码失败回退 gbk, 前 8000 字；源码只读不执行
   其他: 只给大小 / sha256 / 类型
 所有入口都不抛异常: 损坏文件、zip 炸弹、XML 实体攻击一律返回 {'ok': False, 'error': ...}。
 """
@@ -23,7 +23,7 @@ MAX_FORMULAS = 500
 MAX_SLIDES = 200
 TEXT_LIMIT = 8000
 
-TEXT_EXTS = {'.txt', '.csv', '.tsv', '.md', '.json', '.log'}
+TEXT_EXTS = {'.txt', '.csv', '.tsv', '.md', '.json', '.log', '.py'}
 XLSX_EXTS = {'.xlsx', '.xlsm'}
 
 NS = {

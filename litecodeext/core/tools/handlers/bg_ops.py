@@ -5,7 +5,7 @@ import asyncio
 import time
 from typing import Any
 
-from tools.bg import cleanup_session_bg, kill_bg_pid, list_bg_for_session
+from tools.bg import _check_pid_alive, _unregister_bg, bg_exit_code, cleanup_session_bg, kill_bg_pid, list_bg_for_session
 
 from . import register
 
@@ -20,8 +20,15 @@ async def h_list_bg(sid: str, args: dict) -> tuple[str, Any]:
         age = int(time.time() - info.get("ts", 0))
         keep_mark = " [KEEP_ALIVE]" if info.get("keep") else ""
         log_path = info.get("log", "")
+        # [2026-10-19] 已结束的进程以前照样列着, 看着像还在跑 (视频任务里 1 小时前跑完的 run.py 一直挂在列表里)
+        if await _check_pid_alive(pid):
+            state = "运行中"
+        else:
+            code = bg_exit_code(log_path)
+            state = "已结束" + (f" exit={code}" if code is not None else "")
+            _unregister_bg(pid)
         lines.append(
-            f"  pid={pid}  age={age}s{keep_mark}\n"
+            f"  pid={pid}  [{state}]  age={age}s{keep_mark}\n"
             f"    cmd: {info.get('cmd','?')}\n"
             f"    log: {log_path}"
         )

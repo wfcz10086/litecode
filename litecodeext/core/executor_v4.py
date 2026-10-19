@@ -48,7 +48,7 @@ RETRYABLE_ERRORS = [
     "Broken pipe",
 ]
 
-def classify_error(output: str, returncode: int) -> str:
+def classify_error(output: str, returncode: int, command: str = "") -> str:
     """
     返回: 'ok' | 'retryable' | 'permanent' | 'test_fail' | 'failed'
 
@@ -61,7 +61,9 @@ def classify_error(output: str, returncode: int) -> str:
     # [v8] 负 exit code = 进程被信号终止。对于 kill/pkill/fuser 等进程管理命令，
     # 这是正常的（目标进程已被杀死或命令自身被信号中断），不应重试。
     if returncode < 0:
-        return 'ok'
+        # [2026-10-19] 只有 kill 类命令被信号打断才算正常; 别的命令被 SIGSEGV/OOM 杀掉原来也判 ok,
+        # 残缺输出当成功结果交给模型
+        return 'ok' if re.search(r"\b(kill|pkill|killall|fuser)\b", command or "") else 'failed'
     # [v7] 测试/断言失败: 不是基础设施错误, 不需要重试
     _TEST_FAIL_PATTERNS = [
         'AssertionError', 'assert ', 'FAILED', 'FAIL',
@@ -86,8 +88,47 @@ _NETWORK_CMD = re.compile(
     r"\b(curl|wget|pip3?|uv|npm|pnpm|yarn|apt(-get)?|git\s+(clone|fetch|pull|push)|docker\s+(pull|push)|ssh|scp|rsync)\b")
 
 
+_NON_IDEMPOTENT = re.compile(r"\bssh\b(?!-)|\bcurl\b[^|;&]*\s(-X\s*(POST|PUT|PATCH|DELETE)|-d\b|--data\S*|-F\b|--form\b|--upload-file\b|-T\b)")
+
+
 def is_network_cmd(command: str) -> bool:
-    return bool(_NETWORK_CMD.search(command or ""))
+    """会自动重试的网络命令。[2026-10-19] ssh 远程跑的可能是迁移/部署脚本, POST/上传类 curl
+    有副作用 —— 输出里碰巧带 502/timeout 就重跑 3 遍会重复执行, 这两类不自动重试。"""
+    c = command or ""
+    return bool(_NETWORK_CMD.search(c)) and not _NON_IDEMPOTENT.search(c)
+
+
+# ─────────────────────────────────────────────────────────
+# pgrep -f / pkill -f 自匹配: 模式串原样出现在 bash -c 的命令行里, pgrep 总能找到"自己"
+# (2026-10-19 视频任务: `until ! pgrep -f "run.py --from check"; do sleep 10; done` 等满 900s 超时,
+#  `pgrep -f run.py | wc -l` 永远报 1 = "还在跑"; pkill -f 更糟, 会把执行它的 shell 一起杀掉)
+# 经典解法: 模式首字符包进方括号 "[r]un.py" —— 正则含义不变, 但命令行里的字面串不再匹配它。
+# ─────────────────────────────────────────────────────────
+_SELF_MATCH = re.compile(r"""\b(pgrep|pkill)((?:\s+-[A-Za-z]+)*?\s+-[A-Za-z]*f[A-Za-z]*(?:\s+-[A-Za-z]+)*)\s+(?:"([^"]+)"|'([^']+)'|([^\s;|&)'"]+))""")
+
+
+def fix_self_match(command: str) -> tuple:
+    """→ (改写后的命令, 说明 or "")"""
+    changed = []
+
+    def _sub(m):
+        pat = m.group(3) or m.group(4) or m.group(5)
+        if "[" in pat:
+            return m.group(0)
+        def _br(alt):
+            i = next((k for k, ch in enumerate(alt) if ch.isalnum()), None)
+            return alt if i is None else alt[:i] + "[" + alt[i] + "]" + alt[i + 1:]
+        new = "|".join(_br(a) for a in pat.split("|"))     # 每个分支都要包, "render.py|run.py" 只包第一个仍会自匹配
+        if new == pat:
+            return m.group(0)
+        q = '"' if m.group(3) is not None else ("'" if m.group(4) is not None else "'")
+        changed.append(f"{pat} → {new}")
+        return f"{m.group(1)}{m.group(2)} {q}{new}{q}"
+
+    out = _SELF_MATCH.sub(_sub, command)
+    note = ("[已自动改写 pgrep/pkill -f 模式, 防止匹配到命令自己: " + "; ".join(changed) +
+            "。等后台任务结束更稳的办法: grep 日志里的 [BG-EXIT code=N]]\n") if changed else ""
+    return out, note
 
 
 # ─────────────────────────────────────────────────────────
@@ -101,6 +142,10 @@ def infer_timeout(command: str, user_timeout: int = None) -> Optional[int]:
     if user_timeout is not None:
         return None if user_timeout == 0 else user_timeout
     cmd = command.strip().lower()
+    # [2026-10-19] 前台 `sleep 45; tail log` 没写 timeout → 默认 30s 把 sleep 自己杀了, 什么都没看到
+    _sl = sum(float(x) for x in re.findall(r"\bsleep\s+(\d+(?:\.\d+)?)\b", cmd))
+    if _sl >= 25:
+        return int(min(600, _sl + 30))
     # Long-lived services -- never time out (caller should use background=True)
     if any(k in cmd for k in [
         'uvicorn ', 'gunicorn ', 'flask run', 'fastapi run',
@@ -217,28 +262,38 @@ _NET_PROBE_CACHE: dict = {}
 
 _LOCAL_HOSTS = {'localhost', '127.0.0.1', '0.0.0.0', '::1'}
 
-def probe_host(host: str, timeout: int = 3) -> bool:
-    """BUG-8: 本地地址直接放行，不走网络probe"""
-    bare = host.split(':')[0]
+def probe_host(host: str, timeout: int = 3, scheme: str = "https") -> bool:
+    """BUG-8: 本地地址直接放行，不走网络probe
+    [2026-10-19] 原来不管命令写的是 http://x:54321 都去 curl https://x (443), 443 没开就判"不可达",
+    结果还永久缓存 —— 整个进程里访问这台机器的命令全被拦。改成对命令里真实的 host:port 做 TCP 连接,
+    不通只缓存 30 秒 (通了缓存 10 分钟)。"""
+    bare, _, port = host.rpartition(':') if host.count(':') == 1 else (host, '', '')
+    if not bare:
+        bare, port = host, ''
     if bare in _LOCAL_HOSTS or bare.startswith(('192.168.', '10.', '172.')):
         return True
-    if bare in _NET_PROBE_CACHE:
-        return _NET_PROBE_CACHE[bare]
+    port = int(port) if port.isdigit() else (80 if scheme == "http" else 443)
+    key = f"{bare}:{port}"
+    hit = _NET_PROBE_CACHE.get(key)
+    if hit and time.time() - hit[1] < (600 if hit[0] else 30):
+        return hit[0]
     try:
-        r = subprocess.run(
-            ['curl', '-s', '--max-time', str(timeout),
-             '--head', f'https://{bare}'],
-            capture_output=True, timeout=timeout + 2
-        )
-        ok = r.returncode == 0
-    except Exception:
+        import socket
+        with socket.create_connection((bare, port), timeout=timeout):
+            ok = True
+    except OSError:
         ok = False
-    _NET_PROBE_CACHE[bare] = ok
+    _NET_PROBE_CACHE[key] = (ok, time.time())
     return ok
 
 def extract_host(command: str):
     m = re.search(r'https?://([^/\s"\']+)', command)
     return m.group(1) if m else None
+
+
+def extract_scheme(command: str) -> str:
+    m = re.search(r'(https?)://', command)
+    return m.group(1) if m else "https"
 
 
 # ─────────────────────────────────────────────────────────
@@ -297,13 +352,14 @@ async def execute_shell_async(
 
     # BUG-5: pip 命令自动追加 flag
     command = patch_pip_cmd(command)
+    command, _sm_note = fix_self_match(command)
 
     # BUG-2: 自动推断 timeout（None = 不限时）
     effective_timeout = infer_timeout(command, timeout)
 
     # BUG-4: 网络命令 probe-first
     host = extract_host(command)
-    if host and not probe_host(host):
+    if host and not probe_host(host, scheme=extract_scheme(command)):
         return (
             f"ERROR[PERMANENT]: Host unreachable — {host}\n"
             f"DNS/network probe failed before executing: {command}\n"
@@ -313,9 +369,10 @@ async def execute_shell_async(
     # BUG-7: 包管理命令互斥
     if is_pkg_command(command):
         async with _PKG_LOCK:
-            return await _run_cmd(command, effective_timeout, work_dir)
+            out = await _run_cmd(command, effective_timeout, work_dir)
     else:
-        return await _run_cmd(command, effective_timeout, work_dir)
+        out = await _run_cmd(command, effective_timeout, work_dir)
+    return _sm_note + out if _sm_note else out
 
 
 async def _run_cmd(command: str, timeout: Optional[int], work_dir: Path) -> str:
@@ -335,7 +392,7 @@ async def _run_cmd(command: str, timeout: Optional[int], work_dir: Path) -> str:
         if is_apt and not apt_succeeded(output, exitcode):
             error_class = 'permanent'
         else:
-            error_class = classify_error(output, exitcode)
+            error_class = classify_error(output, exitcode, command)
 
         if error_class == 'ok':
             return output or f"(exit 0)"
@@ -386,11 +443,21 @@ def _kill_tree(proc: "subprocess.Popen") -> None:
 
 
 def _exec_sync(command: str, timeout: Optional[int], work_dir: Path) -> dict:
+    """[2026-10-19] stdout/stderr 写临时文件而不是管道: 命令里 `python app.py &` 这种没重定向的后台子进程
+    会一直占着管道, communicate() 等不到 EOF, 白等满超时后还把刚起的服务连进程组一起杀掉, 模型再起一遍。
+    写文件就只等 bash 本身退出; 超时时把已有输出的尾巴一起带回去, 模型能看到卡在哪。"""
+    import tempfile
     proc = None
+    fo = tempfile.TemporaryFile()
+    fe = tempfile.TemporaryFile()
+
+    def _read(f):
+        f.seek(0)
+        return f.read().decode("utf-8", errors="replace")
     try:
         proc = subprocess.Popen(
-            command, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, cwd=str(work_dir),
+            command, shell=True, stdout=fo, stderr=fe, stdin=subprocess.DEVNULL,
+            cwd=str(work_dir),
             env={**os.environ, "WORKSPACE": str(work_dir)},
             # start_new_session: 子进程进入独立 session/进程组 (setsid)
             # — server 收到 SIGINT/SIGTERM 不会传播给 shell 子进程
@@ -402,16 +469,15 @@ def _exec_sync(command: str, timeout: Optional[int], work_dir: Path) -> dict:
             executable="/bin/bash",
         )
         try:
-            stdout, stderr = proc.communicate(timeout=timeout)
+            proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
             _kill_tree(proc)                       # ← 连根杀整个进程组, 不留孤儿
-            try:
-                stdout, stderr = proc.communicate(timeout=5)
-            except subprocess.TimeoutExpired:
-                stdout, stderr = "", ""
             t_label = f"{timeout}s" if timeout else "unlimited"
-            return {"output": f"TIMEOUT after {t_label} (进程组已连根终止) — command: {command[:80]}",
+            partial = (_read(fo) + _read(fe)).strip()
+            tail = ("\n--- 超时前最后的输出 ---\n" + partial[-1200:]) if partial else "\n(超时前没有任何输出)"
+            return {"output": f"TIMEOUT after {t_label} (进程组已连根终止) — command: {command[:80]}{tail}",
                     "returncode": -1}
+        stdout, stderr = _read(fo), _read(fe)
         rc = proc.returncode
         if rc == 0:
             out = (stdout or "").strip()
@@ -433,6 +499,9 @@ def _exec_sync(command: str, timeout: Optional[int], work_dir: Path) -> dict:
         if proc is not None:
             _kill_tree(proc)       # 异常路径也别留活着的子进程组
         return {"output": f"EXEC_ERROR: {e}", "returncode": -1}
+    finally:
+        fo.close()
+        fe.close()
 
 
 # ─────────────────────────────────────────────────────────

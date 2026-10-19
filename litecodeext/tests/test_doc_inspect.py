@@ -171,6 +171,39 @@ def test_text_utf8_and_gbk_fallback(tmp_path):
     assert out['encoding'] == 'utf-8' and len(out['text']) == 8000 and out['truncated'] is True
 
 
+@pytest.mark.parametrize('encoding', ['utf-8-sig', 'gbk'])
+def test_python_source_unicode_marker_is_read_without_execution(tmp_path, encoding):
+    marker = 'LITE-WEB-DEV-20261019-PY-READBACK'
+    sentinel = tmp_path / 'must-not-be-created.txt'
+    source = ('"""开发调试的真实源码回读。"""\n'
+              f'greeting = "你好，{marker}"\n'
+              'from pathlib import Path\n'
+              f'Path({str(sentinel)!r}).write_text(greeting, encoding="utf-8")\n')
+    data = source.encode(encoding)
+    path = tmp_path / 'app.py'
+    path.write_bytes(data)
+    out = di.inspect(path)
+    assert out['ok'] and out['type'] == 'text'
+    assert out['text'] == source and marker in out['text']
+    assert out['encoding'] == ('utf-8' if encoding == 'utf-8-sig' else 'gbk')
+    assert out['chars'] == len(source) and out['lines'] == 4 and out['truncated'] is False
+    assert out['size'] == len(data) and out['sha256'] == hashlib.sha256(data).hexdigest()
+    assert not sentinel.exists(), 'inspect_file 只能读取 Python 源码，不能执行它'
+
+
+@pytest.mark.parametrize('length', [0, di.TEXT_LIMIT, di.TEXT_LIMIT + 1])
+def test_python_text_limit_uses_characters_and_preserves_boundary(tmp_path, length):
+    source = '#' + '中' * (length - 1) if length else ''
+    path = tmp_path / 'SOURCE.PY'
+    path.write_text(source, encoding='utf-8')
+    out = di.inspect(path)
+    assert out['ok'] and out['type'] == 'text'
+    assert out['text'] == source[:di.TEXT_LIMIT] and out['chars'] == length
+    assert out['truncated'] is (length > di.TEXT_LIMIT)
+    assert out['lines'] == (1 if length else 0)
+    assert out['size'] == len(source.encode('utf-8'))
+
+
 def test_other_type_returns_size_and_hash_only(tmp_path):
     path = tmp_path / 'a.pdf'
     path.write_bytes(b'%PDF-1.4 xxx')
@@ -271,29 +304,40 @@ def test_inspect_file_downloads_then_parses_on_server(tmp_path, monkeypatch):
     assert d5['value'] == 1964 and d5['formula'] == '=SUM(D2:D4)'
 
 
-def test_inspect_file_via_handler_and_real_download_chain(tmp_path, monkeypatch):
+@pytest.mark.parametrize('name', ['r.docx', 'app.py'])
+def test_inspect_file_via_handler_and_real_download_chain(tmp_path, monkeypatch, name):
     """走 windows_system 工具入口 + 真实 _node_download (只把节点任务打桩成返回分块)。"""
     import asyncio
     from lib import windows_desktop as wd
     from lib.windows_nodes import Nodes, component_versions
     import lib.config as cfg
     _enroll_online(Nodes(tmp_path), component_versions())
-    data = make_docx(tmp_path / 'r.docx', [['回读', '核对']]).read_bytes()
+    if name.endswith('.py'):
+        source = (ROOT / 'skills/windows-container-dev/assets/project/app.py').read_text(encoding='utf-8')
+        source = source.replace('hello LiteCode', 'LITE-WEB-DEV-20261019-PY-DOWNLOAD')
+        data = source.encode('utf-8')
+    else:
+        data = make_docx(tmp_path / name, [['回读', '核对']]).read_bytes()
     digest = hashlib.sha256(data).hexdigest()
     jobs = []
 
     def fake_job(nodes, alias, action, request, timeout, idempotent=False):
         jobs.append((action, request.get('index'), idempotent))
         if 'index' not in request:
-            return {'ok': True, 'chunks': 1, 'sha256': digest, 'name': 'r.docx', 'size': len(data)}
+            return {'ok': True, 'chunks': 1, 'sha256': digest, 'name': name, 'size': len(data)}
         return {'ok': True, 'chunk': base64.b64encode(data).decode()}
     monkeypatch.setattr(wd, '_run_node_job', fake_job)
     monkeypatch.setattr(cfg, 'WORKSPACE', tmp_path)
     from core.tools.handlers.windows_system import h_windows_system
-    text, _ = asyncio.run(h_windows_system('s1', {'alias': 'ops', 'action': 'inspect_file', 'path': r'C:\x\r.docx'}))
+    text, _ = asyncio.run(h_windows_system('s1', {'alias': 'ops', 'action': 'inspect_file', 'path': rf'C:\x\{name}'}))
     assert not text.startswith('ERROR'), text
     out = json.loads(text)
-    assert out['paragraphs'] == ['回读核对'] and out['type'] == 'docx'
+    if name.endswith('.py'):
+        assert out['type'] == 'text' and out['text'] == source and out['truncated'] is False
+        assert 'LITE-WEB-DEV-20261019-PY-DOWNLOAD' in out['text']
+        assert Path(out['local_copy']).read_text(encoding='utf-8') == source
+    else:
+        assert out['paragraphs'] == ['回读核对'] and out['type'] == 'docx'
     assert jobs == [('download', None, True), ('download', 0, True)]     # 只读, 允许网络错误重试
 
 

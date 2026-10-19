@@ -41,6 +41,20 @@ def desktop_request(args, workspace):
     if args.get('compress'):
         request['compress'] = True
     action = args.get('action')
+    if action == 'hotkey':
+        # [2026-10-19] 服务端先归一并校验: 模型写 key:"Return" / "Esc" / "Ctrl + H" 以前要绕节点一圈才报
+        # "不支持的快捷键"; 归一后的规范键名下发, 旧版节点只要白名单里有该名就能执行。
+        from lib.windows_desktop_actions import normalize_hotkey, hotkey_arg
+        request['keys'] = normalize_hotkey(hotkey_arg(args))
+    if action in ('ocr', 'click_text') and args.get('ocr_language'):
+        language = args['ocr_language']
+        if not isinstance(language, str) or len(language) > 35:
+            raise ValueError('ocr_language 需要语言标记，如 en-US / zh-Hans-CN / auto')
+        request['ocr_language'] = language
+    if action == 'ocr' and args.get('expected_texts') is not None:
+        from lib.windows_desktop_ocr import verify_lines
+        verify_lines([], args['expected_texts'])   # 先校验验收参数，再下发任务。
+        request['expected_texts'] = args['expected_texts']
     if action == 'type_secret':
         field = args.get('field')
         credential = args.get('credential', '')
@@ -50,7 +64,9 @@ def desktop_request(args, workspace):
         value = store.get(credential, {}).get(field)
         if not isinstance(value, str) or not value:
             raise ValueError('该凭据字段不存在')
-        request.update(text=value, sensitive=True)
+        # [2026-10-19] 以前密码默认走剪贴板粘贴 (input_method 默认 clipboard): 明文进 Win+V 历史/云剪贴板,
+        # 还覆盖用户原有剪贴板。用户决定: 凭据一律 SendInput 直接 Unicode 输入, 不经剪贴板, 忽略模型传的 input_method。
+        request.update(text=value, sensitive=True, input_method='unicode')
     elif action == 'processes':
         request.update(sort=args.get('sort', 'memory'), top=int(args.get('top', 15)),
                        name=str(args.get('name', '')))
@@ -89,6 +105,16 @@ def desktop_request(args, workspace):
     return request
 
 
+# SSH 通道桌面任务的 elevated (RunLevel Highest) 只对管理员在服务端环境变量里列出的 SSH 别名生效 (逗号分隔)。
+ELEVATED_ENV = 'LITECODE_DESKTOP_ELEVATED_ALIASES'
+
+
+def elevated_allowed(alias):
+    import os
+    allowed = {item.strip() for item in os.environ.get(ELEVATED_ENV, '').split(',') if item.strip()}
+    return bool(alias) and alias in allowed
+
+
 def powershell(client, script, timeout=30):
     encoded = base64.b64encode(script.encode('utf-16le')).decode()
     _, out, err = client.exec_command('powershell -NoProfile -NonInteractive -EncodedCommand ' + encoded,
@@ -101,14 +127,20 @@ def powershell(client, script, timeout=30):
 
 
 def _run_node_job(nodes, alias, action, request, timeout, idempotent=False):
-    """派发单个节点任务并等待结果；幂等/只读动作遇网络类错误重试 1-2 次。"""
+    """派发单个节点任务并等待结果；幂等/只读动作遇网络类错误重试 1-2 次。
+
+    [2026-10-19] 超时 (TimeoutError) 与节点心跳中断 (NodeGoneError) 不再重试: 以前节点掉线后
+    每次都白等满 timeout 再重派, 3 次累计 ~360 秒空转; 节点不回来, 重派只会同样超时。"""
+    from lib.windows_nodes import NodeGoneError
     attempts = 3 if idempotent else 1
     last = None
     for attempt in range(attempts):
         job_id = nodes.job(alias, action, request, timeout)
         try:
             return nodes.wait(job_id, timeout)
-        except (TimeoutError, RuntimeError) as exc:
+        except (TimeoutError, NodeGoneError):
+            raise
+        except RuntimeError as exc:
             last = exc
             if not idempotent or attempt == attempts - 1:
                 raise
@@ -239,10 +271,20 @@ def execute(args, workspace):
     conn, error = _conn(args)
     if error:
         raise ValueError(error)
+    # [2026-10-19] elevated 以前由模型直接传入就以 RunLevel Highest 注册计划任务, 没有任何授权;
+    # 现在只有管理员在服务端 LITECODE_DESKTOP_ELEVATED_ALIASES 里列出的别名才生效, 否则按普通权限执行并在结果注明。
+    elevated = args.get('elevated', False)
+    if not isinstance(elevated, bool):
+        raise ValueError('elevated 必须为布尔值')
+    elevated_note = ''
+    if elevated and not elevated_allowed(args.get('alias', '')):
+        elevated = False
+        elevated_note = f'elevated 未生效: 该别名未经管理员在服务端 {ELEVATED_ENV} 中授权, 已按普通权限执行'
     client, jump = _connect(conn)
     sftp = None
     task = 'LiteCode-Desktop-' + uuid.uuid4().hex
     registered = False
+    folder = None
     try:
         info = json.loads(powershell(client, "$ErrorActionPreference='Stop'; [Console]::OutputEncoding=[Text.Encoding]::UTF8; "
             "$py=(Get-Command python.exe).Source; @{home=$env:USERPROFILE; python=$py; user=[Security.Principal.WindowsIdentity]::GetCurrent().Name} | ConvertTo-Json -Compress"))
@@ -272,9 +314,6 @@ def execute(args, workspace):
         def quote(value):
             return "'" + value.replace("'", "''") + "'"
         arguments = f'"{folder}/worker.py" {remote_action} "{folder}"'
-        elevated = args.get('elevated', False)
-        if not isinstance(elevated, bool):
-            raise ValueError('elevated 必须为布尔值')
         run_level = 'Highest' if elevated else 'Limited'
         ps = ("$ErrorActionPreference='Stop'; "
               f"$a=New-ScheduledTaskAction -Execute {quote(pyw)} -Argument {quote(arguments)}; "
@@ -307,6 +346,8 @@ def execute(args, workspace):
                 result['before_image'] = str(before)
         result['alias'] = args.get('alias', conn['host'])
         result['action'] = action
+        if elevated_note:
+            result['elevated_note'] = elevated_note
         return result
     finally:
         if registered:
@@ -315,10 +356,21 @@ def execute(args, workspace):
                            f"Unregister-ScheduledTask -TaskName '{task}' -Confirm:$false", timeout=15)
             except Exception:
                 pass
-        if sftp:
+        # [2026-10-19] 以前只删 request.json, %LOCALAPPDATA%\LiteCodeDesktop\<task>\ 下的截图、OCR、微信文字和脚本
+        # 永远留在 Windows 上越积越多。任务结束 (计划任务已停) 后整个任务目录删除; 失败时至少删掉含输入文字的 request.json。
+        removed = False
+        if folder:
             try:
-                sftp.remove(folder + '/request.json')
-            except OSError:
+                quoted = folder.replace("'", "''")
+                powershell(client, f"Remove-Item -LiteralPath '{quoted}' -Recurse -Force -ErrorAction SilentlyContinue", timeout=15)
+                removed = True
+            except Exception:
                 pass
+        if sftp:
+            if folder and not removed:
+                try:
+                    sftp.remove(folder + '/request.json')
+                except OSError:
+                    pass
             sftp.close()
         _close(client, jump)

@@ -446,11 +446,17 @@ SKIP_KEYS = {"src", "href", "url", "img", "image", "icon", "color", "bg", "css",
 CUSTOM_NUM_KEYS = {"number", "value", "from", "to", "num", "count", "amount", "total", "price", "percent", "pct", "target"}
 
 
-def render_num(v, p) -> str:
-    """跟 engine.js 的 num() 一样: 符号 + prefix + 四舍五入千分位整数 + suffix"""
+def render_num(v, p, decimals=False) -> str:
+    """跟 engine.js 的 num() 一样: 符号 + prefix + 四舍五入千分位整数 + suffix。
+    decimals=True (自定义版式): 参数里写了 "decimals" 就按它保留小数 —— custom.js 常用 v.toFixed(p.decimals),
+    原来一律取整, 把 gauge 的 4.7% 当成 5% 去跟旁白"百分之四点七"对账, 误报矛盾。"""
     a = abs(float(v))
-    r = int(math.floor(a + .5))
-    return ("-" if v < 0 else "") + str(p.get("prefix") or "") + f"{r:,}" + str(p.get("suffix") or "")
+    d = p.get("decimals") if decimals else None
+    if isinstance(d, int) and not isinstance(d, bool) and d > 0:
+        body = f"{a:,.{d}f}"
+    else:
+        body = f"{int(math.floor(a + .5)):,}"
+    return ("-" if v < 0 else "") + str(p.get("prefix") or "") + body + str(p.get("suffix") or "")
 
 
 def _get(p, path):
@@ -485,7 +491,7 @@ def screen_fields(scene) -> list:
                     continue
                 if isinstance(v, (int, float)) and not isinstance(v, bool):
                     if k in CUSTOM_NUM_KEYS:
-                        out.append((path + k, render_num(v, o), True))
+                        out.append((path + k, render_num(v, o, decimals=True), True))
                 else:
                     walk(v, path + k + ".")
         elif isinstance(o, list):

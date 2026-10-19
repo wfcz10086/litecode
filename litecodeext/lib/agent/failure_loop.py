@@ -14,7 +14,7 @@
         微信/企微会话 (wx- / wecom 前缀, 一个会话对应一个外部联系人) 强制按会话隔离到
         WORKSPACE/sessions/<sid>/telemetry/failures.jsonl, 避免把 A 的任务内容提示给 B;
         scope="session" 时所有会话都按会话隔离。
-  任何异常只 log.warning, 绝不影响主流程。成功回合不记录 (成功分解复用留作下一步)。
+  任何异常只 log.warning, 绝不影响主流程。成功回合不记录, 但会清掉相似任务的旧失败 (2026-10-19)。
 """
 from __future__ import annotations
 
@@ -34,6 +34,9 @@ _DEFAULTS = {
     "max_inject_chars": 400,
     "min_task_chars": 8,       # 太短的消息 ("继续"/"好的") 不记也不召回, 防误命中
     "scope": "global",         # global | session
+    "max_age_days": 7,         # [2026-10-19] 超过 N 天的失败经验不再召回 (原来永不过期)
+    "resolve_threshold": 0.85, # [2026-10-19] 几乎同一任务后来成功 → 清掉旧失败; 比召回阈值严,
+                               # 只是"相似"的成功可能正是靠那条经验做成的, 留着 (靠 max_age_days 过期)
 }
 _PER_SESSION_PREFIXES = ("wx-", "wecom")
 _TASK_CHARS = 200              # 任务摘要截断长度 (记录与查询同长, Jaccard 才可比)
@@ -145,6 +148,7 @@ def record_turn(ctx, user_message: Any, error_streak: int = 0) -> bool:
         if f is None and error_streak >= MAX_ERROR_STREAK:
             f = {"kind": "error_streak", "stuck_at": "", "detail": f"连续 {error_streak} 次工具报错"}
         if not f:
+            _resolve_on_success(ctx, user_message)
             return False
         c = cfg()
         task = task_text(user_message)
@@ -171,6 +175,28 @@ def record_turn(ctx, user_message: Any, error_streak: int = 0) -> bool:
         return False
 
 
+def _resolve_on_success(ctx, user_message: Any) -> int:
+    """[2026-10-19] 回合无失败信号且有最终回复 → 视为成功, 删掉相似任务的旧失败记录。
+    原来成功回合不碰记录, 早就做成功的任务仍被反复提示"之前失败过… 避免: …", 模型照着绕远路。"""
+    try:
+        msgs = getattr(ctx, "new_msgs", None) or []
+        final = next((m for m in reversed(msgs) if isinstance(m, dict) and m.get("role") == "assistant"), None)
+        if not final or not str(final.get("content") or "").strip() or final.get("tool_calls"):
+            return 0   # 没有最终文字回复 (被中断/只调了工具) 不算成功
+        c = cfg()
+        task = task_text(user_message)
+        if len(task) < int(c.get("min_task_chars", 8)):
+            return 0
+        n = _fm.resolve_similar(store_dir(getattr(ctx, "session_id", None)), task,
+                                float(c.get("resolve_threshold", 0.85)))
+        if n:
+            log.info(f"  [FAILURE-MEMORY:{getattr(ctx, 'sid_tag', '?')}] 相似任务本轮成功, 清除 {n} 条旧失败: {task[:60]}")
+        return n
+    except Exception as e:
+        log.warning(f"  [FAILURE-MEMORY] resolve 失败 (已忽略): {e}")
+        return 0
+
+
 # ── 召回 ──────────────────────────────────────────────────────────
 def recall_text(user_message: Any, session_id: Optional[str] = None) -> str:
     """相似度过阈值的最近一条失败经验 → 一段 ≤ max_inject_chars 的提示; 否则空串。"""
@@ -181,7 +207,8 @@ def recall_text(user_message: Any, session_id: Optional[str] = None) -> str:
         task = task_text(user_message)
         if len(task) < int(c.get("min_task_chars", 8)):
             return ""
-        hits = _fm.find_similar(store_dir(session_id), "", task, limit=1)
+        hits = _fm.find_similar(store_dir(session_id), "", task, limit=1,
+                                max_age_days=float(c.get("max_age_days", 7) or 0))
         if not hits or float(hits[0].get("_sim", 0)) < float(c.get("threshold", 0.6)):
             return ""
         h = hits[0]

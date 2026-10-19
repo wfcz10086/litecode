@@ -53,11 +53,21 @@ def credential(request):
     return header[7:] if header.startswith('Bearer ') else ''
 
 
-async def body(request):
+# [2026-10-19] 以前所有接口都在认证前读最多 24MB 请求体: 未认证的人可对 enroll/status/result 反复灌大包,
+# 控制端每个请求先吃满内存再拒绝。现在设备接口先核 Bearer 再读体; 登记/状态只是小 JSON, 上限 64KB;
+# 只有已认证的结果回传 (含截图 base64) 才放宽到 24MB, 且先看 Content-Length 再边读边限。
+SMALL_BODY = 64 * 1024
+RESULT_BODY = 24 * 1024 * 1024
+
+
+async def body(request, limit=SMALL_BODY):
+    declared = request.headers.get('content-length', '')
+    if declared.isdigit() and int(declared) > limit:
+        raise HTTPException(413, '请求过大')
     raw = bytearray()
     async for chunk in request.stream():
         raw.extend(chunk)
-        if len(raw) > 24 * 1024 * 1024:
+        if len(raw) > limit:
             raise HTTPException(413, '请求过大')
     import json
     try:
@@ -79,9 +89,14 @@ async def list_nodes(request: Request):
 async def create_node(request: Request):
     require_management(request)
     data = await body(request)
+    enable_shell = data.get('enable_shell', False)
+    if not isinstance(enable_shell, bool):
+        raise HTTPException(400, 'enable_shell 必须为布尔值')
     from core.tools.handlers.ssh_hosts import _load
     try:
-        return manager().create(data.get('alias', ''), data.get('server_url') or str(request.base_url), _load())
+        return await asyncio.to_thread(manager().create, data.get('alias', ''),
+                                       data.get('server_url') or str(request.base_url), _load(),
+                                       enable_shell=enable_shell)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
 
@@ -242,12 +257,13 @@ async def versions(node_id: str, request: Request):
 
 @router.post('/api/windows/device/{node_id}/status')
 async def status(node_id: str, request: Request):
+    await _device_auth(node_id, request, 'status')
     data = await body(request)
     state = data.get('state', 'online')
     if state not in ('installing', 'online', 'error', 'uninstall_failed'):
         raise HTTPException(400, '状态无效')
     stage = data.get('stage', '')
-    if stage not in ('', 'python', 'packages', 'agent'):
+    if stage not in ('', 'ssh', 'python', 'packages', 'agent'):
         raise HTTPException(400, '安装阶段无效')
     try:
         await asyncio.to_thread(manager().heartbeat, node_id, credential(request), state, data.get('error', ''), stage)
@@ -267,6 +283,16 @@ async def uninstalled(node_id: str, request: Request):
     except Exception as exc:
         raise internal_error('uninstalled', exc)
     return {'ok': True}
+
+
+async def _device_auth(node_id, request, where):
+    """设备接口先认证再读请求体 (见 body 注释)。"""
+    try:
+        await asyncio.to_thread(manager().authenticate, node_id, credential(request))
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error(where, exc)
 
 
 def _poll_reply(nodes, node_id, job):
@@ -301,7 +327,8 @@ async def poll(node_id: str, request: Request):
 
 @router.post('/api/windows/device/{node_id}/result/{job_id}')
 async def result(node_id: str, job_id: str, request: Request):
-    data = await body(request)
+    await _device_auth(node_id, request, 'result')
+    data = await body(request, RESULT_BODY)
     try:
         # base64 解码与图片校验是同步重活, 放线程里做
         await asyncio.to_thread(manager().finish, node_id, credential(request), job_id,

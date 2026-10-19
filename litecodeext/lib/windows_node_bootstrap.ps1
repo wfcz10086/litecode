@@ -1,13 +1,17 @@
-# 纯净 Windows 节点接入：仅主动访问 LiteCode Web，不安装 SSH 或开放监听端口。
+# Windows 节点接入：主动回连 + OpenSSH 后台运维, SSH 私钥只保留在控制端。
 # 安装命令已先核对本脚本的 sha256 再执行; -KeyFingerprint 为控制端签名公钥指纹 (同样来自带外复制的安装命令)。
 [CmdletBinding()]
-param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code, [string]$KeyFingerprint = '')
+param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code,
+      [string]$KeyFingerprint = '', [string]$SshPublicKey = '')
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw '请在要接入的用户桌面，以管理员身份打开 PowerShell 后执行。'
+}
+if ($SshPublicKey -notmatch '^ssh-ed25519 [A-Za-z0-9+/=]+ litecode-node-[a-f0-9]{32}$') {
+    throw '接入命令缺少有效 SSH 公钥，请更新控制端并重新生成命令。无需提供 Windows 密码。'
 }
 $Server = $Server.TrimEnd('/')
 function Get-Sha256Hex([byte[]]$Data) {
@@ -80,7 +84,107 @@ $device = "$Server/api/windows/device/$($enrollment.id)"
 function Report-Stage([string]$Stage) {
     Invoke-RestMethod -Method Post -Uri "$device/status" -Headers $headers -ContentType 'application/json; charset=utf-8' -Body (@{state='installing';stage=$Stage} | ConvertTo-Json -Compress) | Out-Null
 }
+# [2026-10-19] 卸载会留下 LiteCode 装的 sshd/防火墙规则/改过的 sshd_config; 安装中途失败还会留下 sshd 与管理员公钥却没有卸载入口。
+# 安装时把"本节点新建/修改了什么"记进 ssh-owner.json (卸载按它恢复, 已有的 sshd 永不删除);
+# 本次运行失败时 catch 只撤销本次新建的部分 ($sshRun), 之前运行已登记的保留。
+# >>> LiteCode SSH 撤销 (bootstrap.ps1 与 uninstall.ps1 各一份, 必须逐字一致, 测试校验)
+function Undo-LiteCodeSsh($Owner, [string]$Tag, [string]$Backup) {
+    # 只撤销记录里属于本节点的项; 本机还有其它 LiteCode 节点的公钥时共享的 sshd/规则/配置一律保留
+    if (-not $Owner) { return $true }
+    $keyFile = Join-Path $env:ProgramData 'ssh/administrators_authorized_keys'
+    if ($Owner.key_added -and (Test-Path $keyFile)) {
+        $kept = @([IO.File]::ReadAllLines($keyFile) | Where-Object { $_ -notmatch ('\s' + $Tag + '$') })
+        [IO.File]::WriteAllLines($keyFile, [string[]]$kept, (New-Object Text.UTF8Encoding($false)))
+    }
+    if ((Test-Path $keyFile) -and @([IO.File]::ReadAllLines($keyFile) | Where-Object { $_ -match '\slitecode-node-[a-f0-9]{32}$' }).Count -gt 0) {
+        return $false
+    }
+    $sshdConfig = Join-Path $env:ProgramData 'ssh/sshd_config'
+    if ($Owner.config_backup -and (Test-Path $Backup)) { Copy-Item -LiteralPath $Backup -Destination $sshdConfig -Force }
+    if ($Owner.firewall_rule) { Remove-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -ErrorAction SilentlyContinue }
+    # 内置规则只在它原本不存在 (由本次装的可选功能新建) 时被禁用: 卸载可选功能会一并删除; 功能保留时维持禁用, 不放开 22 端口
+    if ($Owner.capability) {
+        Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+        if ((Get-WindowsCapability -Online -Name $Owner.capability).State -eq 'Installed') {
+            Remove-WindowsCapability -Online -Name $Owner.capability | Out-Null
+        }
+    } elseif ($Owner.service) {
+        Set-Service -Name sshd -StartupType $Owner.service.start_type
+        if ($Owner.service.status -ne 'Running') { Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue }
+        elseif ($Owner.config_backup) { Restart-Service -Name sshd -ErrorAction SilentlyContinue }
+    } elseif ($Owner.config_backup) { Restart-Service -Name sshd -ErrorAction SilentlyContinue }
+    return $true
+}
+# <<< LiteCode SSH 撤销
+$sshOwnerFile = Join-Path $root 'ssh-owner.json'
+$sshBackup = Join-Path $root 'sshd_config.litecode-backup'
+$sshPrior = $null
+if (Test-Path $sshOwnerFile) { try { $sshPrior = Get-Content $sshOwnerFile -Raw | ConvertFrom-Json } catch { $sshPrior = $null } }
+$sshRun = @{capability=''; firewall_rule=$false; builtin_rule_disabled=$false; service=$null; config_backup=$false; key_added=$false}
+function Save-SshOwner {
+    # 每改一步就落盘 (之前运行登记的 OR 本次新建的), 中途崩溃也有据可依
+    $merged = @{}
+    foreach ($name in @('capability','firewall_rule','builtin_rule_disabled','service','config_backup','key_added')) {
+        $merged[$name] = if ($sshPrior -and $sshPrior.$name) { $sshPrior.$name } else { $sshRun[$name] }
+    }
+    $merged | ConvertTo-Json -Compress -Depth 4 | Set-Content -Encoding UTF8 $sshOwnerFile
+}
 try {
+    Report-Stage 'ssh'
+    Write-Host '正在准备 OpenSSH Server 与开机启动…'
+    if ($SshPublicKey -notmatch ('^ssh-ed25519 [A-Za-z0-9+/=]+ litecode-node-' + $enrollment.id + '$')) {
+        throw 'SSH 公钥与当前节点不匹配，请重新生成接入命令。'
+    }
+    $existingSshService = Get-Service -Name sshd -ErrorAction SilentlyContinue
+    $capability = if (-not $existingSshService) { Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1 } else { $null }
+    if (-not $existingSshService -and -not $capability) { throw '此 Windows 未提供 OpenSSH Server 可选功能，请检查系统版本或可选功能源。' }
+    $sshWasInstalled = [bool]$existingSshService -or ($capability -and $capability.State -eq 'Installed')
+    $existingFirewall = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+    if (-not $sshWasInstalled) {
+        $sshRun.capability = $capability.Name; Save-SshOwner
+        Add-WindowsCapability -Online -Name $capability.Name | Out-Null
+        if ((Get-WindowsCapability -Online -Name $capability.Name).State -ne 'Installed') {
+            throw 'OpenSSH Server 安装未完成，请检查 Windows Update/可选功能源后重试原命令。'
+        }
+    }
+    # 新建规则只允许本地子网; 保留已有 SSH 环境及防火墙策略, 不打断现有隧道。
+    if (-not $existingFirewall) {
+        $builtinRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+        if ($builtinRule) { $sshRun.builtin_rule_disabled = $true; Save-SshOwner; $builtinRule | Disable-NetFirewallRule }
+        if (-not (Get-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -ErrorAction SilentlyContinue)) {
+            $sshRun.firewall_rule = $true; Save-SshOwner
+            New-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -DisplayName 'LiteCode SSH (LocalSubnet)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow -RemoteAddress LocalSubnet | Out-Null
+        }
+    }
+    if ($existingSshService -and ([string]$existingSshService.StartType -ne 'Automatic' -or [string]$existingSshService.Status -ne 'Running')) {
+        # 已有 sshd 原本不是自动启动/运行中: 记下原状态, 卸载时恢复
+        $sshRun.service = @{start_type=[string]$existingSshService.StartType; status=[string]$existingSshService.Status}; Save-SshOwner
+    }
+    Set-Service -Name sshd -StartupType Automatic
+    Start-Service -Name sshd
+    if ((Get-Service -Name sshd).Status -ne 'Running') { throw 'OpenSSH Server 未启动成功' }
+    if ($SshPublicKey) {
+        $keyFile = Join-Path $env:ProgramData 'ssh/administrators_authorized_keys'
+        New-Item -ItemType Directory -Path (Split-Path $keyFile) -Force | Out-Null
+        if (-not (Test-Path $keyFile)) { New-Item -ItemType File -Path $keyFile -Force | Out-Null }
+        $keys = @([IO.File]::ReadAllLines($keyFile))
+        if ($keys -notcontains $SshPublicKey) {
+            $sshRun.key_added = $true; Save-SshOwner
+            [IO.File]::AppendAllText($keyFile, "`n" + $SshPublicKey + "`n", (New-Object Text.UTF8Encoding($false)))
+        }
+        & icacls.exe $keyFile /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw '无法设置 SSH 公钥文件权限' }
+        if (-not $sshWasInstalled) {
+            # 只收紧本次新装的服务; 已有 SSH 配置/密码认证及隧道不改动。
+            $sshdConfig = Join-Path $env:ProgramData 'ssh/sshd_config'
+            Copy-Item -LiteralPath $sshdConfig -Destination $sshBackup -Force
+            $sshRun.config_backup = $true; Save-SshOwner
+            $configText = [IO.File]::ReadAllText($sshdConfig)
+            $configText = [regex]::Replace($configText, '(?m)^\s*#?\s*PasswordAuthentication\s+.*$', '')
+            [IO.File]::WriteAllText($sshdConfig, "PasswordAuthentication no`n" + $configText, (New-Object Text.UTF8Encoding($false)))
+            Restart-Service -Name sshd
+        }
+    }
     Report-Stage 'python'
     Write-Host '正在准备 Python 运行环境…'
     $python = $null
@@ -164,9 +268,10 @@ try {
     $pythonw = Join-Path (Split-Path $python) 'pythonw.exe'
     # 指定工作目录, 否则代理 cwd 为 C:\Windows\system32, 它拉起的应用"另存为"会默认跳到 System32
     $action = New-ScheduledTaskAction -Execute $pythonw -Argument ('"'+(Join-Path $root 'agent.py')+'" "'+$root+'"') -WorkingDirectory $root
-    # 登录时启动 + 每 5 分钟补拉一次 (运行中由 IgnoreNew 忽略), 崩溃最多自动重启 999 次
-    $trigger = @((New-ScheduledTaskTrigger -AtLogOn -User $identity.Name),
-                 (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 5)))
+    # 开机 + 登录触发 + 每分钟补拉 (运行中 IgnoreNew), 崩溃最多重启 999 次。
+    # Interactive 仍需安装用户已登录, 不改变自动登录/锁屏设置。
+    $trigger = @((New-ScheduledTaskTrigger -AtStartup), (New-ScheduledTaskTrigger -AtLogOn -User $identity.Name),
+                 (New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) -RepetitionInterval (New-TimeSpan -Minutes 1)))
     $owner = New-ScheduledTaskPrincipal -UserId $identity.Name -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -ExecutionTimeLimit ([TimeSpan]::Zero) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew -StartWhenAvailable
     $taskName = 'LiteCode-Node-' + $enrollment.id
@@ -175,9 +280,19 @@ try {
     Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger -Principal $owner -Settings $settings -Force | Out-Null
     Start-ScheduledTask -TaskName $taskName
     Write-Host ('已安装节点：' + $enrollment.alias + '。请在 LiteCode Web 查看上线状态与首张验收截图。')
+    Write-Host '已启用开机/登录自动启动与崩溃恢复；代理和功能包会在空闲时自动更新。桌面操作需要安装用户已登录并解锁。'
     Write-Host ('本机停止：Stop-ScheduledTask -TaskName ' + $taskName)
     Write-Host ('本机完全卸载：powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' + (Join-Path $root 'uninstall.ps1') + '" -Root "' + $root + '" -Schedule')
 } catch {
-    try { Invoke-RestMethod -Method Post -Uri "$device/status" -Headers $headers -ContentType 'application/json; charset=utf-8' -Body (@{state='error';error=$_.Exception.Message} | ConvertTo-Json -Compress) | Out-Null } catch {}
-    throw
+    $failure = $_
+    # 本次运行新建的 SSH 项 (含管理员公钥) 全部撤销: 安装没完成就没有卸载入口, 不能留下可登录的后门
+    try {
+        if (Undo-LiteCodeSsh $sshRun ('litecode-node-' + $enrollment.id) $sshBackup) {
+            if ($sshRun.config_backup -and -not ($sshPrior -and $sshPrior.config_backup)) { Remove-Item -LiteralPath $sshBackup -Force -ErrorAction SilentlyContinue }
+        }
+        if ($sshPrior) { $sshPrior | ConvertTo-Json -Compress -Depth 4 | Set-Content -Encoding UTF8 $sshOwnerFile }
+        else { Remove-Item -LiteralPath $sshOwnerFile -Force -ErrorAction SilentlyContinue }
+    } catch { Write-Warning ('撤销本次 SSH 改动失败：' + $_.Exception.Message) }
+    try { Invoke-RestMethod -Method Post -Uri "$device/status" -Headers $headers -ContentType 'application/json; charset=utf-8' -Body (@{state='error';error=$failure.Exception.Message} | ConvertTo-Json -Compress) | Out-Null } catch {}
+    throw $failure
 }

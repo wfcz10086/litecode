@@ -89,6 +89,9 @@ def _gen_id() -> str:
 # Span 上下文管理
 # ═══════════════════════════════════════════════════════
 
+_POLL_TOOLS = {"agent_control", "tail_log", "list_bg", "task_list", "list_timers"}   # 等待/查进度类, 重复调用是正常的
+
+
 class SpanContext:
     """追踪上下文: 管理 trace/span 层级关系。"""
 
@@ -312,7 +315,9 @@ class Tracer:
             ))
 
         # LOGIC_LOOP 检测（保持原有逻辑）
-        call_sig = f"{name}:{json.dumps(args, sort_keys=True)[:200]}"
+        # [2026-10-19] 原来是 json.dumps(sort_keys)[:200]: write_file 的 content 排在 filepath 前面,
+        # 连写几个开头一样的文件签名全相同 → 被判死循环。改成整份参数的哈希。
+        call_sig = f"{name}:{hashlib.md5(json.dumps(args, sort_keys=True, default=str).encode()).hexdigest()}"
         result_hash = hashlib.md5(result[:500].encode()).hexdigest()[:8]
         self._tool_history.append({
             "sig": call_sig, "name": name,
@@ -348,9 +353,13 @@ class Tracer:
         """循环检测（合并 v6 的 5 种检测规则）。"""
         hist = self._tool_history
 
-        # 检测1: 连续 3 次完全相同
+        # 检测1: 连续 3 次完全相同 —— 调用和结果都相同才算。[2026-10-19] 原来只比调用: 轮询类
+        # (agent_control wait / tail_log 看进度) 结果在变也算循环, SYSTEM OVERRIDE 把刚等到的结果冲掉。
+        if name in _POLL_TOOLS:
+            return False
         if (len(hist) >= 3 and
-            hist[-1]["sig"] == hist[-2]["sig"] == hist[-3]["sig"]):
+            hist[-1]["sig"] == hist[-2]["sig"] == hist[-3]["sig"] and
+            hist[-1]["result_hash"] == hist[-2]["result_hash"] == hist[-3]["result_hash"]):
             return True
 
         # 检测2: 频率检测

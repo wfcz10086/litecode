@@ -129,7 +129,8 @@ const HL = TL.highlight || {};
 const reEsc = s => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const HL_RE = ["gold", "red"].map(k => (HL[k] || []).length ? new RegExp("(" + HL[k].map(reEsc).join("|") + ")", "g") : null);
 function phrases(text) { return text.split(/(?<=[，。！？；：])/).filter(s => s.trim()); }
-const SUBS = TL.scenes.map(s => { const ph = phrases(s.text); const tot = ph.reduce((a, x) => a + x.length, 0) || 1; let c = 0; return ph.map(p => { const t0 = c / tot; c += p.length; return { t0, t1: c / tot, p }; }); });
+// tts.py 逐句合成时写了真实起止 (s.subs, 0-1 比例, 含句间停顿); 老 timeline 没有就按字数比例分
+const SUBS = TL.scenes.map(s => { if (Array.isArray(s.subs) && s.subs.length) return s.subs; const ph = phrases(s.text); const tot = ph.reduce((a, x) => a + x.length, 0) || 1; let c = 0; return ph.map(p => { const t0 = c / tot; c += p.length; return { t0, t1: c / tot, p }; }); });
 function subHtml(t) {
   let h = esc(t.replace(/[。！？]/g, ""));
   if (HL_RE[0]) h = h.replace(HL_RE[0], "<b>$1</b>");

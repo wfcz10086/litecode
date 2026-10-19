@@ -1,13 +1,47 @@
 """桌面接入契约：状态识别、错误返回、图片产出与工具定义。"""
 import asyncio
 import sys
+import types
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path[:0] = [str(ROOT), str(ROOT / 'core')]
 from lib.windows_desktop_worker import classify
 from lib.tools.defs.windows_desktop_defs import WINDOWS_DESKTOP_DEFS
+
+
+@pytest.mark.parametrize('action', ('screenshot', 'click', 'ocr', 'type_secret', 'hotkey', 'type_text', 'open_url', 'launch_app'))
+def test_locked_desktop_refuses_gui_actions_before_side_effects(tmp_path, action):
+    from lib import windows_desktop_worker as worker
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError('锁屏时不得执行桌面动作')
+
+    desktop = types.SimpleNamespace(perform=forbidden)
+    with patch.object(worker, 'desktop_ready', return_value=False), \
+         patch.dict(sys.modules, {'windows_desktop_actions': desktop, 'windows_desktop_ocr': desktop}):
+        result = worker.run(action, tmp_path, {'text': 'test', 'keys': 'enter'})
+    assert result['ok'] is False and result['state'] == 'desktop_unavailable'
+    assert 'image' not in result
+
+
+@pytest.mark.parametrize('action', ('system_info', 'processes', 'services', 'run_powershell', 'list_dir', 'download', 'upload'))
+def test_background_actions_do_not_require_unlocked_desktop(tmp_path, action):
+    from lib import windows_desktop_worker as worker
+    calls = []
+
+    def perform(actual, folder, args):
+        calls.append(actual)
+        return {'ok': True, 'state': actual}
+
+    backend = types.SimpleNamespace(perform=perform)
+    with patch.object(worker, 'desktop_ready', side_effect=AssertionError('后台操作不应依赖桌面状态')), \
+         patch.dict(sys.modules, {'windows_system_actions': backend, 'windows_file_actions': backend}):
+        result = worker.run(action, tmp_path, {})
+    assert result['ok'] is True and calls == [action]
 
 
 def test_login_states_require_evidence():
@@ -75,7 +109,7 @@ def test_ocr_unions_word_boxes_and_rejects_duplicate_targets():
     with pytest.raises(ValueError, match='匹配 2 个'):
         select_text(lines * 2, '不登录继续', 100, 100)
     with pytest.raises(ValueError, match='匹配 0 个'):
-        select_text(lines, '登录', 100, 100)
+        select_text(lines, '取消', 100, 100)   # [2026-10-19] '登录' 现按行内子串命中, 0 个改用真不存在的文字
     with pytest.raises(ValueError, match='屏幕内'):
         select_text(lines, '不登录继续', 10, 10)
 
@@ -160,6 +194,55 @@ def test_keyboard_packets_include_scan_codes_and_preserve_unicode():
     assert keyboard_packet(65, 0, 2, mapping) == (0, 0x1e, 10)
     assert keyboard_packet(0x25, 0, 0, mapping) == (0, 0x4b, 9)
     assert keyboard_packet(0, 0x4e2d, 4, mapping) == (0, 0x4e2d, 4)
+
+
+@pytest.mark.parametrize('keys,arrow,select', [
+    ('ctrl+up', 0x48, False), ('ctrl+down', 0x50, False),
+    ('ctrl+shift+up', 0x48, True), ('ctrl+shift+down', 0x50, True),
+])
+def test_paragraph_hotkeys_reach_native_input_without_shell_permission(tmp_path, monkeypatch, keys, arrow, select):
+    import ctypes
+    from lib import windows_desktop_actions as actions
+
+    sent, screenshots = [], []
+    scans = {0x11: 0x1d, 0x10: 0x2a, 0x26: 0x48, 0x28: 0x50}
+
+    def send_input(count, pointer, size):
+        packet = pointer._obj.payload.keyboard
+        sent.append((packet.vk, packet.scan, packet.flags))
+        return 1
+
+    class Screen:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def shot(self, output):
+            screenshots.append(output)
+
+    user32 = types.SimpleNamespace(SetProcessDPIAware=lambda: None,
+                                   MapVirtualKeyW=lambda vk, mode: scans[vk], SendInput=send_input)
+    monkeypatch.setattr(ctypes, 'windll', types.SimpleNamespace(user32=user32), raising=False)
+    monkeypatch.setattr(actions, 'pyautogui_module', lambda: types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, 'mss', types.SimpleNamespace(MSS=Screen))
+    monkeypatch.setattr(actions, 'list_windows', lambda: [])
+    monkeypatch.setattr(actions.time, 'sleep', lambda seconds: None)
+
+    result = actions.perform('hotkey', tmp_path, {'keys': keys, 'shell_allowed': False})
+
+    pressed = [(0, 0x1d, 8)] + ([(0, 0x2a, 8)] if select else []) + [(0, arrow, 9)]
+    released = [(vk, scan, flags | 2) for vk, scan, flags in reversed(pressed)]
+    assert sent[:len(pressed) + len(released)] == pressed + released
+    # SendInput 的失败保护会额外释放修饰键，后续包也必须全部是抬键。
+    assert all(flags & 2 for vk, scan, flags in sent[len(pressed) + len(released):])
+    assert result['ok'] and result['state'] == 'action_executed'
+    assert screenshots == [str(tmp_path / 'screen.png')]
+    before = list(sent)
+    with pytest.raises(ValueError, match='运行'):
+        actions.perform('hotkey', tmp_path, {'keys': 'win+r', 'shell_allowed': False})
+    assert sent == before
 
 
 def test_every_advertised_hotkey_has_native_mapping():

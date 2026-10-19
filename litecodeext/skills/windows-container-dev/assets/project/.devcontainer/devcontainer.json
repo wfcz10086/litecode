@@ -1,0 +1,11 @@
+{
+  "name": "LiteCode Windows Development Check",
+  "image": "python:3.12-slim-bookworm",
+  "forwardPorts": [8080],
+  "portsAttributes": {"8080": {"label": "LiteCode development check", "onAutoForward": "notify"}},
+  "customizations": {
+    "vscode": {"extensions": ["ms-python.python", "ms-python.debugpy"]}
+  },
+  "remoteUser": "root",
+  "postCreateCommand": "python -m pip install --no-cache-dir debugpy"
+}

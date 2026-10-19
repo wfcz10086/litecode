@@ -22,6 +22,7 @@ STREAM_TIMEOUT    = 600
 # 自愈已在进行时直接抛错, 不再空转重试 (重启要一分钟, 退避重试等不到)。
 # 配了 fallback_model_id 时, 降级期间的请求临时改走那个模型, 用户无感。
 WD_RESTARTING_MSG = "模型服务卡住了, 已自动重启, 约 1 分钟后恢复"
+_PARTIAL_MSG = "模型输出到一半连接断了 (已收到部分内容, 不自动整段重发以免内容重复), 请重试这一轮"
 
 
 def _busy_check(status: int, body, url: str, timeout: bool = False) -> bool:
@@ -30,6 +31,29 @@ def _busy_check(status: int, body, url: str, timeout: bool = False) -> bool:
         _wd.note_busy(url)
         return _wd.get().degraded(url)
     return False
+
+
+def _fix_effort(body: dict, text) -> bool:
+    """[effort-400 2026-10-19] 上游模板不认我们发的 reasoning_effort 档位时就地改档, 返回是否改了。
+    例: 自建 Flash 新模板只认 xhigh/medium/low, 收到 high 回 400
+    "Unexpected reasoning effort high. Supported types are xhigh (default), medium, and low."
+    改法: 报错里列了支持档 → 挑最接近的 (high→xhigh, 再不行 medium); 没列 → 去掉字段用上游默认。"""
+    cur = body.get("reasoning_effort")
+    s = text.decode("utf-8", "replace") if isinstance(text, (bytes, bytearray)) else str(text)
+    if not cur or "reasoning effort" not in s.lower():
+        return False
+    m = re.search(r"supported types are (.+?)(?:\.|\"|$)", s, re.I)
+    ok = re.findall(r"[a-z]+", m.group(1).lower()) if m else []
+    ok = [w for w in ok if w not in ("and", "or", "default")]
+    order = {"high": ["xhigh", "medium"], "xhigh": ["high", "medium"], "max": ["xhigh", "high"],
+             "medium": ["low"], "low": ["medium"]}.get(cur, [])
+    alt = next((e for e in order if e in ok), None)
+    if alt:
+        body["reasoning_effort"] = alt
+    else:
+        body.pop("reasoning_effort", None)
+    log.warning(f"[transport] 上游不认 reasoning_effort={cur}, 改为 {alt or '(不传)'} 重发")
+    return True
 
 
 def _failover(model: str, url: str, key: str):
@@ -296,6 +320,9 @@ async def vllm_stream(
 
     headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
     last_err = None
+    # [2026-10-19] 已经往上游吐过内容后再整段重发, 调用方会收到两遍开头, 工具调用参数拼成坏 JSON
+    # → 工具报错 → 模型重试。吐过就不在这里重试, 交给上层按"回合异常"处理。
+    _yielded = False
 
     for attempt in range(max_retries + 1):
         _model, _url, _key, _switched = _failover(_model, _url, _key)
@@ -321,6 +348,8 @@ async def vllm_stream(
 
                     if resp.status_code != 200:
                         text = await resp.aread()
+                        if resp.status_code == 400 and _fix_effort(body, text):
+                            continue
                         log.error(f"[transport] vLLM {resp.status_code}: {text[:300]}")
                         _busy_check(resp.status_code, text, _url)
                         raise RuntimeError(f"vLLM returned {resp.status_code}: {text[:200]}")
@@ -334,9 +363,11 @@ async def vllm_stream(
                         if payload == "[DONE]":
                             return
                         try:
-                            yield json.loads(payload)
+                            chunk = json.loads(payload)
                         except json.JSONDecodeError:
                             continue
+                        _yielded = True
+                        yield chunk
                     return  # 正常结束
 
         except httpx.ConnectError as e:
@@ -349,6 +380,8 @@ async def vllm_stream(
 
         except httpx.ReadTimeout as e:
             last_err = e
+            if _yielded:
+                raise RuntimeError(_PARTIAL_MSG)
             if _busy_check(0, b"", _url, timeout=True) and not _wd.fallback_for(_url):
                 raise RuntimeError(WD_RESTARTING_MSG)
             if attempt < max_retries:
@@ -362,6 +395,8 @@ async def vllm_stream(
 
         except Exception as e:
             last_err = e
+            if _yielded:
+                raise RuntimeError(_PARTIAL_MSG)
             if attempt < max_retries:
                 log.warning(f"[transport] unexpected error (attempt {attempt+1}), retrying (exp backoff): {e}")
                 await sleep_backoff(attempt, LLM_POLICY)
