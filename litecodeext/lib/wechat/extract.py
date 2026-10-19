@@ -113,7 +113,15 @@ async def _extract_message_full(msg, bot_id: str = "", bot=None) -> Optional[str
             if val and val not in (title, content):
                 record_lines.append(f"  [{key}] {val}")
         record_lines.append("[/转发聊天记录]")
-        parts.append("\n".join(record_lines))
+        # 引用/转发的内容出自别人之手 (不是主人本人这次说的话): 套外部内容信封, 其中的要求只当数据
+        # (lib/agent/untrusted.py; 主循环的高影响动作闸也据此判定主人原话不含这段)
+        _record = "\n".join(record_lines)
+        try:
+            from lib.agent.untrusted import wrap_inbound_quote
+            _record = wrap_inbound_quote(_record, "微信引用/转发的聊天记录(第三方)")
+        except Exception:
+            pass
+        parts.append(_record)
 
     if not parts:
         return None

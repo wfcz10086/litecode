@@ -13,7 +13,18 @@ test_v123_fixes.py — LiteCode v1.0 修复验证测试
 import sys, json, time, httpx, traceback
 
 BASE = sys.argv[1] if len(sys.argv) > 1 else "http://127.0.0.1:18789"
-TOKEN = sys.argv[2] if len(sys.argv) > 2 else "CHANGE_ME_TOKEN"
+def _cfg_token():
+    import pathlib
+    for _p in (pathlib.Path(__file__).resolve().parents[1] / "config.json",
+               pathlib.Path(__file__).resolve().parents[2] / "config.json"):
+        try:
+            return (json.loads(_p.read_text()).get("server") or {}).get("token", "")
+        except Exception:
+            continue
+    return ""
+
+
+TOKEN = sys.argv[2] if len(sys.argv) > 2 else _cfg_token()
 HEADERS = {"Authorization": f"Bearer {TOKEN}", "Content-Type": "application/json"}
 
 passed = 0

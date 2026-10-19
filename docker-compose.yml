@@ -42,6 +42,10 @@ services:
       - ./litecode_state/timers.json:/root/.litecode/timers.json
       - ./litecode_state/web_auth_tokens.json:/root/.litecode/web_auth_tokens.json
       - ./litecode_state/dag_jobs:/root/.litecode/dag_jobs
+      # [sec 2026-10-19] 控制端私钥 (Windows 节点签名私钥 / shell 能力 HMAC 密钥) 挪出工作区,
+      # 持久化在这里; 加卷后需 `docker compose up -d litecode` 重建容器, 首次启动自动从
+      # workspace/.secrets/windows_nodes 迁移 (lib/key_store.py)。目录需 0700。
+      - ./litecode_state/keys:/root/.litecode/keys
       # [ssh-2026-05] host SSH key 只读挂入容器, 让 LiteCode AI 能 ssh 远程机器
       # (Dockerfile 装 openssh-client 提供 ssh 二进制)
       - ${HOME}/.ssh:/root/.ssh:ro
@@ -115,7 +119,8 @@ services:
       - BACKEND_URL=${BACKEND_URL:-https://aigc.gether.net/v1}
       - API_KEY=${API_KEY:-EMPTY}
       - MODEL_ID=${MODEL_ID:-deepseek-v4-pro}
-      - SERVER_TOKEN=${SERVER_TOKEN:-CHANGE_ME_TOKEN}
+      # [sec 2026-10-19] 无字面量默认值: token 以 config.json 的 server.token 为准 (env 只在 config 缺失时注入)
+      - SERVER_TOKEN=${SERVER_TOKEN:-}
       - SERVER_PORT=${SERVER_PORT:-18789}
       - WEB_PORT=${WEB_PORT:-18790}
       - NOVNC_PORT=${NOVNC_PORT:-18800}
@@ -133,8 +138,8 @@ services:
       - LITECODE_PLUGIN_PATH=${LITECODE_PLUGIN_PATH:-/opt/pptx:/opt/cad}
 
     healthcheck:
+      # /health 公开探针 (不带 token 只回 status+版本)
       test: ["CMD", "curl", "-sf",
-             "-H", "Authorization: Bearer ${SERVER_TOKEN:-CHANGE_ME_TOKEN}",
              "http://127.0.0.1:${SERVER_PORT:-18789}/health"]
       interval: 30s
       timeout: 10s

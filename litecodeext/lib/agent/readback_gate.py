@@ -14,6 +14,7 @@ import json
 import re
 
 from lib.config import CFG
+from lib.agent.untrusted import unwrap as _unwrap   # 外部内容信封 (windows_* 结果) 先剥掉再解析 JSON
 
 PREFIX = "[SYSTEM-READBACK]"
 
@@ -65,7 +66,7 @@ def _state(ctx) -> ReadbackState:
 
 def _ok(content) -> bool:
     """工具确实执行了且未报错: 被守卫拦下 ([SYSTEM-...]) 或 ERROR 开头都不算。"""
-    text = (content if isinstance(content, str) else str(content or "")).lstrip()
+    text = _unwrap(content if isinstance(content, str) else str(content or "")).lstrip()
     if not text or text.startswith(("ERROR", "[SYSTEM", "TIMEOUT", "EXEC_ERROR")):
         return False
     if text.startswith('{'):
@@ -83,7 +84,7 @@ def _alias(ctx, args, content) -> str:
     "GPU-VM " 与 "gpu-vm" 也被当成两台。两边统一: 优先用工具结果里服务端回填的 alias, 其次模型参数,
     缺省按工具同样的规则取本会话分配的电脑; 最后 strip + lower。"""
     alias = ''
-    text = content if isinstance(content, str) else ''
+    text = _unwrap(content) if isinstance(content, str) else ''
     body = text.lstrip()
     if body.startswith('ERROR: '):
         body = body[7:].split(' ', 1)[-1].lstrip()

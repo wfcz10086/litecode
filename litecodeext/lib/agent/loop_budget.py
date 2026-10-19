@@ -50,7 +50,7 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
     _sw_pressure = float(_AGT.get("sliding_window_pressure", 0.5))
     if (iteration > 0 and iteration % _sw_every == 0 and len(ctx.messages) > _sw_min
             and _cp.under_pressure(ctx.messages, usage, est_tokens,
-                                   int(_cfg.CONTEXT_WINDOW * float(_AGT.get("token_budget_pct", 0.6))), _sw_pressure)):
+                                   int(_cfg.live_context_window() * float(_AGT.get("token_budget_pct", 0.6))), _sw_pressure)):
         _trim_boundary = max(2, len(ctx.messages) - _sw_keep)
         _trimmed_count = 0
         for _mi in range(2, _trim_boundary):  # 跳过 system + 第一条 user
@@ -82,12 +82,12 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
     except Exception:
         _fixed_overhead = 0
     # [2026-10-12] 上面的估算对工具 schema 高估约 3 倍, 改用上游 usage 学到的实测值 (lib/overhead_calib.py)
-    _fixed_overhead = _oc.adjust(_live_model(), _fixed_overhead, int(_cfg.CONTEXT_WINDOW * _tb_pct))
+    _fixed_overhead = _oc.adjust(_live_model(), _fixed_overhead, int(_cfg.live_context_window() * _tb_pct))
     # 两个口径分开, 不混:
     #   锚点真值 = 整个输入 (含 system+工具+对话) → 直接和 窗口*pct 比
     #   纯估算   = 只有对话历史 → 和 窗口*pct - 固定开销 比
-    _tb_budget_est    = max(4096, int(_cfg.CONTEXT_WINDOW * _tb_pct) - _fixed_overhead)  # 估算口径
-    _tb_budget_real   = max(4096, int(_cfg.CONTEXT_WINDOW * _tb_pct))                    # 锚点口径
+    _tb_budget_est    = max(4096, int(_cfg.live_context_window() * _tb_pct) - _fixed_overhead)  # 估算口径
+    _tb_budget_real   = max(4096, int(_cfg.live_context_window() * _tb_pct))                    # 锚点口径
     if len(ctx.messages) > 20:
         # [USAGE-ANCHOR] 有上游真实 usage 时, 用"锚点真值 + 自锚点以来的增量估算"。
         # 真值自带全部开销, 比 est 整段更准。保守: 真值 >= 当时估算才用锚 (防上游漏报)。
@@ -188,7 +188,7 @@ def _loop_context_budget(ctx, fixed_overhead):
     _ctx_est = sum(est_tokens(m.get("content", "")) + est_tokens(m.get("tool_calls", "")) + est_tokens(m.get("reasoning_content",""))
                    for m in ctx.messages)
     # [FIX 2026-08-31] 同样扣掉 system + 工具定义的固定开销 (见上方 TOKEN-BUDGET 注释)
-    _ctx_limit = max(4096, int(_cfg.CONTEXT_WINDOW * 0.75) - fixed_overhead)
+    _ctx_limit = max(4096, int(_cfg.live_context_window() * 0.75) - fixed_overhead)
     if _ctx_est > _ctx_limit and len(ctx.messages) > 10:
         _ctx_trimmed = 0
         # 从第3条消息开始（跳过 system + 第1条 user），逐条压缩直到低于预算

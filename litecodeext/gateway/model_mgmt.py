@@ -27,12 +27,40 @@ async def model_list(request: Request):
     srv = _srv()
     cfg = load_cfg()
     models = cfg.get("models", [])
+    # [sec 2026-10-19] 列表里的 api_key 等一律脱敏: 界面只按 id 操作 (切换/测试都在服务端
+    # 现查配置取 key), 永远不需要明文 key。
     return {
         "active": srv.MODEL_ID,
         "active_backend": srv.BACKEND_URL,
         "active_backend_type": srv.BACKEND_TYPE,
-        "models": models,
+        "models": mask_secrets(models),
     }
+
+
+MASK_PREFIX = "••••"
+_SECRET_KEYS = {"api_key", "apikey", "key", "secret", "token", "password", "access_token", "authorization"}
+
+
+def _mask_value(v):
+    if not isinstance(v, str) or not v:
+        return v
+    if v.startswith(MASK_PREFIX):
+        return v
+    return MASK_PREFIX + (v[-4:] if len(v) > 8 else "")
+
+
+def mask_secrets(obj):
+    """递归复制 obj, 把 api_key/secret/token/password 类字段换成 "••••" + 末 4 位 (短值整段遮掉)。"""
+    if isinstance(obj, dict):
+        return {k: (_mask_value(v) if str(k).lower() in _SECRET_KEYS and isinstance(v, str)
+                    else mask_secrets(v)) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [mask_secrets(x) for x in obj]
+    return obj
+
+
+def is_masked(v) -> bool:
+    return isinstance(v, str) and v.startswith(MASK_PREFIX)
 
 
 @router.post("/v1/model/switch")
@@ -182,6 +210,8 @@ async def model_add(request: Request):
     # 检查是否已存在
     for i, m in enumerate(models):
         if m["id"] == body["id"]:
+            if is_masked(body.get("api_key")):   # 前端拿到的是脱敏值, 回传时保留原 key
+                body["api_key"] = m.get("api_key", "")
             models[i] = body
             break
     else:
@@ -192,72 +222,104 @@ async def model_add(request: Request):
     return {"ok": True, "count": len(models)}
 
 
+# 1x1 白色 PNG, 视觉探测用
+_TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
+MODEL_TEST_TIMEOUT = 30.0
+
+
+def _test_target(body: dict) -> dict:
+    """要测的模型: 按 model_id / id (+ backend_url) 在 config.models[] 里找;
+    找不到但请求里带了 backend_url (设置页里还没保存的新模型) → 直接用请求里的字段。
+    [fix 2026-10-19] 旧版只认 body.id 且缺省回落"当前激活模型", 传 model_id 时测的其实是激活模型。"""
+    from lib.config import find_model_entry
+    mid = str(body.get("model_id") or body.get("id") or "").strip()
+    url = str(body.get("backend_url") or "").strip()
+    entry = find_model_entry(mid, url) if mid else {}
+    if entry:
+        # [sec 2026-10-19] 配置里的模型: backend_url / api_key 只取配置值, 请求里传的一律不用
+        # (否则可借已知 id 把服务端 key 发到任意地址)。
+        return dict(entry)
+    if mid and url:
+        # 未保存的新模型: 只用请求里自己带的 key, 绝不回落服务端的 API_KEY (防 key 外泄 / SSRF 带凭据)
+        key = body.get("api_key")
+        key = "" if (not isinstance(key, str) or is_masked(key)) else key
+        return dict(body, id=mid, api_key=key)
+    return {}
+
+
 @router.post("/v1/model/test")
 async def model_test(request: Request):
-    """测试模型后端连通性：尝试调 /models 或发一条极短 completion"""
+    """测试指定模型是否可用: 直连它自己的 backend + api_key + 线路名发一条极短对话 (关思考),
+    返回 {ok, model_id, latency_ms, reply_preview, error}。只读, 不切换激活模型。"""
     require_auth(request)
-    srv = _srv()
-    body = await request.json()
-    url = (body.get("backend_url") or srv.BACKEND_URL).rstrip("/")
-    key = body.get("api_key") or srv.API_KEY
-    mid = body.get("id") or srv.MODEL_ID
-    btype = body.get("backend_type", "openai")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    target = _test_target(body)
+    mid = str(body.get("model_id") or body.get("id") or "")
+    if not target:
+        return {"ok": False, "model_id": mid, "latency_ms": 0, "reply_preview": "",
+                "error": f"模型 {mid or '(未指定)'} 不在配置里" if mid else "model_id required"}
 
-    hdrs = {"Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    result: dict = {"ok": False, "backend_url": url, "model_id": mid, "backend_type": btype,
-                    "supports_vision": False, "latency_ms": 0}
+    from lib.config import model_live_view, reset_turn_model, set_turn_model
+    from lib.thinking_adapter import inject_params
+    view = model_live_view(target)
+    url = view["backend_url"].rstrip("/")
+    hdrs = {"Content-Type": "application/json"}
+    if view["api_key"]:
+        hdrs["Authorization"] = f"Bearer {view['api_key']}"
+    payload = {"model": view["served_model_name"], "stream": False, "max_tokens": 16,
+               "messages": [{"role": "user", "content": "ping, reply with: pong"}]}
+    # 按被测模型自己的线路格式关思考 (vLLM chat_template_kwargs / DeepSeek thinking=disabled ...)。
+    # set_turn_model 只影响当前 context, 不碰全局激活模型。
+    tok = set_turn_model(target)
+    try:
+        inject_params(payload, force_disable=True)
+    except Exception:
+        pass
+    finally:
+        reset_turn_model(tok)
 
+    result: dict = {"ok": False, "model_id": view["model_id"], "backend_url": url,
+                    "backend_type": view["backend_type"], "latency_ms": 0,
+                    "reply_preview": "", "error": "",
+                    "supports_vision": view["supports_vision"]}
     t0 = time.time()
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as client:
-            # 1) 尝试 GET /models (vLLM / OpenAI / ollama 都支持)
-            models_url = f"{url}/models"
-            r = await client.get(models_url, headers=hdrs)
-            if r.status_code == 200:
-                data = r.json()
-                model_list_data = data.get("data", []) if isinstance(data, dict) else []
-                model_ids = [m.get("id", "") for m in model_list_data] if model_list_data else []
-                result["available_models"] = model_ids[:10]
-                result["ok"] = True
-            else:
-                result["error"] = f"GET /models → HTTP {r.status_code}"
-
-            # 2) 快速 completion 测试（1 token）
-            test_payload = {
-                "model": mid, "messages": [{"role": "user", "content": "hi"}],
-                "max_tokens": 1, "stream": False,
-            }
-            r2 = await client.post(f"{url}/chat/completions", headers=hdrs, json=test_payload)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(MODEL_TEST_TIMEOUT, connect=10.0)) as client:
+            r = await client.post(f"{url}/chat/completions", headers=hdrs, json=payload)
             result["latency_ms"] = int((time.time() - t0) * 1000)
-            if r2.status_code == 200:
+            result["http_status"] = r.status_code
+            if r.status_code == 200:
+                try:
+                    msg = (r.json().get("choices") or [{}])[0].get("message") or {}
+                except Exception:
+                    msg = {}
+                reply = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
+                result["reply_preview"] = str(reply).strip()[:120]
                 result["ok"] = True
                 result["completion_test"] = "pass"
             else:
-                result["completion_test"] = f"HTTP {r2.status_code}"
-
-            # 3) 检测视觉支持：发带图片的消息看是否报错
-            if body.get("supports_vision") or btype == "vllm":
+                result["error"] = f"HTTP {r.status_code}: {r.text[:200]}"
+                result["completion_test"] = f"HTTP {r.status_code}"
+            if body.get("test_vision") and result["ok"]:
+                vp = {"model": view["served_model_name"], "max_tokens": 1, "stream": False,
+                      "messages": [{"role": "user", "content": [
+                          {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_TINY_PNG}"}},
+                          {"type": "text", "text": "hi"}]}]}
                 try:
-                    # 1x1 白色 PNG base64
-                    tiny_img = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
-                    vision_payload = {
-                        "model": mid, "max_tokens": 1, "stream": False,
-                        "messages": [{"role": "user", "content": [
-                            {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{tiny_img}"}},
-                            {"type": "text", "text": "hi"}
-                        ]}],
-                    }
-                    r3 = await client.post(f"{url}/chat/completions", headers=hdrs, json=vision_payload)
-                    result["supports_vision"] = r3.status_code == 200
+                    r3 = await client.post(f"{url}/chat/completions", headers=hdrs, json=vp)
                     result["vision_test"] = "pass" if r3.status_code == 200 else f"HTTP {r3.status_code}"
                 except Exception as ve:
                     result["vision_test"] = str(ve)[:80]
-
     except Exception as e:
-        result["error"] = str(e)[:200]
+        result["error"] = (f"{type(e).__name__}: {e}")[:200]
         result["latency_ms"] = int((time.time() - t0) * 1000)
 
-    log.info(f"[MODEL-TEST] {mid} @ {url} → ok={result['ok']} {result.get('latency_ms',0)}ms")
+    log.info(f"[MODEL-TEST] {view['model_id']} @ {url} → ok={result['ok']} {result['latency_ms']}ms")
     return result
 
 

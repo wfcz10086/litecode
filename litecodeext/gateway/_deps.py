@@ -19,7 +19,10 @@ def _auth(request: Request) -> bool:
     """Bearer 鉴权; 走 litecode_server.TOKEN (启动时固化)."""
     auth = request.headers.get("Authorization", "")
     token = _srv().TOKEN
-    return auth.startswith("Bearer ") and auth[7:].strip() == token
+    if not token:          # [sec 2026-10-19] 未配置 server.token → fail closed (不让 "Bearer " 空值通过)
+        return False
+    import hmac
+    return auth.startswith("Bearer ") and hmac.compare_digest(auth[7:].strip().encode(), str(token).encode())
 
 
 def require_auth(request: Request) -> None:

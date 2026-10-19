@@ -17,7 +17,7 @@ def _cfg():
 CFG = _cfg()
 _srv = CFG.get("server",{})
 SERVER_URL  = f"http://127.0.0.1:{_srv.get('port',18789)}"
-TOKEN       = _srv.get("token","CHANGE_ME_TOKEN")
+TOKEN       = _srv.get("token", "")  # [sec 2026-10-19] 只认 config.json, 无字面量兜底 (缺失即 401 fail-closed)
 MODEL       = CFG.get("model",{}).get("id","openclaw")
 CTX_WIN     = int(CFG.get("model",{}).get("context_window",65000))
 WEB_PORT    = int(os.environ.get("WEB_PORT", CFG.get("web_ui",{}).get("port",18790)))

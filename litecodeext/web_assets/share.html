@@ -51,7 +51,7 @@
   if (s.created) parts.push('创建于 ' + new Date(s.created * 1000).toLocaleString());
   if (data.expires) parts.push('链接有效期至 ' + new Date(data.expires * 1000).toLocaleString());
   document.getElementById('meta').textContent = parts.join(' · ');
-  const msgs = (s.messages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && (m.content || (m.tools || []).length));
+  const msgs = (s.messages || []).filter(m => (m.role === 'user' || m.role === 'assistant') && (m.content || m.tool_count || (m.tools || []).length));
   if (!msgs.length) return state('这个对话还没有内容。');
   list.replaceChildren();
   for (const m of msgs) {
@@ -60,9 +60,10 @@
     const content = document.createElement('div'); content.className = 'content';
     content.textContent = typeof m.content === 'string' ? m.content.trim() : JSON.stringify(m.content);
     box.append(role, content);
-    if ((m.tools || []).length) {
+    const nTools = m.tool_count || (m.tools || []).length;
+    if (nTools) {
       const t = document.createElement('div'); t.className = 'tools';
-      t.textContent = '调用了 ' + m.tools.length + ' 次工具'; box.append(t);
+      t.textContent = '调用了 ' + nTools + ' 次工具'; box.append(t);
     }
     list.append(box);
   }

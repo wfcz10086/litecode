@@ -10,8 +10,8 @@ from datetime import datetime, timedelta
 def case_health(actor, shot_dir):
     import urllib.request, urllib.error, json
     try:
-        req = urllib.request.Request("http://127.0.0.1:18789/health",
-                                      headers={"Authorization": "Bearer CHANGE_ME_TOKEN"})
+        # /health 公开探针只回 status+版本, 不需要 token
+        req = urllib.request.Request("http://127.0.0.1:18789/health")
         with urllib.request.urlopen(req, timeout=5) as r:
             d = json.loads(r.read())
         return d.get("status") == "ok", f"health={d}", []

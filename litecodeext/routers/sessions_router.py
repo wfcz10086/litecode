@@ -359,6 +359,23 @@ async def api_session_files(sid: str, request: Request):
     return {"sid": sid, "files": files}
 
 
+def _session_file_path(sid: str, name: str) -> Path:
+    """[sec 2026-10-19] session 文件路径: resolve 后必须落在 sessions_dir/<sid>/ 内, 否则 403。"""
+    _paths = S.cfg.get("paths", {})
+    _ws = Path(_paths.get("workspace_base", "/tmp/litecode_workspace"))
+    root = Path(_paths.get("sessions_dir", str(_ws / "sessions"))).resolve()
+    sess_dir = (root / sid).resolve()
+    fp = (sess_dir / name).resolve()
+    try:
+        sess_dir.relative_to(root)
+        fp.relative_to(sess_dir)
+    except ValueError:
+        raise HTTPException(403, "forbidden")
+    if sess_dir == root or fp == sess_dir:
+        raise HTTPException(403, "forbidden")
+    return fp
+
+
 @router.get("/api/sessions/{sid}/files/{name:path}")
 async def api_session_file_read(sid: str, name: str, request: Request):
     require_auth(request)
@@ -368,16 +385,9 @@ async def api_session_file_read(sid: str, name: str, request: Request):
         raise
     except Exception:
         pass
-    _paths = S.cfg.get("paths", {})
-    _ws = Path(_paths.get("workspace_base", "/tmp/litecode_workspace"))
-    sess_dir = Path(_paths.get("sessions_dir", str(_ws / "sessions"))) / sid
-    fp = sess_dir / name
+    fp = _session_file_path(sid, name)
     if not fp.exists():
         raise HTTPException(404, f"{name} not found")
-    try:
-        fp.resolve().relative_to(sess_dir.resolve())
-    except ValueError:
-        raise HTTPException(403, "forbidden")
     return {"name": name, "content": fp.read_text(errors="replace"), "size": fp.stat().st_size}
 
 
@@ -393,10 +403,8 @@ async def api_session_file_write(sid: str, name: str, request: Request):
     basename = name.split("/")[-1]
     if basename not in _EDITABLE_MDS:
         raise HTTPException(403, f"{basename} is not editable")
-    _paths = S.cfg.get("paths", {})
-    _ws = Path(_paths.get("workspace_base", "/tmp/litecode_workspace"))
-    sess_dir = Path(_paths.get("sessions_dir", str(_ws / "sessions"))) / sid
-    fp = sess_dir / name
+    # [sec 2026-10-19] 之前 name 带 ../ 可写出 session 目录 (只校验了 basename)
+    fp = _session_file_path(sid, name)
     fp.parent.mkdir(parents=True, exist_ok=True)
     body = await request.json()
     fp.write_text(body.get("content", ""))
@@ -609,10 +617,29 @@ async def api_share_view(token: str, request: Request):
         "session": {
             "id": safe.get("id"),
             "name": safe.get("name"),
-            "messages": safe.get("messages", []),
+            "messages": _share_public_messages(safe.get("messages", [])),
             "created": safe.get("created"),
         },
     }
+
+
+def _share_public_messages(msgs) -> list:
+    """[sec 2026-10-19] 公开分享只给 user/assistant 的 role + 已脱敏文本 (+ 工具调用次数);
+    _tool_results / tools / reasoning / tool_calls 等原始字段一律不出 (可能含密钥/内网路径)。"""
+    out = []
+    for m in msgs or []:
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        c = m.get("content", "")
+        if isinstance(c, list):  # 多模态: 只留文本段
+            c = "\n".join(p.get("text", "") for p in c
+                          if isinstance(p, dict) and p.get("type") == "text")
+        if not isinstance(c, str):
+            c = ""
+        tools = m.get("tools")
+        out.append({"role": m["role"], "content": scrub_secrets(c),
+                    "tool_count": len(tools) if isinstance(tools, list) else 0})
+    return out
 
 
 _SHARE_PAGE = Path(__file__).resolve().parents[1] / "web_assets" / "share.html"

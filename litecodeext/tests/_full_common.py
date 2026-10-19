@@ -31,7 +31,7 @@ def _load_cfg() -> dict:
 _CFG = _load_cfg()
 _SRV = _CFG.get("server", {})
 DEFAULT_URL   = f"http://127.0.0.1:{_SRV.get('port', 18789)}"
-DEFAULT_TOKEN = _SRV.get("token", "CHANGE_ME_TOKEN")
+DEFAULT_TOKEN = _SRV.get("token", "")
 DEFAULT_MODEL = _CFG.get("model", {}).get("id", "qwen3.6")
 
 LOGS_DIR = Path(_CFG.get("paths", {}).get("logs_dir", "/tmp/litecode_workspace/logs"))

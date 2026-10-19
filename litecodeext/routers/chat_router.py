@@ -10,6 +10,7 @@ _build_multimodal_content/SERVER_URL/HEADERS/MODEL) 仍在 web_ui.py, lazy 拿�
 import asyncio
 import json
 import time
+import uuid
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -140,8 +141,48 @@ async def api_chat(sid: str, request: Request):
     prev = REGISTRY.get(sid)
     if prev and not prev.done and prev.finishing:
         await prev.wait_finished(timeout=FINISHING_WAIT_S)
+    # [per-chat-model 2026-10-19] `/model` 指令: 设置本会话模型, 直接回一句确认, 不调模型
+    from lib import session_model as _sm
+    if _sm.parse_command(message) is not None:
+        from lib.owner import require_owner
+        require_owner(_wui().load_session(sid), request)
+        run = await start_model_command_turn(sid, message)
+        return _follow(request, run, 0)
     run = start_chat_turn(sid, message, body)
     return _follow(request, run, 0)
+
+
+async def start_model_command_turn(sid: str, message: str):
+    """把 /model 指令当成一轮"本地回复": 走同一个 REGISTRY (同会话串行 / 断线重连照旧),
+    用户消息和回复只记在 web 会话里, 不进 server 侧的模型上下文。"""
+    if REGISTRY.running(sid):
+        raise HTTPException(409, "该会话正在执行中")
+    from lib import session_model as _sm
+    from routers.model_router import _active_model_id
+    w = _wui()
+    reply = _sm.handle_command(sid, message, active_id=await _active_model_id()) or ""
+    session = w.load_session(sid)
+    ts = time.time()
+    session["messages"].append({"role": "user", "content": message.strip(), "ts": ts})
+    session["last_used"] = ts
+    w.save_session(session)
+
+    def producer():
+        async def gen():
+            mid = uuid.uuid4().hex[:12]
+            yield f"data: {json.dumps({'choices': [{'delta': {'msg_id': mid}}]})}\n\n"
+            yield f"data: {json.dumps({'choices': [{'delta': {'content': reply}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'choices': [{'delta': {'session_model': {'changed': True}}, 'finish_reason': 'stop'}]})}\n\n"
+            yield "data: [DONE]\n\n"
+            collected = {"text": reply, "reasoning": "", "tools": [], "diffs": [], "usage": None, "desktop_steps": []}
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, w._save_assistant_msg, sid, collected)
+            except Exception:
+                pass
+        return gen()
+    run = REGISTRY.start(sid, producer)
+    run.user_ts = ts
+    return run
 
 
 def start_chat_turn(sid: str, message: str, body=None):

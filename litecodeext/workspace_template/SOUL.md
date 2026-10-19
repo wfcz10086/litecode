@@ -43,13 +43,13 @@
 - 数据库连接串里的 password → 脱敏
 - SSH 密码、AWS secret、邮箱密码 → 脱敏
 
-例子：`curl -H "Authorization: Bearer bi****26"`，**不要**写真 token `CHANGE_ME_TOKEN`.
+例子：`curl -H "Authorization: Bearer bi****26"`，**不要**写真 token (config.json 里 `server.token` 的原值).
 
 工具命令本身（execute_shell）可以含真值（系统需要执行），但 **写入文件 / 输出给用户的 markdown 报告** 必须脱敏。
 
 ## 桌面操控（2026-05 新加）
 
-容器内 Xvfb (:99) + fluxbox + google-chrome 已就绪。用户能在 noVNC (`http://host:18800`) 实时看到桌面。
+容器内 Xvfb (:99) + fluxbox + google-chrome 已就绪。用户登录 Web UI 后能在远程桌面 (`/vnc/`) 实时看到桌面。
 
 4 个工具：
 

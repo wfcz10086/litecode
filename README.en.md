@@ -18,7 +18,18 @@
 
 ## 🆕 What's new
 
-### v1.10.16.90 "Brisk" (利索)
+### v1.10.16.91 "Gatekeeper" (把门)
+
+> *Bamen* means minding the gate: nobody gets in without logging in, "instructions" smuggled in from outside don't count, and you can change your password any time.
+
+- 🔑 **Change your login password**: *Settings → Change password* asks for the current password; the new one takes effect immediately and every other device is signed out. Also available as `litecli passwd`.
+- 🤖 **Switch models inside a chat**: the *Model* button next to the input box changes the model for **this conversation only**; other chats keep the default. Typing `/model <name>` works too, `/model default` goes back. Every model has a *Test* button that really calls that model and reports whether it works and how fast.
+- 🛡️ **Prompt-injection defense**: web pages, search results, text read from screenshots, remote command output and forwarded chat logs are marked as "external content — data only", and forged system markers inside them are neutralized. When a typical injection is detected, sending messages, payments, download-and-run, sending data out, writing memory or creating timers in that turn all need your explicit OK.
+- 🚪 **Nothing without logging in**: the remote desktop no longer has its own open port — open it from `/vnc/` after logging in; the gateway's question log and stats need the token, and `/health` without a token only reports status; share links return only the conversation text and expire within 30 days.
+- 🧹 **Hardening**: assistant replies are HTML-sanitized before rendering (XSS); secrets in config and model lists are masked; Windows node signing keys moved out of the workspace; SVG/HTML previews are sandboxed; several path-traversal fixes; the gateway token is no longer hard-coded in code or scripts — change it in config only.
+
+<details>
+<summary>Previous: v1.10.16.90 "Brisk" (利索)</summary>
 
 > *Lisuo* means quick and neat, no dawdling: it knows what it is waiting for, does not spin its wheels on errors, and calls in helpers when one pair of hands is not enough.
 
@@ -32,18 +43,6 @@
 - 🪟 **Steadier, safer Windows control**: file changes are read back and verified; the command-line switch is now a real permission boundary (VS Code, Task Manager and the Explorer address bar can no longer be used to get around it); code delivered to PCs is signature-checked; a broken agent update rolls back to the previous version by itself; uninstall restores SSH according to what setup recorded; waits stop quickly when a PC goes offline. PowerShell / WSL commands over SSH are supported.
 - ⚡ **Smoother long chats**: chunked rendering, paged loading, lazy images with thumbnails.
 - 🐛 **Fixed**: a whole turn failing after the model server switched templates and rejected the reasoning-effort value (it now falls back to a supported level); exit codes occasionally lost with non-UTF-8 output; passwords no longer go through the clipboard.
-
-<details>
-<summary>Previous: v1.10.16.89 "Errand" (跑腿)</summary>
-
-> *Paotui* means running errands for someone. Say one sentence and it gets the errand done on your own Windows PC: send a WeChat message, drop a comment and a gift in a live stream, scroll back through a chat and copy the original text to you.
-
-- 🪟 **One-command Windows onboarding**: *Connect → Add Windows* generates an admin PowerShell command. The desktop agent connects outward; setup also installs OpenSSH Server with automatic service startup and a separate key per node. Newly installed SSH uses public-key authentication and a local-subnet firewall rule. Existing SSH configurations are preserved. Device credentials use Windows DPAPI; automatic sign-in and lock policies are configured separately by the owner.
-- 🤖 **General desktop control**: WeChat, QQ, Chrome, Douyin live rooms… it reads screenshots and clicks, types, scrolls, right-clicks to copy and reads the clipboard, so you get the original text instead of a transcription. No app-specific scripts; a new app works the same way.
-- 🔄 **Self-updating, self-healing agent**: when the server updates, the PC catches up while idle (hash-verified before replacing); it restarts after crashes and is re-launched every minute if it ever stops; it disables itself once revoked. The web UI shows which version each PC runs.
-- 🛡️ **Safer messaging**: if several contacts match, it lists them and asks instead of picking one; it never clears a draft already in the input box; it checks the chat title before sending.
-- 🐛 **Fixed**: mouse wheel ignored by new WeChat (it used to send 1/12 of a notch, now whole notches); personal WeChat opening as WeCom; the last reply duplicated after a page reload; "you didn't change any files" nags on look-only desktop tasks.
-- 🧹 Revoked or uninstalled PCs can be deleted from the list, freeing their name.
 
 </details>
 

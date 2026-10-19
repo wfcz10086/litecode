@@ -171,7 +171,7 @@ async function _scanAndPreview(container, rawText){
             const ext = (d.ext||'').toLowerCase();
             if (ext === '.md'){
               const div = document.createElement('div');div.className='mb';
-              try{div.innerHTML = marked.parse(d.content||'');}catch(_){div.textContent = d.content||'';}
+              try{div.innerHTML = window.lcSafeMd(d.content||'');}catch(_){div.textContent = d.content||'';}
               body.appendChild(div);
             } else {
               const pre = document.createElement('pre');pre.style.cssText='margin:0;font-family:var(--mono);font-size:12px;white-space:pre-wrap';

@@ -1,7 +1,7 @@
 """Windows 节点代码下发签名: 控制端用私钥签名清单 (各文件 sha256 + 版本), 节点用安装时固定的公钥验签。
 
 方案: RSA-3072 / PKCS#1 v1.5 / SHA-256。
-- 控制端签名用 cryptography (容器已安装); 私钥只在 .secrets/windows_nodes/signing_key.pem (0600), 从不下发。
+- 控制端签名用 cryptography (容器已安装); 私钥只在工作区外的 ~/.litecode/keys/<摘要>/windows_nodes/signing_key.pem (0600, 见 lib/key_store), 从不下发。
 - 节点端 venv 没有任何密码学库, 标准库只有哈希/HMAC: RSA 验签只需一次 pow + 与期望编码整体比较,
   纯标准库十几行即可 (windows_node_agent.rsa_verify); Ed25519 要在节点端手写曲线运算, 代码多且难审。
 - 安装脚本运行在 PowerShell 5.1 (.NET Framework), 原生 RSACryptoServiceProvider 能验 RSA, 不支持 Ed25519。
@@ -59,7 +59,8 @@ def _private_key(workspace):
     """读取签名私钥, 不存在则生成 (持锁, 0600, 先写临时文件再原子改名)。"""
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
-    folder = Path(workspace) / '.secrets/windows_nodes'
+    from lib.key_store import windows_key_dir   # [sec 2026-10-19] 私钥在工作区之外 (含一次性迁移)
+    folder = windows_key_dir(workspace)
     path = folder / 'signing_key.pem'
     with _locked(folder):
         if not path.exists():

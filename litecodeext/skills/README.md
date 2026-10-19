@@ -356,7 +356,7 @@ openclaw status
 ```
 
 基于你的配置，Gateway已绑定到 LAN（`bind: "lan"`），访问地址：  
-`http://<你的IP>:18789`，Token认证：`CHANGE_ME_TOKEN`
+`http://<你的IP>:18789`，Token认证：`<server.token>`
 
 ### 推荐最优先安装的技能（针对你的环境）
 

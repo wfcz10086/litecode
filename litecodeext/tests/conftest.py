@@ -9,3 +9,9 @@ collect_ignore = [
     "test_e2e_playwright.py",     # 完整 E2E 脚本 (argparse), 依赖在线 Web UI
     "test_v123_fixes.py",         # 命令行传入服务器地址/令牌, 测在线网关
 ]
+
+# [sec 2026-10-19] Windows 控制端密钥已挪出工作区 (lib/key_store): 测试统一落到临时目录,
+# 不污染宿主 ~/.litecode/keys; 每个临时工作区按路径摘要各有一套, 互不串用。
+import os as _os
+import tempfile as _tempfile
+_os.environ.setdefault("LITECODE_KEY_DIR", _tempfile.mkdtemp(prefix="lc_test_keys_"))

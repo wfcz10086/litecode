@@ -70,11 +70,13 @@ async function loadSet(){const el=document.getElementById('set-bd');try{
   // [v1.1] 配置编辑器 - 允许在 UI 编辑 config.json 的非敏感字段
   html+=`<div style="margin:14px 0 6px;font-size:11px;color:var(--tx3);font-family:var(--mono)">CONFIGURATION</div>
   <div id="cfg-bd" style="padding:8px 10px;background:var(--sf);border:1px solid var(--bd);border-radius:var(--rs);font-size:11px;color:var(--tx3)">Loading config…</div>`;
+  html+=`<div id="pwd-card-host"></div>`;  // 修改密码卡片 (password_settings.js)
   html+=`<div style="margin-top:14px"><button class="abtn" onclick="doLogout()">Sign Out</button></div>`;
   el.innerHTML=html;
   // store models ref for test
   window._mdlList=models;
   // 延迟加载配置, 不阻塞主 UI
   loadCfg();
+  if(window.renderPasswordCard)renderPasswordCard();
 }catch(ex){el.innerHTML=`<div style="color:var(--dg)">Error: ${ex}</div>`;}}
 

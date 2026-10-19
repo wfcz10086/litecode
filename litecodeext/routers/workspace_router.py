@@ -56,10 +56,53 @@ def _ws() -> Path:
     return S.workspace
 
 
+# [sec 2026-10-19] 可执行活动内容 (SVG/HTML/XML 能跑脚本) 直接打开时放进 CSP sandbox 里,
+# 不和主站同源 → 即使文件被模型/外部写入恶意脚本也偷不到 cookie / 调不了 API
+_ACTIVE_EXTS = {".svg", ".svgz", ".html", ".htm", ".xhtml", ".xml", ".xht", ".shtml", ".mht", ".mhtml"}
+_SANDBOX_CSP = "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'; media-src data: blob:"
+
+
+def _safe_headers(fp: Path, headers=None) -> dict:
+    h = dict(headers or {})
+    h["X-Content-Type-Options"] = "nosniff"
+    if fp.suffix.lower() in _ACTIVE_EXTS:
+        h["Content-Security-Policy"] = _SANDBOX_CSP
+    return h
+
+
+def _is_secret_path(p: Path) -> bool:
+    """[sec 2026-10-19] 工作区里的 .secrets/ (历史密钥目录) 一律不经 Web 暴露。"""
+    return any(part == ".secrets" for part in p.parts)
+
+
+def _within(child: Path, base: Path) -> bool:
+    """[sec 2026-10-19] 用 relative_to 判包含, 替代 str.startswith (/tmp/ws2 会误命中 /tmp/ws)。"""
+    try:
+        child.relative_to(base)
+        return True
+    except ValueError:
+        return False
+
+
+def _in_safe_dirs(resolved: Path) -> bool:
+    if _is_secret_path(resolved):
+        return False
+    return any(_within(resolved, d.resolve()) for d in _WX_SAFE_DIRS if d.exists())
+
+
+def _ws_path(path: str) -> Path:
+    """workspace 相对路径 → resolve 后必须仍在 workspace 内, 否则 403。"""
+    root = _ws().resolve()
+    fp = (root / path).resolve() if path else root
+    if not _within(fp, root) or _is_secret_path(fp.relative_to(root)):
+        raise HTTPException(403, "forbidden")
+    return fp
+
+
 @router.get("/api/workspace/files")
 async def api_workspace_files(request: Request, path: str = ""):
     require_auth(request)
-    base = _ws() / path if path else _ws()
+    base = _ws_path(path)
     if not base.exists():
         return {"files": [], "path": str(base)}
     items = []
@@ -69,7 +112,7 @@ async def api_workspace_files(request: Request, path: str = ""):
                 continue
             items.append({
                 "name": f.name,
-                "path": str(f.relative_to(_ws())),
+                "path": str(f.relative_to(_ws().resolve())),
                 "is_dir": f.is_dir(),
                 "size": f.stat().st_size if f.is_file() else 0,
                 "mtime": f.stat().st_mtime,
@@ -82,14 +125,10 @@ async def api_workspace_files(request: Request, path: str = ""):
 @router.get("/api/workspace/download")
 async def api_workspace_download(request: Request, path: str = ""):
     require_auth(request)
-    fp = _ws() / path
+    fp = _ws_path(path)
     if not fp.exists() or not fp.is_file():
         raise HTTPException(404, "file not found")
-    try:
-        fp.resolve().relative_to(_ws().resolve())
-    except ValueError:
-        raise HTTPException(403, "forbidden")
-    return FileResponse(fp, headers={"Content-Disposition": _cd("attachment", fp.name)})
+    return FileResponse(fp, headers=_safe_headers(fp, {"Content-Disposition": _cd("attachment", fp.name)}))
 
 
 @router.get("/api/media")
@@ -102,10 +141,7 @@ async def api_media(request: Request, path: str = ""):
     if not fp.exists() or not fp.is_file():
         raise HTTPException(404, f"file not found: {path}")
     resolved = fp.resolve()
-    allowed = any(
-        str(resolved).startswith(str(d.resolve()))
-        for d in _WX_SAFE_DIRS if d.exists()
-    )
+    allowed = _in_safe_dirs(resolved)
     if not allowed:
         raise HTTPException(403, "forbidden: path outside allowed dirs")
     ext = fp.suffix.lower()
@@ -115,8 +151,8 @@ async def api_media(request: Request, path: str = ""):
     disposition = "inline" if ext in inline_types else _cd("attachment", fp.name)
     return FileResponse(
         fp, media_type=mt,
-        headers={"Content-Disposition": disposition,
-                 "Cache-Control": "private, max-age=3600"},
+        headers=_safe_headers(fp, {"Content-Disposition": disposition,
+                                   "Cache-Control": "private, max-age=3600"}),
     )
 
 
@@ -130,10 +166,7 @@ async def api_preview_abs(request: Request, path: str = ""):
     if not fp.exists() or not fp.is_file():
         raise HTTPException(404, f"file not found: {path}")
     resolved = fp.resolve()
-    allowed = any(
-        str(resolved).startswith(str(d.resolve()))
-        for d in _WX_SAFE_DIRS if d.exists()
-    )
+    allowed = _in_safe_dirs(resolved)
     if not allowed:
         raise HTTPException(403, "forbidden: path outside whitelist")
     ext = fp.suffix.lower()
@@ -163,13 +196,9 @@ async def api_preview_abs(request: Request, path: str = ""):
 async def api_workspace_preview(request: Request, path: str = ""):
     """workspace 内文件在线预览 (相对路径)."""
     require_auth(request)
-    fp = _ws() / path
+    fp = _ws_path(path)
     if not fp.exists() or not fp.is_file():
         raise HTTPException(404, "file not found")
-    try:
-        fp.resolve().relative_to(_ws().resolve())
-    except ValueError:
-        raise HTTPException(403, "forbidden")
     ext = fp.suffix.lower()
     if ext in _PREVIEW_IMG_EXTS:
         media_map = {
@@ -178,7 +207,7 @@ async def api_workspace_preview(request: Request, path: str = ""):
             ".bmp": "image/bmp", ".ico": "image/x-icon",
         }
         return FileResponse(fp, media_type=media_map.get(ext, "application/octet-stream"),
-                            headers={"Content-Disposition": _cd("inline", fp.name)})
+                            headers=_safe_headers(fp, {"Content-Disposition": _cd("inline", fp.name)}))
     if ext in _PREVIEW_PDF_EXTS:
         return FileResponse(fp, media_type="application/pdf",
                             headers={"Content-Disposition": _cd("inline", fp.name)})
@@ -215,10 +244,7 @@ async def api_preview_office_abs(request: Request, path: str = ""):
     if not fp.exists() or not fp.is_file():
         raise HTTPException(404, f"file not found: {path}")
     resolved = fp.resolve()
-    allowed = any(
-        str(resolved).startswith(str(d.resolve()))
-        for d in _WX_SAFE_DIRS if d.exists()
-    )
+    allowed = _in_safe_dirs(resolved)
     if not allowed:
         raise HTTPException(403, "forbidden: path outside allowed dirs")
     ext = fp.suffix.lower()

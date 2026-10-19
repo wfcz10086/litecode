@@ -89,12 +89,10 @@ do_up() {
 
     source "$ENV_FILE" 2>/dev/null || true
     local port="${SERVER_PORT:-18789}"
-    local token="${SERVER_TOKEN:-CHANGE_ME_TOKEN}"
-
+    # [sec 2026-10-19] /health 公开探针, 不带 token (token 只在 config.json 的 server.token)
     info "等待 Server 就绪..."
     for i in $(seq 1 30); do
-        curl -sf -H "Authorization: Bearer $token" \
-            "http://localhost:$port/health" &>/dev/null && break
+        curl -sf "http://localhost:$port/health" &>/dev/null && break
         printf "."; sleep 3
     done
     echo ""
@@ -105,7 +103,7 @@ do_up() {
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
     echo -e "  Web UI  : ${CYAN}http://localhost:${WEB_PORT:-18790}${NC}"
     echo -e "  API     : ${CYAN}http://localhost:${SERVER_PORT:-18789}${NC}"
-    echo -e "  noVNC   : ${CYAN}http://localhost:18800${NC}"
+    echo -e "  远程桌面: ${CYAN}http://localhost:${WEB_PORT:-18790}/vnc/${NC} (登录 Web UI 后)"
     echo -e "  密码    : ${YELLOW}CHANGE_ME_PASSWORD${NC}"
     echo -e "  模型    : ${YELLOW}${MODEL_ID:-glm-5}${NC}"
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
@@ -123,8 +121,7 @@ case "${1:-}" in
     --status)
         check_deps; setup_env; cd "$SCRIPT_DIR"; COMPOSE ps; echo ""
         source "$ENV_FILE" 2>/dev/null || true
-        curl -sf -H "Authorization: Bearer ${SERVER_TOKEN:-CHANGE_ME_TOKEN}" \
-            "http://localhost:${SERVER_PORT:-18789}/health" &>/dev/null \
+        curl -sf "http://localhost:${SERVER_PORT:-18789}/health" &>/dev/null \
             && ok "Server: 在线" || warn "Server: 离线"
         curl -sf "http://localhost:${WEB_PORT:-18790}/" &>/dev/null \
             && ok "Web UI: 在线" || warn "Web UI: 离线"

@@ -3,7 +3,7 @@ FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/ubuntu:24.04
 
 LABEL maintainer="LiteCode v12-r1 + WeChat Bridge"
 LABEL description="LiteCode OpenClaw AI Agent - Ubuntu 24.04 (国内源加速版)"
-LABEL version="v1.10.16.90-brisk"
+LABEL version="v1.10.16.91-gatekeeper"
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Asia/Shanghai
@@ -217,8 +217,7 @@ RUN chmod +x /entrypoint.sh
 EXPOSE 18789 18790 18800
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -sf -H "Authorization: Bearer $(python3 -c 'import json;print(json.load(open("/opt/litecode/config.json"))["server"]["token"])' 2>/dev/null || echo CHANGE_ME_TOKEN)" \
-        http://localhost:18789/health || exit 1
+    CMD curl -sf http://localhost:18789/health || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
 CMD ["all"]

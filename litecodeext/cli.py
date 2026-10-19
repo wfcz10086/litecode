@@ -29,7 +29,7 @@ def _load_cfg() -> dict:
 _cfg   = _load_cfg()
 _srv   = _cfg.get("server", {})
 _port  = _srv.get("port", 18789)
-_token = _srv.get("token", "CHANGE_ME_TOKEN")
+_token = _srv.get("token", "")  # [sec 2026-10-19] 只认 config.json / OPENCLAW_TOKEN
 _paths = _cfg.get("paths", {})
 _agt   = _cfg.get("agent", {})
 

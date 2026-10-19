@@ -83,9 +83,23 @@ async def chat_completions(request: Request):
     if not user_message and isinstance(user_content_raw, list):
         user_message = "(图片输入)"
 
+    # [per-chat-model 2026-10-19] 会话指定了模型 → 本轮整轮用它 (ContextVar 覆盖 _LIVE),
+    # 不改全局, 并发的其它会话不受影响。见 lib/session_model.py + lib/config._LiveDict。
+    from lib import session_model as _sm
+    try:
+        _sm_entry, _sm_note, _ = _sm.resolve(session_id) if session_id else ({}, "", "")
+    except Exception:
+        _sm_entry, _sm_note = {}, ""
+    if _sm_entry:
+        model = _sm_entry["id"]
+    elif _sm_note:
+        model = srv.MODEL_ID
+
     gen = srv.agent_stream(user_message, session_id, model,
                            user_content=user_content_raw, strategist=strategist,
                            disabled_tools=_tf.parse(body.get("disabled_tools")))
+    if _sm_entry or _sm_note:
+        gen = with_turn_model(gen, _sm_entry, _sm_note, model)
 
     if stream:
         return StreamingResponse(
@@ -112,6 +126,31 @@ async def chat_completions(request: Request):
                          "message": {"role": "assistant", "content": full},
                          "finish_reason": "stop"}]
         })
+
+
+async def with_turn_model(gen, entry: dict, note: str, model: str):
+    """包住 agent_stream: 迭代期间把会话模型挂到当前 context (生成器体在消费方 task 里跑,
+    所以 agent_stream 内读到的 _LIVE 都是本会话模型), 结束复位。
+    第一帧 (msg_id) 之后补一帧 session_model 状态, 回落默认时再加一行可见提示。"""
+    from lib.config import reset_turn_model, set_turn_model
+    from lib.sse import sse_content, sse_status
+    tok = set_turn_model(entry or None)
+    try:
+        first = True
+        async for chunk in gen:
+            yield chunk
+            if first:
+                first = False
+                yield sse_status("session_model", {"id": model, "per_session": bool(entry),
+                                                   "fallback": bool(note), "note": note}, model)
+                if note:
+                    yield sse_content(f"> ⚠ {note} (`{model}`)\n\n", model)
+    finally:
+        try:
+            await gen.aclose()
+        except Exception:
+            pass
+        reset_turn_model(tok)
 
 
 @router.get("/v1/models")

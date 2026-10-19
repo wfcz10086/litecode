@@ -46,5 +46,18 @@ def whoami():
     _emit(d)
 
 
+@click.command()
+@click.option("--old", "old_password", prompt="当前密码", hide_input=True, help="当前登录密码")
+@click.option("--new", "new_password", prompt="新密码", hide_input=True,
+              confirmation_prompt="再输一次新密码", help="新密码 (至少 8 位)")
+def passwd(old_password: str, new_password: str):
+    """修改 Web 登录密码 (需先 login); 成功后其它设备/会话全部失效, 本 CLI 会话保留."""
+    d = _r_json("POST", "/api/auth/password",
+                json_body={"old_password": old_password, "new_password": new_password})
+    if not d.get("ok"):
+        _err(f"修改失败: {d}")
+    _ok(f"密码已修改, 已注销其它 {d.get('revoked', 0)} 个会话")
+
+
 # 由 lib.cli.discover() 自动注册到 litecli 根命令
-COMMANDS = [login, logout, whoami]
+COMMANDS = [login, logout, whoami, passwd]

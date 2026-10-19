@@ -9,6 +9,7 @@ from lib.agent.spawn_dispatch import _dispatch_spawn_agent
 from lib.agent.tool_guards import _guard_tool_call
 from lib.agent.tool_guards import _tool_update_map
 from lib.agent.tool_names import _WRITE_TOOL_NAMES, _is_action_tool
+from lib.agent import untrusted as _untrusted
 from lib.config import MAX_ERROR_STREAK
 from lib.config import WORKSPACE
 from lib.config import log
@@ -87,6 +88,21 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                 _ctx.tracer.tool_call(name=fn_name, args=fn_args,
                                   result=_reject_result, elapsed=0, is_error=True)
                 continue
+
+            # ── [INJECTION-GATE] 外部内容命中注入后, 高影响工具须主人本回合原话授权 (lib/agent/untrusted.py) ──
+            _ug = _untrusted.get_turn_guard(_ctx)
+            try:
+                _ig_block = _ug.check(fn_name, fn_args)
+            except Exception as _ige:
+                _ig_block = None
+                log.warning(f"  [INJECTION-GATE] check failed for {fn_name}: {_ige}")
+            if _ig_block is not None:
+                tool_results.append({"role": "tool", "tool_call_id": tc.get("id", ""), "content": _ig_block})
+                _ctx.tracer.tool_call(name=fn_name, args=fn_args, result=_ig_block, elapsed=0, is_error=True)
+                log.warning(f"  [INJECTION-GATE:{_ctx.sid_tag}] blocked {fn_name}")
+                continue
+            # 记忆/画像写入的文字取自外部内容 → 打来源标记 (防记忆投毒)
+            fn_args = _ug.prepare_memory_write(fn_name, fn_args)
 
             _tool_t0 = time.time()   # 单次工具耗时起点 (trace 里的 elapsed 原来是"本轮开始到现在", 统计全失真)
             detail_str = f"{fn_name}: {_fmt_args(fn_name, fn_args)}"
@@ -191,6 +207,12 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                     _ev, _op = _dag_tools[fn_name]
                     _name_or_id = fn_args.get("name") or fn_args.get("id") or ""
                     yield sse_meta(_ev, _op, _name_or_id)
+
+            # ── [UNTRUSTED] 外部内容类工具结果: 中和伪造标记 + 注入检测 + 信封 (在追加任何 [SYSTEM…] 提示之前) ──
+            try:
+                result = _untrusted.wrap_tool_result(fn_name, fn_args, result, _ug, is_err=is_err)
+            except Exception as _ue:
+                log.warning(f"  [UNTRUSTED] wrap failed for {fn_name}: {_ue}")
 
             # ── 错误后诊断并继续可独立执行的步骤 ──
             if is_err:

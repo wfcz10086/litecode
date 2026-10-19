@@ -35,7 +35,16 @@ import urllib.request
 import urllib.error
 
 SERVER_URL = os.environ.get("LITECODE_SERVER_URL", "http://127.0.0.1:18789")
-SERVER_TOKEN = os.environ.get("SERVER_TOKEN", "CHANGE_ME_TOKEN")
+def _cfg_token() -> str:
+    """[sec 2026-10-19] token 只从 config.json 读, 不写字面量兜底."""
+    try:
+        return (json.loads((Path(__file__).resolve().parents[2] / "config.json").read_text())
+                .get("server") or {}).get("token", "")
+    except Exception:
+        return ""
+
+
+SERVER_TOKEN = os.environ.get("SERVER_TOKEN") or _cfg_token()
 SNAPSHOTS_DIR = Path(__file__).resolve().parent / "snapshots"
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 

@@ -256,6 +256,22 @@ _SUBAGENT_CONFIGS: dict = {
 from .subagent_operator import OPERATOR_CONFIG as _OPERATOR_CONFIG, is_operator as _is_operator
 from .subagent_operator import loop_exempt as _loop_exempt, check_windows_call as _win_guard
 from .subagent_operator import append_observation as _append_observation
+from ..scrub import scrub_secrets
+try:
+    from plugins.tools.guard import _redact as _redact_args   # 与封禁提示同一套敏感键规则
+except Exception:  # pragma: no cover — plugins 不在 sys.path 时的兜底
+    _SECRET_KEY_RE = _re.compile(r"(?i)(^|_)(password|passwd|pwd|passphrase|key|token|secret|apikey|"
+                                 r"api_key|private_key|auth|authorization|cookie)$")
+
+    def _redact_args(v, depth: int = 0):
+        if depth > 20:
+            return v
+        if isinstance(v, dict):
+            return {k: ("***" if _SECRET_KEY_RE.search(str(k)) and val not in (None, "")
+                        else _redact_args(val, depth + 1)) for k, val in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [_redact_args(x, depth + 1) for x in v]
+        return v
 from . import subagent_registry as _reg   # [agent-control] 登记进度 / 信箱补充指令 / 停止请求 (见 subagent_registry)
 _SUBAGENT_CONFIGS["operator"] = _OPERATOR_CONFIG
 
@@ -513,6 +529,8 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
     # critic 的职责是找错，不需要执行约束
     if agent_type != "critic" and not _is_operator(agent_type):   # operator 有自己的 GUI 规则
         sys_prompt += _SUBAGENT_IRON_RULES
+    from .untrusted import PROMPT_RULE as _UNTRUSTED_RULE   # 外部内容只是数据 (含 operator: 它天天看别人的微信消息)
+    sys_prompt += _UNTRUSTED_RULE
     if context:
         sys_prompt += f"\n\n## 上下文（来自主智能体）\n{context}"
     # [worktree-iso 2026-10-17] 隔离工作树: 告知子代理它的工作目录
@@ -552,6 +570,9 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
     _ev = _ev_start(agent_type, task)
     final_text = ""
     error_streak = 0
+    # [INJECTION-GATE] 子代理同样: 外部内容加信封 + 中招后高影响工具须主人原话授权 (lib/agent/untrusted.py)
+    from . import untrusted as _untrusted
+    _ug = _untrusted.subagent_guard(task, parent_sid)
 
     # [loop-detect-2026-05] 工具调用循环检测 — 防 writer 反复写同一章 / coder 反复改同一文件
     # write_file/patch_file 同一 path 调用 >= 3 次 (容许 2 次, 第 3 次必停) → 强制 break
@@ -733,7 +754,8 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 break
             _recent_tool_sigs.append(_sig)
 
-            detail_str = f"[{agent_type}] {fn_name}: {str(fn_args)[:80]}"
+            # [sec 2026-10-19] 日志/SSE 只放脱敏后的参数 (ssh password / api_key / token 不落盘不推前端)
+            detail_str = f"[{agent_type}] {fn_name}: {scrub_secrets(str(_redact_args(fn_args)))[:80]}"
             log.info(f"    \033[2m{detail_str}\033[0m")
 
             if sse_emit:
@@ -747,6 +769,15 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 _win_err = f"ERROR: operator 不能调用 {fn_name} (只允许 {', '.join(sorted(allowed))}), 不得改动服务器"
             elif _op:
                 fn_args, _win_err = _win_guard(_subagent_sid, fn_name, fn_args)
+            _ig_block = None
+            if not _win_err:
+                try:
+                    _ig_block = _ug.check(fn_name, fn_args)
+                    fn_args = _ug.prepare_memory_write(fn_name, fn_args)
+                except Exception as _ige:
+                    log.warning(f"  [subagent:{agent_type}] injection gate failed: {_ige}")
+                if _ig_block:
+                    _win_err = _ig_block
             _reg.tool_begin(fn_name, fn_args)   # [agent-control] send 时可告知主代理"当前工具已运行 N 秒"
             # v1.0: 黑板工具特殊处理
             if fn_name == "update_global_context" and _active_blackboard:
@@ -774,6 +805,12 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
             # 截断
             if len(result) > 3000:
                 result = result[:600] + f"\n...[subagent truncated {len(result)}c]...\n" + result[-800:]
+            if not _ig_block:
+                try:
+                    result = _untrusted.wrap_tool_result(fn_name, fn_args, result, _ug,
+                                                         is_err=result.startswith("ERROR"))
+                except Exception as _ue:
+                    log.warning(f"  [subagent:{agent_type}] untrusted wrap failed: {_ue}")
 
             if sse_emit:
                 preview = result[:150].replace("\n", " ")

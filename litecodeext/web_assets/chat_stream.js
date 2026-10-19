@@ -160,7 +160,7 @@ async function _streamTurn(bodyEl,open){
           /* content 开始流 = 推理结束：把折叠块收起来，去掉脉冲动画 */
           const lrs=bodyEl.querySelector('.rsb.live');
           if(lrs){lrs.classList.remove('live','open');lrs.querySelector('.rsc')?.classList.remove('tk');}
-          if(fc){bodyEl.querySelector('.dots')?.remove();_dropPrep(bodyEl);fc=false;sr_=document.createElement('div');sr_.className='sraw';bodyEl.appendChild(sr_);}ft+=ct;if(!_renderTimer){_renderTimer=setTimeout(()=>{try{if(sr_){sr_.innerHTML=marked.parse(ft);sr_.querySelectorAll('pre code').forEach(c=>{if(!c.classList.contains('hljs'))try{hljs.highlightElement(c)}catch(e){}});}}catch(e){}sbot();_renderTimer=null;},200);}
+          if(fc){bodyEl.querySelector('.dots')?.remove();_dropPrep(bodyEl);fc=false;sr_=document.createElement('div');sr_.className='sraw';bodyEl.appendChild(sr_);}ft+=ct;if(!_renderTimer){_renderTimer=setTimeout(()=>{try{if(sr_){sr_.innerHTML=window.lcSafeMd(ft);sr_.querySelectorAll('pre code').forEach(c=>{if(!c.classList.contains('hljs'))try{hljs.highlightElement(c)}catch(e){}});}}catch(e){}sbot();_renderTimer=null;},200);}
         }
         if(delta.usage)_lu=delta.usage;
         if(delta.panel_refresh){const pr=delta.panel_refresh,ev=pr.event||'',op=pr.op||'',nm=pr.name||'';if(ev==='dag_changed'){if(typeof loadDAGList==='function')loadDAGList();const opLbl={create:'已创建',update:'已更新',delete:'已删除',run:'已启动'}[op]||op;toast(`DAG ${nm} ${opLbl}`);}else if(ev==='timer_changed'){if(typeof loadTimers==='function')loadTimers();const opLbl={create:'已创建',update:'已更新',delete:'已删除',run:'已触发'}[op]||op;toast(`定时器 ${nm} ${opLbl}`);}}
@@ -184,7 +184,7 @@ async function _streamTurn(bodyEl,open){
   /* [P46 修] 保留错误块, 流末重建时不抹掉 ❌ + 重试按钮 */
   const errEls=bodyEl.querySelectorAll('.msg-error');
   let errHtml='';errEls.forEach(e=>errHtml+=e.outerHTML);
-  let fh=rsbHtml+(tgEl?tgEl.outerHTML:'')+sdesktop.join('');sdiffs.forEach(d=>fh+=d);if(ft)fh+=marked.parse(ft);
+  let fh=rsbHtml+(tgEl?tgEl.outerHTML:'')+sdesktop.join('');sdiffs.forEach(d=>fh+=d);if(ft)fh+=window.lcSafeMd(ft);
   fh+=errHtml;
   if(fh){bodyEl.innerHTML=fh;bodyEl.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{if(!c.classList.contains('hljs'))hljs.highlightElement(c);const lm=c.className.match(/language-(\w+)/);if(lm&&lm[1]){const lg=document.createElement('span');lg.className='clang';lg.textContent=lm[1];pre.appendChild(lg);}});});}
   else if(!bodyEl.querySelector('.tg')&&!sdiffs.length&&!bodyEl.querySelector('.msg-error')){bodyEl.innerHTML='<span style="color:var(--tx3)">(无响应)</span>';}

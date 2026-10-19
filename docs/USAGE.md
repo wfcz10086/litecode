@@ -21,7 +21,7 @@ LiteCode 是一个**自托管 AI Agent 平台**：内置 SSE 流式对话、工�
 git clone <repo> && cd litecode
 docker compose up -d --build
 # 等 30s, 容器内 vllm/qwen 模型加载完
-curl -H "Authorization: Bearer CHANGE_ME_TOKEN" http://127.0.0.1:18789/health
+curl -H "Authorization: Bearer <server.token>" http://127.0.0.1:18789/health
 ```
 
 返回 `{"status":"ok","model":"Qwen3.5-35B",...}` 即就绪。
@@ -36,7 +36,7 @@ curl -H "Authorization: Bearer CHANGE_ME_TOKEN" http://127.0.0.1:18789/health
 
 ### 1.3 默认 Token
 
-环境变量 `OPENCLAW_TOKEN` 或 `litecodeext/config.json` 的 `server.token`，默认 `CHANGE_ME_TOKEN`。
+环境变量 `OPENCLAW_TOKEN` 或 `litecodeext/config.json` 的 `server.token`，无默认值 (未配置时网关一律 401)。
 
 ---
 
@@ -77,7 +77,7 @@ CLI 关键参数：
 
 ```bash
 curl -X POST http://127.0.0.1:18789/v1/chat/completions \
-  -H "Authorization: Bearer CHANGE_ME_TOKEN" \
+  -H "Authorization: Bearer <server.token>" \
   -H "Content-Type: application/json" \
   -d '{"model":"Qwen3.5-35B","messages":[{"role":"user","content":"你好"}],
        "stream":true,"user":"my_session_001"}'
@@ -105,7 +105,7 @@ curl -X POST http://127.0.0.1:18789/v1/chat/completions \
 
 ```bash
 curl -X POST http://127.0.0.1:18789/api/timers \
-  -H "Authorization: Bearer CHANGE_ME_TOKEN" \
+  -H "Authorization: Bearer <server.token>" \
   -H "Content-Type: application/json" \
   -d '{"name":"btc-daily","type":"cron","schedule":"0 9 * * *",
        "action":"prompt","prompt":"抓取 BTC 实时价并发邮件给 admin"}'
@@ -181,7 +181,7 @@ DAG 执行时节点会着色：黄=running / 绿=done / 红=failed。
 from langchain_openai import ChatOpenAI
 llm = ChatOpenAI(model='Qwen3.5-35B',
                  openai_api_base='http://127.0.0.1:18789/v1',
-                 openai_api_key='CHANGE_ME_TOKEN',
+                 openai_api_key='<server.token>',
                  streaming=True)
 for chunk in llm.stream('用一句话介绍自己'):
     print(chunk.content, end='', flush=True)
@@ -191,7 +191,7 @@ for chunk in llm.stream('用一句话介绍自己'):
 
 ```python
 import openai
-client = openai.OpenAI(base_url='http://127.0.0.1:18789/v1', api_key='CHANGE_ME_TOKEN')
+client = openai.OpenAI(base_url='http://127.0.0.1:18789/v1', api_key='<server.token>')
 r = client.chat.completions.create(
     model='Qwen3.5-35B',
     messages=[{'role':'user','content':'你好'}],
@@ -297,7 +297,7 @@ docker compose logs litecode | tail -100
 
 ### 8.4 第三方 SDK 连不上
 
-1. `curl -H "Authorization: Bearer CHANGE_ME_TOKEN" http://host:18789/v1/models` 必须返回模型列表
+1. `curl -H "Authorization: Bearer <server.token>" http://host:18789/v1/models` 必须返回模型列表
 2. base_url 末尾**有 /v1**
 3. user 字段填 session_id（不填每次新会话）
 
@@ -322,7 +322,7 @@ python3 litecodeext/tests/test_full.py --offline
 
 # 第三方接口冒烟（OpenAI 兼容路径）
 curl -X POST http://127.0.0.1:18789/v1/chat/completions \
-  -H "Authorization: Bearer CHANGE_ME_TOKEN" -H "Content-Type: application/json" \
+  -H "Authorization: Bearer <server.token>" -H "Content-Type: application/json" \
   -d '{"model":"Qwen3.5-35B","messages":[{"role":"user","content":"hi"}]}'
 
 # 完整 E2E（参考 reports/e2e_full_*/tools/runner.py）

@@ -37,7 +37,7 @@
 Browser Agent 服务（端口 19000）：
 - 启动: `nohup python3 /opt/litecode/skills/browser-automation/browser_server.py > /tmp/bas.log 2>&1 &`
 - 检查: `curl -s http://127.0.0.1:19000/health`
-- VNC 可视: `http://<host>:18800/vnc.html?autoconnect=true`
+- VNC 可视: 用户登录 Web UI 后打开同源入口 `/vnc/` (如 `http://<host>:18790/vnc/`); noVNC 本身只监听 127.0.0.1
 
 ## 备注
 <!-- 任何与本 session 相关的环境信息 -->

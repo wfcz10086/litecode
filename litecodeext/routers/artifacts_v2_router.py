@@ -96,9 +96,17 @@ async def get_blob(aid: str, request: Request,
     data = store.blob(aid)
     if data is None:
         raise HTTPException(status_code=404, detail="blob missing")
-    headers = {}
+    headers = {"X-Content-Type-Options": "nosniff"}
     if download:
         headers["Content-Disposition"] = f'attachment; filename="{m.name}"'
+    # [sec 2026-10-19] HTML/SVG/XML 产出物内联打开时放进 CSP sandbox (opaque origin):
+    # HTML 报告仍可跑自带脚本 (allow-scripts), 但拿不到主站 cookie / 同源 API。
+    _ext = ("." + str(m.name).rsplit(".", 1)[-1].lower()) if "." in str(m.name) else ""
+    _mt = (_mime_for(m.kind, m.name) or "").lower()
+    if _ext in (".html", ".htm", ".xhtml") or "html" in _mt:
+        headers["Content-Security-Policy"] = "sandbox allow-scripts allow-popups allow-downloads"
+    elif _ext in (".svg", ".svgz", ".xml") or "svg" in _mt or "xml" in _mt:
+        headers["Content-Security-Policy"] = "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'"
     return Response(content=data,
                     media_type=_mime_for(m.kind, m.name),
                     headers=headers)

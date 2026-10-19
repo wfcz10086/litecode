@@ -16,6 +16,7 @@ _STORE_DIR = Path.home() / ".litecode"
 _STORE_FILE = _STORE_DIR / "share_tokens.json"
 
 _DEFAULT_TTL_SEC = 7 * 86400  # 7 天
+_MAX_TTL_SEC = 30 * 86400     # [sec 2026-10-19] 上限 30 天, 防永久公开链接
 
 
 def _load() -> dict:
@@ -47,7 +48,7 @@ def create_share(sid: str, created_by: str = "anon",
     rec = {
         "sid": sid,
         "created": now,
-        "expires": now + max(60, int(ttl_sec)),
+        "expires": now + min(_MAX_TTL_SEC, max(60, int(ttl_sec))),
         "read_only": bool(read_only),
         "created_by": created_by,
     }

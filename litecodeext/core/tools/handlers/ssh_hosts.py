@@ -26,8 +26,25 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
+    # [sec 2026-10-19] 凭据文件 0600 / 目录 0700; 先建 0600 临时文件再原子替换, 不存在"先宽后收"窗口
     _STORE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _STORE_PATH.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    try:
+        os.chmod(_STORE_PATH.parent, 0o700)
+    except OSError:
+        pass
+    tmp = _STORE_PATH.with_name(f".{_STORE_PATH.name}.{os.getpid()}.tmp")
+    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(json.dumps(data, indent=2, ensure_ascii=False))
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, _STORE_PATH)
+    except Exception:
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def get_ssh_creds(alias: str) -> dict | None:

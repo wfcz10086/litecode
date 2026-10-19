@@ -26,21 +26,95 @@ _EDITABLE_SECTIONS = {"agent", "memory", "wechat", "search", "iteration_trace", 
                       "model"}
 
 
+try:  # [sec 2026-10-19] 与工具参数脱敏同一套敏感键规则
+    from plugins.tools.guard import _is_secret_key as _guard_is_secret_key
+except Exception:  # pragma: no cover
+    _guard_is_secret_key = None
+
+_MASK = "••••"
+_MASK_EXTRA_SUFFIX = ("_key", "_secret", "_token", "_password", "_passwd", "_authorization")
+# 名字像密钥但其实是普通配置 (存的是环境变量名 / 文件路径), 不打码, 否则前端没法编辑
+_MASK_EXEMPT = {"api_key_env", "key_file", "max_tokens"}
+
+
+def _is_secret_cfg_key(k) -> bool:
+    k = str(k).strip().lower().replace("-", "_")
+    if k in _MASK_EXEMPT:
+        return False
+    if _guard_is_secret_key is not None and _guard_is_secret_key(k):
+        return True
+    return k in {"password", "passwd", "secret", "token", "api_key", "apikey", "key",
+                 "authorization", "private_key"} or k.endswith(_MASK_EXTRA_SUFFIX)
+
+
+def _mask_value(v):
+    """[sec 2026-10-19] 短密钥 (<16 字符) 不露任何尾巴; 长密钥只露后 4 位便于辨认。"""
+    s = str(v)
+    if s in ("", "EMPTY"):
+        return v
+    return _MASK + s[-4:] if len(s) >= 16 else _MASK
+
+
+def _mask_tree(v, depth: int = 0):
+    if depth > 20:
+        return v
+    if isinstance(v, dict):
+        return {k: (_mask_value(x) if _is_secret_cfg_key(k) and isinstance(x, (str, int, float))
+                    and not isinstance(x, bool) and x not in (None, "")
+                    else _mask_tree(x, depth + 1))
+                for k, x in v.items()}
+    if isinstance(v, list):
+        return [_mask_tree(x, depth + 1) for x in v]
+    return v
+
+
 def _mask_sensitive(cfg: dict) -> dict:
-    out = _copy.deepcopy(cfg)
-    srv = out.get("server", {})
-    if srv.get("token"):
-        srv["token"] = "••••" + srv["token"][-4:]
-    mdl = out.get("model", {}) or {}
-    if mdl.get("api_key") and mdl["api_key"] not in ("", "EMPTY"):
-        mdl["api_key"] = "••••" + mdl["api_key"][-4:]
-    for m in out.get("models", []) or []:
-        if m.get("api_key") and m["api_key"] not in ("", "EMPTY"):
-            m["api_key"] = "••••" + m["api_key"][-4:]
-    wa = (out.get("web_ui", {}) or {}).get("auth", {})
-    if wa.get("password"):
-        wa["password"] = "••••••••"
-    return out
+    """递归脱敏: 任意层级里名字像 password/secret/token/api_key/key/authorization 的值
+    (含 llm_watchdog.ssh.password、models[].api_key) 一律换成 ••••[后4位]。"""
+    return _mask_tree(_copy.deepcopy(cfg))
+
+
+def _is_placeholder(v) -> bool:
+    return isinstance(v, str) and v.startswith(_MASK)
+
+
+def _restore_placeholders(new, old):
+    """PATCH 时把任意层级的脱敏占位符换回原值 (原值不存在则丢弃该键), 防止整段回写时把真密钥覆盖成 ••••。"""
+    if isinstance(new, dict):
+        old_d = old if isinstance(old, dict) else {}
+        out = {}
+        for k, v in new.items():
+            if _is_placeholder(v):
+                if k in old_d:
+                    out[k] = old_d[k]
+                continue
+            out[k] = _restore_placeholders(v, old_d.get(k))
+        return out
+    if isinstance(new, list):
+        old_l = old if isinstance(old, list) else []
+        return [_restore_placeholders(x, old_l[i] if i < len(old_l) else None) for i, x in enumerate(new)]
+    return new
+
+
+def _guard_auth_patch(old_auth, new_auth) -> dict:
+    """web_ui.auth 走 PATCH 时不许碰密码 (否则绕过旧密码校验): 改密码只能走 POST /api/auth/password.
+    - 带了与现值不同的明文 password → 400
+    - 没带 / 带脱敏占位符 / 与现值相同 → 保留原密码; auth 其余字段按键合并 (不整块覆盖)
+    """
+    old_auth = old_auth if isinstance(old_auth, dict) else {}
+    if not isinstance(new_auth, dict):
+        raise HTTPException(400, "web_ui.auth must be object")
+    merged = dict(old_auth)
+    for k, v in new_auth.items():
+        if k == "password":
+            if isinstance(v, str) and (v.startswith("••••") or v == old_auth.get("password")):
+                continue
+            raise HTTPException(400, "web_ui.auth.password 不能通过 /api/config 修改, "
+                                     "请用 POST /api/auth/password (需验证当前密码)")
+        merged[k] = v
+    if "password" in old_auth:
+        merged["password"] = old_auth["password"]
+    return merged
 
 
 @router.get("/api/config")
@@ -86,11 +160,14 @@ async def api_config_patch(request: Request):
             continue
         old = cfg.get(section, {}) or {}
         merged = dict(old)
+        if section == "web_ui" and "auth" in new_val:
+            new_val = dict(new_val)
+            new_val["auth"] = _guard_auth_patch(old.get("auth"), new_val["auth"])
         for k, v in new_val.items():
             # 跳过脱敏占位符
             if isinstance(v, str) and v.startswith("••••"):
                 continue
-            merged[k] = v
+            merged[k] = _restore_placeholders(v, old.get(k))  # [sec 2026-10-19] 嵌套占位符也还原
         cfg[section] = merged
         applied[section] = merged
 

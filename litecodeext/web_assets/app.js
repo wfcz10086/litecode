@@ -792,12 +792,10 @@ async function dockerAction(name, action){
 
 // ── noVNC 桌面预览 (P2-4 拆分时从 chat_core 段挪回, 它是 panel renderer)
 function renderVnc(){
-  // noVNC 端口：优先用 window._vncPort（由后端注入），否则 webPort+10
-  const webPort = parseInt(location.port || '18790');
-  const vncPort = window._vncPort || (webPort + 10);
-  const host = location.hostname;
-  const proto = location.protocol;
-  const vncUrl = `${proto}//${host}:${vncPort}/vnc.html?autoconnect=true&resize=scale&quality=6&compression=2`;
+  // [sec 2026-10-19] 远程桌面走同源、需登录的反向代理 /vnc/ (routers/vnc_router.py);
+  // noVNC/x11vnc 自身只监听 127.0.0.1, 不再直连 :18800 (之前无密码对外暴露)
+  const vncUrl = new URL('/vnc/vnc.html?autoconnect=true&resize=scale&quality=6&compression=2&path=websockify', location.href).href;
+  const vncPort = '/vnc/';
   const frame = document.getElementById('novnc-frame');
   const status = document.getElementById('vnc-status');
   const newwin = document.getElementById('vnc-newwin');

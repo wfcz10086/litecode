@@ -99,7 +99,8 @@ def test_key_file_is_binary_and_corrupt_key_fails_closed(tmp_path):
     nodes = Nodes(tmp_path)
     device = _enroll_online(nodes)
     nodes.set_capability(device['id'], 'shell', True)
-    key = tmp_path / '.secrets/windows_nodes' / Nodes._CAP_KEY_FILE
+    key = nodes.key_root / Nodes._CAP_KEY_FILE
+    assert not (tmp_path / '.secrets/windows_nodes' / Nodes._CAP_KEY_FILE).exists()   # 密钥不在工作区
     raw = key.read_bytes()
     assert raw.startswith(b'\x00') and key.suffix == '.bin'    # read_file 按二进制拒读
     assert (key.stat().st_mode & 0o777) == 0o600

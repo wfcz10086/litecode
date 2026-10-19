@@ -47,6 +47,7 @@ vendor/playwright-cache/*
 litecode_state/timers.json
 litecode_state/web_auth_tokens.json
 litecode_state/dag_jobs/*
+litecode_state/keys/
 !litecode_state/dag_jobs/.gitkeep
 # 微信 bot 运行时态, 不入 git
 /wechat_creds/bots_state.json

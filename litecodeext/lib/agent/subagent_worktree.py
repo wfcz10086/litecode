@@ -125,6 +125,8 @@ def _lock_for(repo) -> asyncio.Lock:
 # ═══════════════════════════ 元数据 ═══════════════════════════
 
 def _save_meta(meta: dict) -> None:
+    if not valid_wid(meta.get("id")):
+        raise ValueError(f"invalid worktree id: {str(meta.get('id'))[:80]!r}")
     meta["updated"] = time.time()
     d = _meta_dir()
     d.mkdir(parents=True, exist_ok=True)
@@ -133,7 +135,31 @@ def _save_meta(meta: dict) -> None:
     os.replace(tmp, d / f"{meta['id']}.json")
 
 
+# [sec 2026-10-19] 工作树 id 严格白名单 (create_worktree 生成 "<agent_type>-<hex8>"),
+# 防 id="../../x" 让 load_meta / 删除走出 _meta 与 _base_dir
+_WID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def valid_wid(wid) -> bool:
+    return isinstance(wid, str) and bool(_WID_RE.fullmatch(wid))
+
+
+def _inside_base(path) -> Optional[Path]:
+    """resolve 后严格位于 _base_dir() 之内 (且不等于它) 才返回该路径, 否则 None。"""
+    try:
+        base = _base_dir().resolve()
+        rp = Path(path).resolve()
+        rp.relative_to(base)
+    except (ValueError, OSError, TypeError):
+        return None
+    if rp == base or rp == _meta_dir().resolve():
+        return None
+    return rp
+
+
 def load_meta(wid: str) -> Optional[dict]:
+    if not valid_wid(wid):
+        return None
     p = _meta_dir() / f"{wid}.json"
     try:
         return json.loads(p.read_text())
@@ -510,7 +536,8 @@ def _ensure_excluded(repo: Path) -> None:
 
 
 async def create_worktree(repo: Path, workdir: Path, agent_type: str, task: str = "") -> WorktreeCtx:
-    wid = f"{agent_type}-{uuid.uuid4().hex[:8]}"
+    _safe_type = re.sub(r"[^A-Za-z0-9_-]", "_", str(agent_type or ""))[:40].lstrip("_-") or "agent"
+    wid = f"{_safe_type}-{uuid.uuid4().hex[:8]}"
     branch = BRANCH_PREFIX + wid
     wt = _base_dir() / wid
     async with _lock_for(repo):
@@ -565,12 +592,17 @@ def _branch_stats(repo, base: str, branch: str) -> dict:
 
 
 def _remove_worktree(repo, path, branch) -> None:
-    _git(["worktree", "remove", "--force", str(path)], repo, timeout=120)
-    if Path(path).exists():
-        import shutil
-        shutil.rmtree(path, ignore_errors=True)
+    # [sec 2026-10-19] 元数据里的 path/branch 可能被篡改: path 必须 resolve 后落在 _base_dir() 内,
+    # branch 必须是 lc-agent/ 前缀, 否则不删 (防 rmtree 任意目录 / branch -D master)
+    safe = _inside_base(path) if path else None
+    if safe is not None:
+        _git(["worktree", "remove", "--force", str(safe)], repo, timeout=120)
+        if safe.exists():
+            import shutil
+            shutil.rmtree(safe, ignore_errors=True)
     _git(["worktree", "prune"], repo)
-    _git(["branch", "-D", branch], repo)
+    if isinstance(branch, str) and branch.startswith(BRANCH_PREFIX) and ".." not in branch:
+        _git(["branch", "-D", branch], repo)
 
 
 def _merge_sync(meta: dict) -> dict:
@@ -686,7 +718,8 @@ def cleanup_stale(max_age: float = STALE_SECONDS) -> int:
             if m.get("repo") and Path(m["repo"]).is_dir():
                 if Path(m.get("path", "")).exists() or m.get("status") != "merged":
                     _remove_worktree(m["repo"], m.get("path", ""), m.get("branch", ""))
-            (_meta_dir() / f"{m['id']}.json").unlink(missing_ok=True)
+            if valid_wid(m.get("id")):
+                (_meta_dir() / f"{m['id']}.json").unlink(missing_ok=True)
             n += 1
     for r in repos:
         if Path(r).is_dir():
@@ -706,6 +739,8 @@ async def agent_worktree_tool(args: dict) -> str:
         return head + f"待处理工作树 {len(ms)} 个:\n" + "\n".join(format_report(m) for m in ms)
     if action not in ("merge", "discard", "diff", "resolve"):
         return f"ERROR: 未知 action={action!r}, 可选 list / merge / discard / diff / resolve"
+    if wid and not valid_wid(wid):
+        return f"ERROR: 非法工作树 id={wid[:80]!r} (只允许字母/数字/-/_)"
     meta = load_meta(wid) if wid else None
     if not meta:
         return f"ERROR: 找不到工作树 id={wid!r} (先 agent_worktree list 看)"

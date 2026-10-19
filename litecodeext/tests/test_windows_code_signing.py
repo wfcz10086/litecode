@@ -108,8 +108,10 @@ def test_stdlib_rsa_verify_interoperates_and_rejects_tampering(workspace):
 
 
 def test_private_key_stays_on_server(workspace, tmp_path):
-    path = workspace / '.secrets/windows_nodes/signing_key.pem'
+    from lib.key_store import windows_key_dir
+    path = windows_key_dir(workspace) / 'signing_key.pem'
     assert path.stat().st_mode & 0o777 == 0o600
+    assert not (workspace / '.secrets/windows_nodes/signing_key.pem').exists()   # 私钥不在工作区
     nodes = Nodes(workspace)
     _, _, device = enroll(nodes, 'keyonly')
     from fastapi import FastAPI

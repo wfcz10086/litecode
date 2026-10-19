@@ -135,7 +135,33 @@ def est_tokens(text) -> int:
 
 # ──  可变配置共享 —— 解决模型切换后 transport/subagent 读到旧值的问题
 # 所有运行时可变的模型参数放在一个 dict 里，transport.py 通过引用访问
-_LIVE = {
+import contextvars as _cv
+
+# [per-chat-model 2026-10-19] 单个会话可以指定自己的模型, 不改全局默认。
+# 做法: 每轮开始把该模型的完整参数放进 ContextVar, _LIVE 读取时先看它。
+# 所有读 _LIVE[...] / _LIVE.get(...) 的地方 (transport / thinking_adapter / sse 标签 /
+# wire_model_name / 上下文预算) 不改一行就拿到本轮的值; 别的会话 (别的 asyncio task,
+# 各自的 context) 看到的仍是全局值。写入 (_LIVE.update / 赋值) 只改全局, 不受影响。
+_TURN_MODEL: "_cv.ContextVar[dict | None]" = _cv.ContextVar("lc_turn_model", default=None)
+
+
+class _LiveDict(dict):
+    """全局模型参数 + 本轮覆盖层 (见 _TURN_MODEL)。dict(_LIVE) / items() 拿到的是全局值。"""
+
+    def __getitem__(self, k):
+        ov = _TURN_MODEL.get()
+        if ov is not None and k in ov:
+            return ov[k]
+        return dict.__getitem__(self, k)
+
+    def get(self, k, default=None):
+        ov = _TURN_MODEL.get()
+        if ov is not None and k in ov:
+            return ov[k]
+        return dict.get(self, k, default)
+
+
+_LIVE = _LiveDict({
     "model_id":           MODEL_ID,
     "backend_url":        BACKEND_URL,
     "api_key":            API_KEY,
@@ -149,7 +175,74 @@ _LIVE = {
     "served_model_name":  SERVED_MODEL_NAME,
     "supports_vision":    SUPPORTS_VISION,
     "vision_fallback_id": VISION_FALLBACK_ID,
-}
+})
+
+
+def find_model_entry(model_id: str, backend_url: str = "", cfg: dict | None = None) -> dict:
+    """按 id (同名多条时再按 backend_url) 在 config.models[] 里找模型; 找不到返回 {}。
+    默认现读 config.json, 这样运行中新增 / 删除的模型立刻生效。"""
+    if not model_id:
+        return {}
+    if cfg is None:
+        try:
+            cfg = load_cfg()
+        except Exception:
+            cfg = CFG
+    models = [m for m in (cfg.get("models") or []) if isinstance(m, dict)]
+    if backend_url:
+        for m in models:
+            if m.get("id") == model_id and (m.get("backend_url") or "").rstrip("/") == backend_url.rstrip("/"):
+                return m
+    for m in models:
+        if m.get("id") == model_id:
+            return m
+    return {}
+
+
+def model_live_view(entry: dict) -> dict:
+    """把 config.models[] 的一条翻成 _LIVE 的键 (口径同 reload_model: 没写的数值沿用全局,
+    deployment / served_model_name / supports_vision / effort 映射不沿用上一个模型)。"""
+    mid = entry["id"]
+    g = lambda k: dict.get(_LIVE, k)  # noqa: E731  全局值, 不经覆盖层
+    return {
+        "model_id": mid,
+        "backend_url": str(entry.get("backend_url") or g("backend_url")).rstrip("/"),
+        "api_key": entry.get("api_key", g("api_key")),
+        "max_tokens": entry.get("max_tokens", g("max_tokens")),
+        "enable_thinking": entry.get("enable_thinking", g("enable_thinking")),
+        "thinking_budget": entry.get("thinking_budget", g("thinking_budget")),
+        "context_window": int(entry.get("context_window", g("context_window"))),
+        "backend_type": entry.get("backend_type", g("backend_type")),
+        "deployment": str(entry.get("deployment", "") or "").strip().lower(),
+        "reasoning_effort_map": dict(entry.get("reasoning_effort_map") or {}),
+        "served_model_name": str(entry.get("served_model_name", "") or "").strip() or mid,
+        "supports_vision": bool(entry.get("supports_vision", False)),
+    }
+
+
+def set_turn_model(entry: dict | None):
+    """本轮 (当前 asyncio task / context) 改用 entry 这个模型; None = 跟随全局。返回 reset 用的 token。"""
+    return _TURN_MODEL.set(model_live_view(entry) if entry else None)
+
+
+def reset_turn_model(token) -> None:
+    try:
+        _TURN_MODEL.reset(token)
+    except Exception:   # 跨 context 收尾 (生成器在别的 task 里被关) — 退化为清空
+        _TURN_MODEL.set(None)
+
+
+def turn_model_id() -> str:
+    """本轮生效的模型 id (有会话覆盖返回覆盖, 否则全局)。"""
+    return _LIVE.get("model_id", "")
+
+
+def live_context_window() -> int:
+    """本轮生效的上下文窗口 (会话模型覆盖优先)。替代直接读模块变量 CONTEXT_WINDOW。"""
+    ov = _TURN_MODEL.get()
+    if ov and ov.get("context_window"):
+        return int(ov["context_window"])
+    return CONTEXT_WINDOW   # 全局: 模块变量 (reload_model 维护)
 
 
 def wire_model_name(display_id: str) -> str:

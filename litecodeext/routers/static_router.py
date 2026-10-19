@@ -40,13 +40,30 @@ async def serve_asset(name: str):
     return FileResponse(fp, media_type=media)
 
 
+# [sec 2026-10-19] 主页 / artifacts 页的 CSP。
+# 前端大量使用内联事件 (web_ui.html ~37 处 + JS 拼接的 ~119 处 onclick=) 和少量内联 <script>,
+# 一次性改成 nonce/addEventListener 牵动面太大, 所以 script-src 仍含 'unsafe-inline';
+# XSS 主防线是 DOMPurify (web_assets/safe_html.js, 所有 marked 渲染点)。这里补的是:
+#   - 只允许同源脚本 + 现有唯一外链 (drawflow @ cdn.jsdelivr.net), 注入的 <script src=evil> 加载不了
+#   - object-src 'none' / base-uri 'self' (防 <base> 劫持相对路径) / form-action 'self'
+#   - frame-ancestors 'self' (防点击劫持)
+PAGE_CSP = ("script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
+PAGE_HEADERS = {
+    "Content-Security-Policy": PAGE_CSP,
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "SAMEORIGIN",
+    "Referrer-Policy": "same-origin",
+}
+
+
 @router.get("/artifacts", response_class=HTMLResponse)
 async def artifacts_page():
     """Artifact 管理页 (S1-N): timer / bg / plugin 通用产出物 dashboard."""
     fp = S.base_dir / "web_assets" / "artifacts.html"
     if not fp.exists():
         raise HTTPException(404, "artifacts.html not found")
-    return FileResponse(str(fp), media_type="text/html; charset=utf-8")
+    return FileResponse(str(fp), media_type="text/html; charset=utf-8", headers=PAGE_HEADERS)
 
 
 @router.get("/", response_class=HTMLResponse)
@@ -54,4 +71,4 @@ async def index():
     """主页 HTML — 由 web_ui.py 注入 _get_html 函数; 再注入仓外插件的 WEB_ENTRY (无插件时原样)."""
     if S.get_html is None:
         return HTMLResponse("<h1>get_html not injected</h1>", status_code=500)
-    return inject_html(S.get_html())
+    return HTMLResponse(inject_html(S.get_html()), headers=PAGE_HEADERS)

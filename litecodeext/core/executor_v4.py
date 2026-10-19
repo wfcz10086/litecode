@@ -337,6 +337,28 @@ def apt_succeeded(output: str, returncode: int) -> bool:
 MAX_RETRIES  = 3
 MAX_OUTPUT   = 4000  # 与 litecode_server.py MAX_SHELL_RESULT 对齐
 
+# [sec 2026-10-19] 纵深防御: 模型的 shell 命令不得引用凭据/私钥目录 (工作区 .secrets/、
+# 工作区外的控制端密钥目录 ~/.litecode/keys 或 $LITECODE_KEY_DIR、宿主侧 litecode_state/keys、
+# 以及签名私钥/能力密钥文件名)。注意: 容器内 shell 以 root 运行, 用通配/编码等手段仍可能绕过,
+# 这里只挡直接引用, 真正的隔离要靠把密钥放到模型进程拿不到的地方。
+_SECRET_PATH_RE = re.compile(
+    r"\.secrets\b|\.litecode/+keys\b|litecode_state/+keys\b|signing_key\.pem|capability\.key\.bin",
+    re.IGNORECASE)
+
+
+def secret_path_violation(command: str) -> Optional[str]:
+    """命令引用了受保护的密钥路径 → 返回命中的片段, 否则 None。"""
+    if not command:
+        return None
+    m = _SECRET_PATH_RE.search(command)
+    if m:
+        return m.group(0)
+    kd = os.environ.get("LITECODE_KEY_DIR", "").strip().rstrip("/")
+    if kd and len(kd) > 1 and kd in command:
+        return kd
+    return None
+
+
 async def execute_shell_async(
     command: str,
     timeout: int = None,
@@ -347,6 +369,11 @@ async def execute_shell_async(
     完整修复版 execute_shell。
     集成: timeout推断/pip修复/网络probe/包管理锁/apt成功检测/错误分类/退避重试
     """
+    _hit = secret_path_violation(command) or secret_path_violation(cwd or "")
+    if _hit:
+        return (f"ERROR[PERMANENT]: 拒绝执行 — 命令引用了受保护的凭据/密钥路径 ({_hit})。"
+                f"凭据与签名私钥只能由系统内部使用, 不允许通过 shell 读取、复制或修改; "
+                f"SSH 主机请用 ssh_exec 的 alias, Windows 节点能力开关请让用户在管理界面操作。")
     work_dir = Path(cwd) if cwd else (workspace or Path.home())
     work_dir.mkdir(parents=True, exist_ok=True)
 

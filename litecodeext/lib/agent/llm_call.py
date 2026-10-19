@@ -303,7 +303,7 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                     _input_m = _re_ov.search(r'(\d{4,6})\s+input tokens', _vllm_err_str)
                     _ctx_m   = _re_ov.search(r'maximum context length is (\d+)', _vllm_err_str, _re_ov.I)
                     _input_tokens = int(_input_m.group(1)) if _input_m else 60000
-                    _ctx_limit    = int(_ctx_m.group(1))   if _ctx_m  else _cfg.CONTEXT_WINDOW
+                    _ctx_limit    = int(_ctx_m.group(1))   if _ctx_m  else _cfg.live_context_window()
                     _safe_out     = max(1024, _ctx_limit - _input_tokens - 200)
                     _overflow_max_tokens = _safe_out
                     log.warning(

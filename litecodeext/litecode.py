@@ -17,7 +17,7 @@ def _load_cfg() -> dict:
 
 CFG       = _load_cfg()
 PORT      = CFG.get("server", {}).get("port", 18789)
-TOKEN     = CFG.get("server", {}).get("token", "CHANGE_ME_TOKEN")
+TOKEN     = CFG.get("server", {}).get("token", "")  # [sec 2026-10-19] 无字面量兜底
 WEB_PORT  = CFG.get("web_ui", {}).get("port", 18790)
 # 路径解析：与 litecode_server.py 保持一致
 # 优先 paths.workspace_base → 降级 agent.workspace → 默认 ~/.litecode/workspace

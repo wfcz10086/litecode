@@ -77,7 +77,7 @@ except ImportError:
 BASE = Path(__file__).resolve().parent.parent
 _CFG = json.loads((BASE / "config.json").read_text()) if (BASE / "config.json").exists() else {}
 SERVER_URL = f"http://127.0.0.1:{_CFG.get('server', {}).get('port', 18789)}"
-SERVER_TOKEN = _CFG.get("server", {}).get("token", "CHANGE_ME_TOKEN")
+SERVER_TOKEN = _CFG.get("server", {}).get("token", "")
 MODEL = _CFG.get("model", {}).get("id", "openclaw")
 WORKSPACE = Path(_CFG.get("paths", {}).get("workspace_base", "/tmp/openclaw_workspace"))
 

@@ -158,6 +158,12 @@ class Nodes:
         self.workspace = Path(workspace)
         self.root = self.workspace / '.secrets/windows_nodes'
 
+    @property
+    def key_root(self):
+        """[sec 2026-10-19] 能力 HMAC 密钥放工作区之外 (lib/key_store, 含一次性迁移); nodes.json 仍在 root。"""
+        from lib.key_store import windows_key_dir
+        return windows_key_dir(self.workspace)
+
     @contextmanager
     def locked(self):
         """持锁读写 nodes.json; 内容没变就不回写 (只读路径与节流后的心跳不再每秒落盘)。"""
@@ -339,7 +345,7 @@ class Nodes:
     def _capability_key(self):
         """读当前签名密钥; 缺失或格式不符返回 None (此时所有开关视为关闭, 由下一次管理员开关重新生成)。"""
         try:
-            raw = (self.root / self._CAP_KEY_FILE).read_bytes()
+            raw = (self.key_root / self._CAP_KEY_FILE).read_bytes()
         except OSError:
             return None
         if len(raw) != len(self._CAP_KEY_MAGIC) + 32 or not raw.startswith(self._CAP_KEY_MAGIC):
@@ -348,7 +354,9 @@ class Nodes:
 
     def _new_capability_key(self):
         key = secrets.token_bytes(32)
-        path = self.root / self._CAP_KEY_FILE
+        folder = self.key_root
+        folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path = folder / self._CAP_KEY_FILE
         temporary = path.with_name(path.name + '.' + uuid.uuid4().hex)
         fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         try:

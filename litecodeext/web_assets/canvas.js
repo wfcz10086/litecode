@@ -142,7 +142,7 @@
       ta.focus();
     } else if (mode === 'preview' && b.kind === 'markdown') {
       const div = el('div', 'cv-md mb');
-      try { div.innerHTML = marked.parse(b.text); } catch (_) { div.textContent = b.text; }
+      try { div.innerHTML = window.lcSafeMd(b.text); } catch (_) { div.textContent = b.text; }
       bd.appendChild(div);
     } else if (mode === 'preview') {
       const fr = el('iframe', 'cv-frame');

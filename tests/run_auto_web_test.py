@@ -43,6 +43,17 @@ _HIGH_RISK = ("删除", "重置", "清空", "格式化", "delete", "reset",
               "clear", "destroy", "drop", "wipe", "退出")
 
 
+
+def _cfg_token() -> str:
+    """[sec 2026-10-19] server token 只从 config.json 读, 不写字面量兜底."""
+    try:
+        import json as _j
+        from pathlib import Path as _P
+        return (_j.loads((_P(__file__).resolve().parents[1] / "config.json").read_text())
+                .get("server") or {}).get("token", "")
+    except Exception:
+        return ""
+
 def _post_act(server: str, action: str, params: dict,
               session: str = "auto_test", shot: bool = False,
               wait_ms: int = 500, timeout: int = 12) -> dict:
@@ -453,7 +464,7 @@ def main():
                     help="browser_server URL (Node + puppeteer)")
     ap.add_argument("--password", default=os.environ.get("WEB_PASSWORD") or "CHANGE_ME_PASSWORD",
                     help="Web UI 登录密码")
-    ap.add_argument("--token", default=os.environ.get("SERVER_TOKEN") or "CHANGE_ME_TOKEN",
+    ap.add_argument("--token", default=os.environ.get("SERVER_TOKEN") or _cfg_token(),
                     help="server token (vision_check 用)")
     ap.add_argument("--skip-vision", action="store_true",
                     help="不跑 vision_check (快速)")

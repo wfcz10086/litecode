@@ -1,12 +1,12 @@
 ---
 name: browser-control
-description: 通过 CDP 控制容器内常驻 Chrome(DISPLAY :99, VNC 18800, CDP 9222):打开网页、点击、填表、截图、需要登录态的页面操作。触发:浏览器操作、网页自动化、点击、填表、截图、CDP。
+description: 通过 CDP 控制容器内常驻 Chrome(DISPLAY :99, 远程桌面 Web UI /vnc/, CDP 9222):打开网页、点击、填表、截图、需要登录态的页面操作。触发:浏览器操作、网页自动化、点击、填表、截图、CDP。
 ---
 
 # Browser Control Skill
 
 > 通过 CDP (Chrome DevTools Protocol) 控制容器内持久 Chrome 浏览器。
-> Chrome 已在 DISPLAY :99 上运行，VNC 可视化端口 18800，CDP 端口 9222。
+> Chrome 已在 DISPLAY :99 上运行，用户可在 Web UI 登录后的 /vnc/ 实时查看 (noVNC 只监听 127.0.0.1:18800)，CDP 端口 9222。
 
 ## 架构
 
@@ -20,7 +20,7 @@ description: 通过 CDP 控制容器内常驻 Chrome(DISPLAY :99, VNC 18800, CDP
                                                   Chrome (:99, CDP:9222)
                                                           │
                                                           ▼
-                                                 VNC ──> noVNC (18800)
+                                                 VNC ──> noVNC (127.0.0.1:18800) ──> Web UI /vnc/ (需登录)
 ```
 
 ## 关键点: 不要用 playwright.launch()
@@ -118,7 +118,7 @@ download.save_as(f"/tmp/openclaw_workspace/downloads/{download.suggested_filenam
 3. **截图存到 workspace** - `/tmp/openclaw_workspace/` 下的文件用户可以在 Web UI 预览
 4. **超时处理** - 网络请求加 timeout，避免 agent 卡死
 5. **Chrome profile 在 `/tmp/openclaw_workspace/.chrome-profile`** - cookies/登录状态跨 session 保持
-6. **VNC 查看**: 用户通过 Web UI 的 VNC tab 或直接访问 `http://<host>:18800/vnc.html` 查看浏览器画面
+6. **VNC 查看**: 用户通过 Web UI 的 VNC tab 或登录后打开 `http://<host>:18790/vnc/` 查看浏览器画面
 
 ## 健康检查
 

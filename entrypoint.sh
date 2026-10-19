@@ -49,8 +49,8 @@ try:
         c['model']['id'] = env['MODEL_ID']
         print(f'  [inject] model_id = {env["MODEL_ID"]} (config was empty)')
 
-    # server token 照常注入（这个是服务鉴权，不是模型相关）
-    if env['SERVER_TOKEN']:
+    # [sec 2026-10-19] server token 以 config.json 为准 (轮换只改 config): env 只在 config 没配/占位时注入
+    if env['SERVER_TOKEN'] and _is_placeholder((c.get('server') or {}).get('token', '')):
         c.setdefault('server', {})
         c['server']['token'] = env['SERVER_TOKEN']
     # Web UI 密码
@@ -162,20 +162,21 @@ start_vnc() {
         ok "Chrome first-run flag 已写入"
     fi
 
-    # x11vnc
+    # [sec 2026-10-19] x11vnc 无密码, 只能监听本机 (-localhost); 不再对外暴露 5999
     if ! pgrep -x x11vnc > /dev/null 2>&1; then
-        x11vnc -display :99 -forever -nopw -shared \
+        x11vnc -display :99 -forever -nopw -shared -localhost \
             -rfbport ${VNC_PORT:-5999} \
             -bg -o /tmp/x11vnc.log 2>/dev/null || true
     fi
 
-    # noVNC websocket
+    # noVNC websocket — 只绑 127.0.0.1; 浏览器经 Web UI 登录后的同源反代 /vnc/ 访问
+    # (routers/vnc_router.py: 校验登录 cookie 后转发到 127.0.0.1:${NOVNC_PORT})
     if ! pgrep -f "websockify.*${NOVNC_PORT:-18800}" > /dev/null 2>&1; then
-        websockify --web=/opt/noVNC ${NOVNC_PORT:-18800} \
-            localhost:${VNC_PORT:-5999} > /tmp/novnc.log 2>&1 &
+        websockify --web=/opt/noVNC 127.0.0.1:${NOVNC_PORT:-18800} \
+            127.0.0.1:${VNC_PORT:-5999} > /tmp/novnc.log 2>&1 &
     fi
 
-    ok "noVNC → http://0.0.0.0:${NOVNC_PORT:-18800}"
+    ok "noVNC → 仅本机 127.0.0.1:${NOVNC_PORT:-18800}; 浏览器入口 http://<host>:${WEB_PORT:-18790}/vnc/ (需登录)"
 }
 
 # ── SearXNG 健康提示 (sidecar 由 docker-compose 起, 同栈 127.0.0.1:18888) ─
@@ -195,11 +196,10 @@ start_server() {
     python3 litecode_server.py &
     SERVER_PID=$!
 
-    local token="${SERVER_TOKEN:-CHANGE_ME_TOKEN}"
+    # [sec 2026-10-19] /health 是公开存活探针 (不带 token 只回 status+版本), 不再写 token 字面量兜底
     local port="${SERVER_PORT:-18789}"
     for i in $(seq 1 30); do
-        if curl -sf -H "Authorization: Bearer $token" \
-            "http://127.0.0.1:$port/health" > /dev/null 2>&1; then
+        if curl -sf "http://127.0.0.1:$port/health" > /dev/null 2>&1; then
             ok "LiteCode Server 就绪 (PID=$SERVER_PID)"
             return 0
         fi
@@ -282,7 +282,7 @@ main() {
             echo -e "  Version : ${C}$(cd /opt/litecode && python3 -m lib.version 2>/dev/null || echo unknown)${NC}"
             echo -e "  Server  : ${C}http://0.0.0.0:${SERVER_PORT:-18789}${NC}"
             echo -e "  Web UI  : ${C}http://0.0.0.0:${WEB_PORT:-18790}${NC}"
-            echo -e "  noVNC   : ${C}http://0.0.0.0:${NOVNC_PORT:-18800}${NC}"
+            echo -e "  远程桌面: ${C}http://0.0.0.0:${WEB_PORT:-18790}/vnc/${NC} (登录 Web UI 后)"
             echo ""
 
             # 前台 wait — 任一进程退出则自动重拉
