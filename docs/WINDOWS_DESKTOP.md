@@ -222,7 +222,7 @@ LiteCode 定时器 `action_type=agent` 已接入现有 Web 后台轮次。定时
 
 重启/断网不会使已接入节点的设备凭据过期：断网后代理退避重试；关机时不运行，重新开机进入安装用户会话后回连。SSH 服务可在用户登录前启动，仍需要网络路由/隧道就绪。锁屏后文件/系统动作仍可执行，GUI 动作返回 `desktop_unavailable`，当前不会自动等待解锁续跑，也不会自动解锁。需要无人值守 GUI 时可由所有者在专用虚拟机上选择自动登录并保持桌面可用；个人电脑可保留锁屏，解锁后重新检查再继续。[微软 Autologon 说明](https://learn.microsoft.com/en-us/sysinternals/downloads/autologon)。
 
-当前验证覆盖组件任意替换位置失败、首次安装中断、子进程强制退出后的磁盘恢复、回滚暂时失败后重试、旧 `.pyc` 失效、代理语法错误及重启助手启动失败。PowerShell 用例模拟了旧任务迁移、任务缺失重建、禁用保持及进程/任务退出交接。2026-10-19，专用新机 WIN-JM2PTI2AMKB 已实测：杀代理后41.8秒由任务自动拉起；锁屏时节点Shell和SSH可用、GUI明确拒绝；修复专用VM重启路径后，Windows真实重启自动恢复SSH/代理/桌面，备用救援used=false。旧机gpu-vm仅核查Shell、sshd和启动配置，未做破坏性测试；长断网测试按用户要求约38分钟后提前结束；手动恢复网卡后节点自动回连，SSH/Shell复核通过，本轮故障和备用恢复任务已删除；一小时不计通过，后续快速验收按十分钟。原始证据与边界见 docs/WINDOWS_VM_OPERATIONS.md 及工作区 windows-lifecycle-* 报告。
+当前验证覆盖组件任意替换位置失败、首次安装中断、子进程强制退出后的磁盘恢复、回滚暂时失败后重试、旧 `.pyc` 失效、代理语法错误及重启助手启动失败。PowerShell 用例模拟了旧任务迁移、任务缺失重建、禁用保持及进程/任务退出交接。2026-10-19，专用新机 WIN-EXAMPLE01 已实测：杀代理后41.8秒由任务自动拉起；锁屏时节点Shell和SSH可用、GUI明确拒绝；修复专用VM重启路径后，Windows真实重启自动恢复SSH/代理/桌面，备用救援used=false。旧机gpu-vm仅核查Shell、sshd和启动配置，未做破坏性测试；长断网测试按用户要求约38分钟后提前结束；手动恢复网卡后节点自动回连，SSH/Shell复核通过，本轮故障和备用恢复任务已删除；一小时不计通过，后续快速验收按十分钟。原始证据与边界见 docs/WINDOWS_VM_OPERATIONS.md 及工作区 windows-lifecycle-* 报告。
 
 ### SSH、OCR 与 VS Code 混合使用
 
@@ -247,7 +247,7 @@ Windows SSH 脚本可使用 `ssh_exec(shell="powershell", cmd="原始脚本")`�
 | 锁屏时后台可用、GUI 拒绝，解锁后恢复 | 自动化状态切换 | 模拟通过，未主动锁屏验收 |
 | 一小时断线和控制端重启后凭据仍有效 | 时钟推进及恢复任务的用例 | 模拟通过，未连续断网一小时实测 |
 | 私网设备通过出站接口接入/回传截图 | HTTP 集成用例及实际新机 NAT 心跳、截图 | 逻辑及新机出站接入通过；严格 OCR 仍单独验收 |
-| 新机恢复与冷启动重连 | WIN-JM2PTI2AMKB 系统身份、SSH、心跳和新桌面 | 独立新机已恢复；监督者执行的冷启动后自动恢复通过，不能算作 LiteCode 自主执行通过；原 gpu-vm 未重启 |
+| 新机恢复与冷启动重连 | WIN-EXAMPLE01 系统身份、SSH、心跳和新桌面 | 独立新机已恢复；监督者执行的冷启动后自动恢复通过，不能算作 LiteCode 自主执行通过；原 gpu-vm 未重启 |
 | Windows 内 WSL 2 与真实容器 | Web 会话 web-xxxx 的原始工具结果、容器 ID/内核 | 监督者修正嵌套虚拟化兼容配置后，LiteCode 实际启动 Ubuntu、Docker 29.1.3 与 alpine 容器；容器内为 Microsoft WSL2 内核 |
 | VS Code Dev Container 与断点 | IDE 暂停、局部变量 a=2/b=3、F5 后 HTTP result=5 | 新机通过，Web 会话 web-xxxx；监督者分阶段发指令，LiteCode 执行，尚不代表单条提示词无人干预通过 |
 | 新机 GUI 保存、运行与测试 | app.py 实际副本、新标记 HTTP、原始测试日志及严格 OCR | 标记 LITE-WEB-DEV-20261019-R2 落盘并由 /health 返回；3 项 unittest、UT_EXIT=0、OK；en-US 严格 OCR matched=true |

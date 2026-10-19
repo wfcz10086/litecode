@@ -97,7 +97,7 @@ class TestLoopGuardFullArguments(unittest.TestCase):
         signatures = []
         for name, tail in (("devContainers.log", 30), ("extension.log", 30),
                            ("extension.log", 80), ("devContainers.log", 80)):
-            args = {"alias": "win11-devtest", "shell": "powershell", "timeout": 40,
+            args = {"alias": "win-devtest", "shell": "powershell", "timeout": 40,
                     "cmd": f"Get-Content -LiteralPath '{directory}\\{name}' -Tail {tail}"}
             blocked, warning, signature = guard.check("ssh_exec", args)
             self.assertFalse(blocked)
@@ -107,7 +107,7 @@ class TestLoopGuardFullArguments(unittest.TestCase):
         self.assertEqual(guard.block_count, 0)
 
     def test_identical_long_ssh_query_is_still_blocked(self):
-        args = {"alias": "win11-devtest", "shell": "powershell", "timeout": 40,
+        args = {"alias": "win-devtest", "shell": "powershell", "timeout": 40,
                 "cmd": "Get-Content -LiteralPath 'C:\\logs\\" + "same-directory\\" * 30
                        + "devContainers.log' -Tail 80"}
         guard = ToolLoopGuard()

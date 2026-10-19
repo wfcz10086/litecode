@@ -30,7 +30,7 @@ def main():
     records = []
 
     def call(handler, args):
-        result, _ = asyncio.run(handler(a.session, {'alias': 'win11-devtest', **args}))
+        result, _ = asyncio.run(handler(a.session, {'alias': 'win-devtest', **args}))
         records.append({'tool': handler.__name__, 'raw_result': result})
         if result.startswith('ERROR'):
             raise RuntimeError(result)
@@ -39,7 +39,7 @@ def main():
     report = {'session': a.session, 'run': a.run, 'mode': a.mode, 'started_at': time.time(), 'ok': False}
     try:
         text = call(h_ssh_exec, {'shell': 'powershell', 'timeout': 30, 'cmd':
-            "if($env:COMPUTERNAME -ne 'WIN-JM2PTI2AMKB'){throw 'Wrong target'}; "
+            "if($env:COMPUTERNAME -ne 'WIN-EXAMPLE01'){throw 'Wrong target'}; "
             f"Get-ScheduledTask -TaskName 'LiteCode-Node-{a.node_id}' | Out-Null; "
             "$p=Join-Path $env:ProgramData 'LiteCodeLifecycle'; New-Item -ItemType Directory -Force $p | Out-Null; "
             "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value; "

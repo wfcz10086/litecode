@@ -1,4 +1,4 @@
-"""ssh_exec: 密钥登录 / 跳板 (ssh -J) / 主机别名存储位置。真连远程的验证在容器里手动跑过 (win666 → win11)。"""
+"""ssh_exec: 密钥登录 / 跳板 (ssh -J) / 主机别名存储位置。真连远程的验证在容器里手动跑过 (jumphost → win11)。"""
 import asyncio
 import os
 import sys

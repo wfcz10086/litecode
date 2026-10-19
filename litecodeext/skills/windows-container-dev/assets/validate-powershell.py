@@ -24,7 +24,7 @@ def main():
         from lib.config import WORKSPACE
         from lib.windows_ssh import powershell_command
 
-    alias, computer = 'win11-devtest', 'WIN-JM2PTI2AMKB'
+    alias, computer = 'win-devtest', 'WIN-EXAMPLE01'
     run_id = uuid.uuid4().hex
     report = {'session_id': args.session, 'alias': alias, 'expected_computer': computer,
               'run_id': run_id, 'started_at': time.time(), 'overall_pass': False}

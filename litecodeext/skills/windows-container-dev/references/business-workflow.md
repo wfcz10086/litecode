@@ -4,7 +4,7 @@
 
 ## 范围与准备
 
-- 仅新机：SSH `win11-devtest`、桌面 `amd-devtest-20261019-r2`，先核对主机 `WIN-JM2PTI2AMKB`。Windows GUI 每次明确传 `alias`，不使用控制端 Linux 的 `desktop_*`。
+- 仅新机：SSH `win-devtest`、桌面 `win-desktop-test`，先核对主机 `WIN-EXAMPLE01`。Windows GUI 每次明确传 `alias`，不使用控制端 Linux 的 `desktop_*`。
 - 本轮生成唯一 `run_id`，专用目录 `C:\litecode-business\<run_id>`，对应 WSL `/mnt/c/litecode-business/<run_id>`；新建带本轮标记的独立容器，复用已验证的小镜像缓存。先检查端口，优先使用空闲 `8081`；占用时另选并记录，不抢占进程，不使用现有 `8080`。
 - 保留现有 VS Code、开发容器和项目，不重启 Windows/WSL，不改变安全设置，不执行全局容器或镜像清理。
 - GUI 文档阶段先检查已有 Word 或 LibreOffice Writer。缺失时，LiteCode 按用户已授权的依赖安装范围安装免费 Writer，复用可信缓存或校验官方安装包，同时继续业务代码开发，不重复请求确认。下载/安装失败才报告实际缺口并标记 GUI 待补验。核对真实产品/版本、窗口及 `.docx` 文件名；使用 Writer 验收时如实报告，不冒称使用了 Word，商业 Word 缺少授权时其专属兼容性仍为未测。记事本仅可作为 `review.txt` 的粘贴目标，不能代替文档应用。

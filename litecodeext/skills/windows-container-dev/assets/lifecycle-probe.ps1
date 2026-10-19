@@ -7,7 +7,7 @@ param(
     [int]$AdapterIndex = 0
 )
 $ErrorActionPreference = 'Stop'
-if ($env:COMPUTERNAME -ne 'WIN-JM2PTI2AMKB') { throw 'This probe only supports the dedicated test VM' }
+if ($env:COMPUTERNAME -ne 'WIN-EXAMPLE01') { throw 'This probe only supports the dedicated test VM' }
 $folder = Join-Path $env:ProgramData ('LiteCodeLifecycle\' + $RunId)
 $taskName = 'LiteCode-Node-' + $NodeId
 $prefix = 'LiteCode-Test-' + $RunId
