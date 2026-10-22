@@ -120,6 +120,23 @@ if [ "$FULL" = "--full" ]; then
   [ -f "$WSL_MSI" ] || curl -sSL -m 900 -o "$WSL_MSI" https://github.com/microsoft/WSL/releases/download/3.0.3/wsl.3.0.3.0.x64.msi
   echo "ae977286974255bd26bf925f00f40f5692c6b2084155cbc0563c09aea091f211  $WSL_MSI" | sha256sum -c --quiet
   cp "$WSL_MSI" "$WORK/wsl.msi"
+  # 本机操控 (桌面代理) 要的 Python 安装程序 + 依赖 wheel, 随安装包分发, 用户机不用联网下载 (开代理/网差时常失败)
+  OFF=$CACHE/win-offline-py313
+  if [ ! -f "$OFF/.ok" ]; then
+    rm -rf "$OFF"; mkdir -p "$OFF/wheels" "$OFF/sdist"
+    curl -fsSL -m 900 -o "$OFF/python-3.13.16-amd64.exe" https://mirrors.huaweicloud.com/python/3.13.16/python-3.13.16-amd64.exe \
+      || curl -fsSL -m 900 -o "$OFF/python-3.13.16-amd64.exe" https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe
+    PIPI=${PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}
+    pip3 download -q --platform win_amd64 --python-version 3.13 --implementation cp --only-binary=:all: \
+      -d "$OFF/wheels" mss pillow uiautomation pywin32 winocr psutil -i "$PIPI"
+    pip3 download -q -d "$OFF/sdist" pyautogui pyperclip -i "$PIPI"
+    mv "$OFF"/sdist/*.whl "$OFF/wheels/" 2>/dev/null || true
+    for f in "$OFF"/sdist/*.tar.gz; do pip3 wheel -q --no-deps --no-build-isolation -w "$OFF/wheels" "$f"; done
+    rm -rf "$OFF/sdist"
+    [ -s "$OFF/python-3.13.16-amd64.exe" ] && ls "$OFF/wheels" | grep -qi pyautogui && touch "$OFF/.ok"
+  fi
+  [ -f "$OFF/.ok" ] || { echo "离线组件准备失败 ($OFF)"; exit 1; }
+  rm -rf "$WORK/offline"; cp -a "$OFF" "$WORK/offline"; rm -f "$WORK/offline/.ok"
   (cd "$HERE" && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
      -ldflags "-s -w -H windowsgui -X main.Version=$VER${LITECODE_UPDATE_URL:+ -X main.BaseURL=$LITECODE_UPDATE_URL}" -o "$WORK/LiteCode.exe" .)
   VER4=$(echo "$VER.0.0.0" | cut -d. -f1-4)   # NSIS 文件版本要四段
@@ -127,7 +144,7 @@ if [ "$FULL" = "--full" ]; then
   mv "$WORK/LiteCode-Setup-$VER.exe" "$OUT/"
   echo "$ROOTFS_VER" > "$OUT/.rootfs_version"
   echo "LiteCode-Setup-$VER.exe" > "$OUT/.installer"
-  rm -f "$WORK/litecode-rootfs-$ROOTFS_VER.tar.gz" "$WORK/code-layer.tar.gz" "$WORK/litecode-code-$VER.tar.gz"
+  rm -f "$WORK/litecode-rootfs-$ROOTFS_VER.tar.gz" "$WORK/code-layer.tar.gz" "$WORK/litecode-code-$VER.tar.gz"; rm -rf "$WORK/offline"
 fi
 
 step "5b. 模型包 (本地 TTS + 知识库向量模型; 不进安装包, 托盘后台下载 —— windows/models.go)"

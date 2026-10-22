@@ -186,7 +186,7 @@ def test_setup_ps1_policy():
     assert "PasswordAuthentication no" in ps
     assert "Get-AuthenticodeSignature" in ps and "O=Microsoft Corporation" in ps
     # 离线包优先, 可选功能兜底
-    assert ps.index("$ZipPath -and") < ps.index("Add-WindowsCapability")
+    assert ps.index("$ZipPath -and") < ps.index("Add-CapabilityWithTimeout $cap.Name")
 
 
 @pytest.fixture

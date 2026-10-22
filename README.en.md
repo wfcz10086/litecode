@@ -434,9 +434,12 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Version history
 
-### v2.0.7 "Desktop" (上桌) (2026-10-22)
+### v2.0.8 "Desktop" (上桌) (2026-10-22)
 
 > Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
+
+**v2.0.8**
+- 🪟 **Fixed Windows install failing with a localhost proxy on** ("invalid character 'w'"): WSL's proxy notice no longer leaks into the config and version the installer reads; when a localhost proxy is detected the installer switches WSL to mirrored networking so the distro can use it too (an existing `networkingMode` is left alone).
 
 **v2.0.7**
 - 💬 **WeChat bridge SDK 0.3.0**: when login asks for a pairing code, an input box appears in the WeChat panel; already-bound bots reuse their login; online/offline is reported to the server.

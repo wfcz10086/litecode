@@ -21,6 +21,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends postgresql-16 p
  && /usr/lib/postgresql/16/bin/postgres --version && ls /usr/share/postgresql/16/extension/vector.control
 COPY wsl.conf /etc/wsl.conf
 COPY litecode.env /etc/litecode.env
+# 国内加速: 子系统里 LiteCode 现场装包/拉模型默认走国内源 (pip 已在基础镜像设为阿里云)
+RUN printf '%s\n' 'export HF_ENDPOINT=https://hf-mirror.com' 'export GOPROXY=https://goproxy.cn,direct' \
+      'export npm_config_registry=https://registry.npmmirror.com' 'export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright' \
+      >> /etc/litecode.env && printf 'registry=https://registry.npmmirror.com\n' > /root/.npmrc
 COPY litecode-wsl-start litecode-apply-update litecode-rollback litecode-kb-pg playwright_link_browsers.py /usr/local/bin/
 ARG ROOTFS_VERSION
 RUN chmod +x /usr/local/bin/litecode-wsl-start /usr/local/bin/litecode-apply-update /usr/local/bin/litecode-rollback /usr/local/bin/litecode-kb-pg \

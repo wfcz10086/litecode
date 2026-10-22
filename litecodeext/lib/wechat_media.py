@@ -254,7 +254,7 @@ async def _describe_image(local_path: str) -> str:
         for vision_model in _cands[:3]:      # [FIX] 逐个候选试, 第一个空/报错就换下一个
           try:
             url = vision_model["backend_url"].rstrip("/")
-            headers = {"Authorization": f"Bearer {vision_model.get('api_key', '')}",
+            headers = {"Authorization": f"Bearer {str(vision_model.get('api_key', '') or '').strip() or 'EMPTY'}",
                        "Content-Type": "application/json"}
             # [FIX 2026-08-31] 用展示 ID 直接发会 404 —— 上游认的是 served_model_name
             # (实测: qwen3.8-flash-next-local → "The model does not exist",

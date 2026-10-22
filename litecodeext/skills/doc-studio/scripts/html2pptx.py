@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import argparse
+from _ds import safe_screenshot
 import base64
 import shutil
 import sys
@@ -56,7 +57,7 @@ def capture_el(page, cap_id: int, mode: str, dest: Path) -> Path | None:
     try:
         if not r or r["w"] < 1 or r["h"] < 1:
             return None
-        page.screenshot(path=str(dest), full_page=True, omit_background=True,
+        safe_screenshot(page, path=str(dest), full_page=True, omit_background=True,
                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"]})
         return dest
     finally:
@@ -71,7 +72,7 @@ def shoot_section(page, selector: str, i: int, dest: Path) -> Path:
     r = page.evaluate("""([sel, i]) => { const s = document.querySelectorAll(sel)[i];
         const r = s.getBoundingClientRect(); return {x: r.left + scrollX, y: r.top + scrollY, w: r.width, h: r.height}; }""",
                       [selector, i])
-    page.screenshot(path=str(dest), full_page=True, clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"]})
+    safe_screenshot(page, path=str(dest), full_page=True, clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"]})
     return dest
 
 

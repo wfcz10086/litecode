@@ -121,7 +121,7 @@ func modelEntry(url, name, key string) map[string]any {
 	return map[string]any{
 		"id": name, "provider": "openai-compatible", "deployment": "api",
 		"served_model_name": name, "backend_type": "openai",
-		"backend_url": strings.TrimRight(strings.TrimSpace(url), "/"), "api_key": strings.TrimSpace(key),
+		"backend_url": strings.TrimRight(strings.TrimSpace(url), "/"), "api_key": keyOrEmpty(key),
 		"api_format": "openai-chat", "context_window": 128000, "max_tokens": 8192,
 		"enable_thinking": false, "supports_vision": probeVision(url, name, key),
 	}
@@ -159,4 +159,12 @@ func probeVision(url, name, key string) bool {
 	defer resp.Body.Close()
 	logf("识图探测 %s: HTTP %d", name, resp.StatusCode)
 	return resp.StatusCode == 200
+}
+
+// keyOrEmpty: 用户没填 API Key (本地 vLLM/Ollama 常见) 写 "EMPTY", 不留空串 (留空会发出非法的 "Bearer " 请求头)
+func keyOrEmpty(k string) string {
+	if k = strings.TrimSpace(k); k != "" {
+		return k
+	}
+	return "EMPTY"
 }

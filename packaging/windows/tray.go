@@ -118,6 +118,7 @@ func bringUpAtLaunch() {
 	}
 	openWindow()
 	go ensureModels() // 模型包不进安装包, 服务起来后后台补齐
+	go resumeLocalControl()
 }
 
 func showLogs() {

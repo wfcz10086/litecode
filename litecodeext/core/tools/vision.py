@@ -133,7 +133,7 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096, paths: 
 
     headers = {"Content-Type": "application/json"}
     if api_key and api_key not in ("EMPTY", "", "sk-your-api-key-here"):
-        headers["Authorization"] = f"Bearer {api_key}"
+        headers["Authorization"] = f"Bearer {str(api_key or '').strip() or 'EMPTY'}"
 
     url = f"{backend_url}/chat/completions"
 

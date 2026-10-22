@@ -187,3 +187,14 @@ def parse_json_loose(text: str):
             except ValueError:
                 continue
     return None
+
+
+def safe_screenshot(page, tries: int = 4, **kw):
+    """page.screenshot 偶发 "Unable to capture screenshot" (headless Chromium 首帧还没合成好, 机器忙时更常见), 稍等重试。"""
+    for i in range(tries):
+        try:
+            return page.screenshot(**kw)
+        except Exception as e:
+            if "Unable to capture screenshot" not in str(e) or i == tries - 1:
+                raise
+            page.wait_for_timeout(300 * (i + 1))

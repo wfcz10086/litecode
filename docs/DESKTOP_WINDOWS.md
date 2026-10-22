@@ -140,3 +140,12 @@ LiteCode-Setup-<版本>.exe /S              静默解包（不自动进入配置
 ## 八、历史：先做过 Docker Desktop 版
 
 最早一版安装器（7 MB）在线下载 Docker Desktop 和镜像再安装，依赖 WSL + Docker Desktop 都正常，环节多。实机第一次就因 WSL 判断失败中断，用户反馈"应该是完整的封装"，于是改成现在的 WSL 离线安装包。Docker 方式保留给 Linux 服务器和已装 Docker Desktop 的用户。
+
+## 九、实机踩坑记录 (2026-10-22, 开着本机代理的 Windows 11)
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| 安装报「读默认配置失败: invalid character 'w'」, 备份文件名里有 `wsllocalhost…NAT…` 乱码 | Windows 系统代理指向 127.0.0.1 时, `wsl.exe` 每条命令都打一行 `wsl: 检测到 localhost 代理配置…` 提示, 旧版安装器把它和命令输出混在一起读 | 安装器只读标准输出并过滤 `wsl:` 提示行; 检测到本机代理 (Windows ≥ 22621) 自动在 `.wslconfig` 加 `networkingMode=mirrored` (已有设置不动, 原文件备份为 `.wslconfig.litecode-bak`)。手动绕过: cmd 里 `echo [wsl2]> "%USERPROFILE%\.wslconfig"`、`echo networkingMode=mirrored>> "%USERPROFILE%\.wslconfig"`、`wsl --shutdown` 后重跑安装 |
+| 安装卡在「接入本机操控」很久, 之后提示桌面代理没上线 | 这一步要联网下载 OpenSSH / Python / 依赖, 代理或网络慢时会卡 | 交互安装改成托盘启动后在后台接入, 开始和完成都弹通知; 失败从托盘菜单「接入本机操控」重试 (日志 `%LOCALAPPDATA%\LiteCode\local-control.log`) |
+| 对话报 `Illegal header value b'Bearer '` | 安装时没填 API Key, 请求头成了 `Bearer ` | 空 Key 一律按 `EMPTY` 处理 (服务端加载配置和安装器写配置两处) |
+| PowerShell 下载报「未能为 SSL/TLS 安全通道建立信任关系」, 浏览器却能打开 | 下载站用的 Let's Encrypt ECDSA 证书链到新根 (Root YE / ISRG Root X2), Windows 系统证书库可能没有 (要联网临时下载, 被代理挡住) | 下载站证书改用 RSA (链到 ISRG Root X1, 所有 Windows 内置); 自建下载站时同样用 RSA 证书 |

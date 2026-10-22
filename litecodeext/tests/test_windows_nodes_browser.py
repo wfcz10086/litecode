@@ -59,6 +59,8 @@ def test_enrollment_panel_and_revocation(allow_shell):
                 shell_choice.check()
             page.get_by_role('button', name='生成接入命令').click()
             page.wait_for_function('document.querySelector("textarea").value.includes("EncodedCommand")')
+            # 节点列表在命令生成后异步刷新; 并行跑测试 CPU 忙时会晚一点, 等它出现而不是立刻数
+            page.get_by_text('win-new · 在线', exact=True).wait_for(timeout=10000)
             assert page.get_by_text('win-new · 在线', exact=True).count() == 1
             assert page.get_by_role('link', name='查看最近截图').get_attribute('href').endswith('%2Fuploads%2Ftest.png')
             assert page.locator('dialog img').count() == 1

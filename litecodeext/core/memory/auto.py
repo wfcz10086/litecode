@@ -107,7 +107,7 @@ def smart_auto_memory(
             _t0 = _time.time()
             r = httpx.post(
                 f"{vllm_url.rstrip('/')}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                headers={"Authorization": f"Bearer {str(api_key or '').strip() or 'EMPTY'}", "Content-Type": "application/json"},
                 json=payload,
                 timeout=_LLM_TIMEOUT_S,
             )

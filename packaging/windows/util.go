@@ -45,11 +45,19 @@ func run(timeout time.Duration, name string, args ...string) (string, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000} // CREATE_NO_WINDOW
-	var b bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &b, &b
+	var b, eb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &b, &eb
 	err := cmd.Run()
-	out := strings.TrimSpace(b.String())
-	logf("$ %s %s -> err=%v out=%s", name, redact(strings.Join(args, " ")), err, trunc(out, 400))
+	// 2026-10-22 用户机: Windows 开着本机代理 (Clash 等) 时 wsl.exe 会打 "wsl: 检测到 localhost 代理配置…NAT 模式…" 警告;
+	// 以前 stdout/stderr 合在一起, 警告混进 cat 出来的 JSON 和版本号 ("读默认配置失败: invalid character 'w'")。
+	// 现在只返回 stdout (去掉 wsl: 开头的警告行); stderr 只在出错时附上, 方便看原因。
+	out := stripWSLNotice(b.String())
+	if err != nil {
+		if e := stripWSLNotice(eb.String()); e != "" {
+			out = strings.TrimSpace(out + "\n" + e)
+		}
+	}
+	logf("$ %s %s -> err=%v out=%s stderr=%s", name, redact(strings.Join(args, " ")), err, trunc(out, 400), trunc(strings.TrimSpace(eb.String()), 200))
 	if ctx.Err() == context.DeadlineExceeded {
 		return out, fmt.Errorf("%s 超时 (%s)", name, timeout)
 	}
@@ -229,4 +237,16 @@ func localName(name string) string {
 		}
 	}
 	return name
+}
+
+// stripWSLNotice 去掉 wsl.exe 自己打的提示行 (以 "wsl:" 开头, 如 localhost 代理 / NAT 模式警告), 其余原样
+func stripWSLNotice(s string) string {
+	var keep []string
+	for _, line := range strings.Split(strings.ReplaceAll(s, "\r\n", "\n"), "\n") {
+		if strings.HasPrefix(strings.TrimSpace(strings.TrimPrefix(line, "\ufeff")), "wsl:") {
+			continue
+		}
+		keep = append(keep, line)
+	}
+	return strings.TrimSpace(strings.Join(keep, "\n"))
 }

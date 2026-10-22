@@ -42,7 +42,22 @@ def load_cfg() -> dict:
     p = config_path()
     if not p.exists():
         raise RuntimeError(f"config.json not found at {p}")
-    return json.loads(p.read_text())
+    cfg = json.loads(p.read_text())
+    _fill_empty_keys(cfg)
+    return cfg
+
+
+def _fill_empty_keys(cfg: dict) -> None:
+    """模型 api_key 留空 → 当成 "EMPTY" (自建 vLLM/Ollama 不需要 key)。
+    2026-10-22 桌面版用户没填 key: 请求头成了 "Bearer " (末尾空格), httpx 直接报 Illegal header value。"""
+    for m in [cfg.get("model")] + list(cfg.get("models") or []):
+        if isinstance(m, dict) and "backend_url" in m and not str(m.get("api_key") or "").strip():
+            m["api_key"] = "EMPTY"
+
+
+def bearer(key) -> str:
+    """Authorization 头的值; key 为空时用 EMPTY, 避免非法的 "Bearer " 头。"""
+    return f"Bearer {str(key or '').strip() or 'EMPTY'}"
 
 
 import threading as _threading

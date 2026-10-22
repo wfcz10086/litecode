@@ -3,6 +3,7 @@ lib/transport.py — vLLM/OpenAI 后端流式调用（带重试 + 指数退避 +
 
 [#68] 重试策略统一走 lib/retry.py (LLM_POLICY: base=1s, factor=2, jitter=±0.3, cap=20s)
 """
+from lib.config import bearer as _bearer
 import asyncio, json, re, time
 from typing import AsyncGenerator, Optional
 import httpx
@@ -345,7 +346,7 @@ async def _vllm_stream_impl(
     #  由 thinking_adapter 按 backend_type 注入正确参数
     _thinking_inject(body, force_disable=no_thinking)
 
-    headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": _bearer(_key), "Content-Type": "application/json"}
     last_err = None
     # [2026-10-19] 已经往上游吐过内容后再整段重发, 调用方会收到两遍开头, 工具调用参数拼成坏 JSON
     # → 工具报错 → 模型重试。吐过就不在这里重试, 交给上层按"回合异常"处理。
@@ -355,7 +356,7 @@ async def _vllm_stream_impl(
         _model, _url, _key, _switched = _failover(_model, _url, _key)
         if _switched:
             body["model"] = wire_model_name(_model)
-            headers["Authorization"] = f"Bearer {_key}"
+            headers["Authorization"] = _bearer(_key)
             if _meter is not None:
                 _meter.model = _model
             # [trace 2026-10-22] 无 choices 的说明帧: 上层 llm_call 转成 SSE notice, 其余调用方 (无 choices 即跳过) 不受影响
@@ -482,14 +483,14 @@ async def vllm_call(
     if tools:
         body["tools"] = tools
         body["tool_choice"] = "auto"
-    headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
+    headers = {"Authorization": _bearer(_key), "Content-Type": "application/json"}
     _t0 = time.time()
 
     for attempt in range(max_retries + 1):
         _model, _url, _key, _switched = _failover(_model, _url, _key)
         if _switched:
             body["model"] = wire_model_name(_model)
-            headers["Authorization"] = f"Bearer {_key}"
+            headers["Authorization"] = _bearer(_key)
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 r = await client.post(f"{_url}/chat/completions", headers=headers, json=body)

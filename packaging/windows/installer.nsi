@@ -52,6 +52,9 @@ Section "LiteCode"
   File "${SRC}\litecode-code-${VER}.tar.gz"           ; 代码更新包: 系统包没变时安装只换代码
   File "${SRC}\wsl.msi"
   SetCompress auto
+  ; 本机操控离线组件: Python 安装程序 + 桌面代理依赖 wheel (windows_node_bootstrap.ps1 优先用它, 没有才联网)
+  SetOutPath "$INSTDIR\payload\offline"
+  File /r "${SRC}\offline\*"
   SetOutPath "$INSTDIR"
   ; 解压完立即放桌面/开始菜单图标 (原来要等配置、启动全部成功才创建, 中途卡住就一直没图标);
   ; 没配置完时双击图标 = 接着安装

@@ -4,6 +4,7 @@
 param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code,
       [string]$KeyFingerprint = '', [string]$SshPublicKey = '')
 $ErrorActionPreference = 'Stop'
+$offlineDir = Join-Path $env:LOCALAPPDATA 'LiteCode\payload\offline'   # 桌面版安装包自带的离线组件 (没有就联网)
 # [2026-10-20] PowerShell 5.1 的 Invoke-WebRequest 进度条会把下载拖慢几十倍 (真机装 Python 卡在"正在写入 Web 请求")
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -143,6 +144,15 @@ function Save-SshOwner {
 # 下面写死的值一致 (本脚本已被安装命令锁定哈希), 解出的 sshd.exe 还要通过微软 Authenticode 签名校验。
 $OpenSshZipSha256 = '23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5'
 $OpenSshZipUrl = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip'
+function Add-CapabilityWithTimeout([string]$Name, [int]$Seconds = 180) {
+    # Add-WindowsCapability 要连 Windows Update; 开着代理/公司网络时能一直卡着不返回 (2026-10-22 用户机), 限时
+    $job = Start-Job -ScriptBlock { param($n) Add-WindowsCapability -Online -Name $n -ErrorAction Stop | Out-Null } -ArgumentList $Name
+    if (-not (Wait-Job $job -Timeout $Seconds)) {
+        Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue
+        throw ('Windows 可选功能安装 ' + $Seconds + ' 秒没完成（多半连不上 Windows Update）')
+    }
+    try { Receive-Job $job -ErrorAction Stop | Out-Null } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue }
+}
 function Install-LiteCodeOpenSsh {
     $dest = Join-Path $env:ProgramFiles 'OpenSSH'
     if (Test-Path (Join-Path $dest 'sshd.exe')) { throw ($dest + ' 已有 OpenSSH 文件但没有注册 sshd 服务，为免覆盖请手动检查后重试。') }
@@ -184,16 +194,17 @@ try {
         $sshWasInstalled = [bool]$existingSshService -or ($capability -and $capability.State -eq 'Installed')
         $existingFirewall = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
         if (-not $sshWasInstalled) {
-            $viaCapability = $false
-            if ($capability) {
-                try {
-                    $sshRun.capability = $capability.Name; Save-SshOwner
-                    Add-WindowsCapability -Online -Name $capability.Name -ErrorAction Stop | Out-Null
-                    $viaCapability = (Get-WindowsCapability -Online -Name $capability.Name).State -eq 'Installed'
-                } catch { Write-Warning ('Windows 可选功能装不上 OpenSSH（' + $_.Exception.Message + '），改用自带的微软官方安装包…') }
-                if (-not $viaCapability) { $sshRun.capability = ''; Save-SshOwner }
+            # 先用自带的微软官方安装包 (从控制端取, 秒级); 不行再走 Windows 可选功能 (要连 Windows Update, 限时 3 分钟)
+            $viaPortable = $false
+            try { Install-LiteCodeOpenSsh; $viaPortable = [bool](Get-Service -Name sshd -ErrorAction SilentlyContinue) }
+            catch { Write-Warning ('自带 OpenSSH 安装包没装上（' + $_.Exception.Message + '），改用 Windows 可选功能…') }
+            if (-not $viaPortable) {
+                if (-not $capability) { throw '本机没有 OpenSSH Server 可选功能，自带安装包也没装上' }
+                $sshRun.capability = $capability.Name; Save-SshOwner
+                try { Add-CapabilityWithTimeout $capability.Name 180 }
+                catch { $sshRun.capability = ''; Save-SshOwner; throw }
+                if ((Get-WindowsCapability -Online -Name $capability.Name).State -ne 'Installed') { $sshRun.capability = ''; Save-SshOwner; throw 'Windows 可选功能装不上 OpenSSH Server' }
             }
-            if (-not $viaCapability) { Install-LiteCodeOpenSsh }
         }
         # 新建规则只允许本地子网; 保留已有 SSH 环境及防火墙策略, 不打断现有隧道。
         if (-not $existingFirewall) {
@@ -291,11 +302,14 @@ try {
             # 官方受支持维护版；验证签名后安装，无需预装 winget。
             # 先走国内镜像 (华为云, 同一官方安装包), 失败再回落 python.org; 来源不同不影响安全: 下面一律校验 PSF 签名
             $downloaded = $false
-            foreach ($url in @('https://mirrors.huaweicloud.com/python/3.13.16/python-3.13.16-amd64.exe',
+            # 桌面版安装包自带 Python 安装程序和依赖 wheel (payload\offline), 有就不联网 (开着代理/网络差时下载常失败)
+            $offlineExe = Join-Path $offlineDir 'python-3.13.16-amd64.exe'
+            if (Test-Path $offlineExe) { Copy-Item $offlineExe $installer -Force; $downloaded = $true; Write-Host '使用安装包自带的 Python' }
+            if (-not $downloaded) { foreach ($url in @('https://mirrors.huaweicloud.com/python/3.13.16/python-3.13.16-amd64.exe',
                                'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe')) {
                 try { Invoke-WebRequest $url -OutFile $installer -UseBasicParsing -TimeoutSec 600; $downloaded = $true; break }
                 catch { Write-Warning ('Python 安装包下载失败，换下一个地址：' + $url) }
-            }
+            } }
             if (-not $downloaded) { throw 'Python 安装包下载失败（国内镜像和 python.org 都试过），请检查网络后重试原命令。' }
             $signature = Get-AuthenticodeSignature $installer
             if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
@@ -316,7 +330,16 @@ try {
     $python = Join-Path $venv 'Scripts/python.exe'
     Write-Host '正在安装桌面依赖…'
     Report-Stage 'packages'
-    & $python -m pip install --no-cache-dir --disable-pip-version-check mss pillow uiautomation pywin32 pyautogui pyperclip winocr psutil -i https://pypi.tuna.tsinghua.edu.cn/simple
+    $pkgs = @('mss','pillow','uiautomation','pywin32','pyautogui','pyperclip','winocr','psutil')
+    $wheels = Join-Path $offlineDir 'wheels'
+    $LASTEXITCODE = 1
+    if (Test-Path $wheels) {
+        & $python -m pip install --no-index --find-links $wheels --disable-pip-version-check @pkgs
+        if ($LASTEXITCODE -ne 0) { Write-Warning '自带依赖与本机 Python 版本不匹配，改为联网安装' }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        & $python -m pip install --no-cache-dir --disable-pip-version-check @pkgs -i https://pypi.tuna.tsinghua.edu.cn/simple
+    }
     if ($LASTEXITCODE -ne 0) { throw '桌面依赖安装失败，请检查网络后重试' }
     Report-Stage 'agent'
     $agentBytes = Get-Bytes "$device/assets/agent.py" $headers

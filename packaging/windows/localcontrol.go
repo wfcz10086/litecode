@@ -160,6 +160,13 @@ func setupStepLocalControl(say func(int, string, ...any)) {
 		logf("无人值守且非管理员: 跳过本机操控接入 (托盘菜单可补做)")
 		return
 	}
+	if !opt.Unattended {
+		// 2026-10-22 用户反馈: 这一步要联网下 Python 和依赖, 代理/网络慢时安装窗口一直卡在这里。
+		// 交互安装改成登记一下, 安装窗口直接结束; 托盘起来后在后台接入, 完成后弹通知 (见 resumeLocalControl)。
+		os.WriteFile(localControlPending(), []byte(time.Now().Format(time.RFC3339)), 0o644)
+		say(96, "本机操控会在 LiteCode 启动后于后台接入，完成后右下角提示")
+		return
+	}
 	say(96, "接入本机操控（安装 OpenSSH 与桌面代理，会请求一次管理员权限，约 2~5 分钟）…")
 	res, err := setupLocalControl()
 	logf("本机操控接入: %+v err=%v", res, err)
@@ -219,4 +226,32 @@ foreach ($d in @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue)) 
 	code, err := runElevated("powershell.exe", "-NoProfile -ExecutionPolicy Bypass -EncodedCommand "+encodePS(script))
 	logf("卸载本机桌面代理: 退出码 %d err=%v", code, err)
 	os.Remove(localControlMarker())
+}
+
+func localControlPending() string { return filepath.Join(dataDir(), "local-control-pending") }
+
+// resumeLocalControl: 安装时登记的本机操控接入, 托盘启动、服务就绪后在后台做 (只做一次; 失败可从托盘菜单重试)
+func resumeLocalControl() {
+	if !fileExists(localControlPending()) {
+		return
+	}
+	if localControlDone() {
+		os.Remove(localControlPending())
+		return
+	}
+	for i := 0; i < 60 && !webReady(); i++ {
+		time.Sleep(5 * time.Second)
+	}
+	os.Remove(localControlPending()) // 不论成败只自动做一次, 免得每次开机都弹管理员确认
+	setTip("LiteCode · 正在接入本机操控…")
+	go zenity.Notify("正在后台接入本机操控（会请求一次管理员权限，联网下载组件约 2~5 分钟），期间可以正常使用 LiteCode。",
+		zenity.Title(appName))
+	res, err := setupLocalControl()
+	logf("本机操控接入(后台): %+v err=%v", res, err)
+	setTip(fmt.Sprintf("LiteCode %s · 运行中", codeVersion()))
+	if err != nil {
+		go zenity.Notify("本机操控没接入成功，可在托盘菜单点「接入本机操控」重试。", zenity.Title(appName))
+		return
+	}
+	go zenity.Notify(res.Message, zenity.Title(appName))
 }

@@ -84,7 +84,7 @@ async def generate(desc: str, name: str = "", timeout: float = 120, model_id: st
         pass
     async with httpx.AsyncClient(timeout=timeout) as c:
         r = await c.post(f"{url}/chat/completions", json=payload,
-                         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+                         headers={"Authorization": f"Bearer {str(key or '').strip() or 'EMPTY'}", "Content-Type": "application/json"})
     if r.status_code != 200:
         raise RuntimeError(f"模型返回 HTTP {r.status_code}: {r.text[:200]}")
     msg = r.json()["choices"][0]["message"]

@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+from _ds import safe_screenshot
 import sys
 from pathlib import Path
 
@@ -41,11 +42,11 @@ def shoot_pages(page, out_dir: Path, prefix: str = "page") -> list[str]:
     rects = page_rects(page)
     if not rects:                                 # 流式文档: 整页长截图当一页
         p = out_dir / f"{prefix}-01.png"
-        page.screenshot(path=str(p), full_page=True)
+        safe_screenshot(page, path=str(p), full_page=True)
         return [str(p)]
     for i, r in enumerate(rects, 1):
         p = out_dir / f"{prefix}-{i:02d}.png"
-        page.screenshot(path=str(p), full_page=True,
+        safe_screenshot(page, path=str(p), full_page=True,
                         clip={"x": r["x"], "y": r["y"], "width": r["w"], "height": r["h"]})
         paths.append(str(p))
     return paths

@@ -321,7 +321,7 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                 _t0 = time.time()
                 r = httpx.post(
                     f"{self.vllm_url}/chat/completions",
-                    headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                    headers={"Authorization": f"Bearer {str(self.api_key or '').strip() or 'EMPTY'}", "Content-Type": "application/json"},
                     json=payload,
                     timeout=_http_timeout,
                 )

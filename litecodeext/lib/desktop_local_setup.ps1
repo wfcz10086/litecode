@@ -7,6 +7,15 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 function LcSha256([byte[]]$d) { $x = [Security.Cryptography.SHA256]::Create(); try { ([BitConverter]::ToString($x.ComputeHash($d))).Replace('-','').ToLower() } finally { $x.Dispose() } }
 $marker = Join-Path $env:ProgramData 'LiteCode/openssh-installed-by-litecode.json'
+function Add-CapabilityWithTimeout([string]$Name, [int]$Seconds = 180) {
+    # Add-WindowsCapability 要连 Windows Update; 开着代理/公司网络时能一直卡着不返回 (2026-10-22 用户机), 限时
+    $job = Start-Job -ScriptBlock { param($n) Add-WindowsCapability -Online -Name $n -ErrorAction Stop | Out-Null } -ArgumentList $Name
+    if (-not (Wait-Job $job -Timeout $Seconds)) {
+        Stop-Job $job -ErrorAction SilentlyContinue; Remove-Job $job -Force -ErrorAction SilentlyContinue
+        throw ('Windows 可选功能安装 ' + $Seconds + ' 秒没完成（多半连不上 Windows Update）')
+    }
+    try { Receive-Job $job -ErrorAction Stop | Out-Null } finally { Remove-Job $job -Force -ErrorAction SilentlyContinue }
+}
 $existing = Get-Service -Name sshd -ErrorAction SilentlyContinue
 $builtinBefore = [bool](Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue)
 $via = ''
@@ -36,7 +45,7 @@ if (-not $existing) {
     if (-not $via) {
         $cap = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1
         if (-not $cap) { throw '本机没有 OpenSSH Server 可选功能, 自带安装包也没装上' }
-        Add-WindowsCapability -Online -Name $cap.Name | Out-Null
+        Add-CapabilityWithTimeout $cap.Name 180
         if ((Get-WindowsCapability -Online -Name $cap.Name).State -ne 'Installed') { throw 'Windows 可选功能装不上 OpenSSH Server' }
         $via = 'capability:' + $cap.Name
     }
