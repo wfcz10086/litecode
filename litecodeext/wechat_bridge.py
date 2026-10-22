@@ -72,7 +72,7 @@ class WeChatBotInstance(WeChatLifecycleMixin, WeChatMessageMixin, WeChatAgentCal
         self.manager = manager
 
         # 状态
-        self.status: str = "offline"       # offline / wait_scan / scanned / online / expired
+        self.status: str = "offline"       # offline / wait_scan / scanned / need_code / online / expired
         self.qr_url: Optional[str] = None
 
         # SDK 实例
@@ -237,6 +237,13 @@ class WeChatBridgeManager:
             await bot.shutdown()
         result = await bot.login()
         return {"bot_id": bot_id, **result}
+
+    def submit_verify_code(self, bot_id: str, code: str) -> dict:
+        """网页提交手机微信上显示的配对码 (wechatbot-sdk 0.3.0 扫码登录多出的一步)"""
+        bot = self.bots.get(bot_id)
+        if not bot:
+            return {"ok": False, "error": "not found"}
+        return bot.submit_verify_code(code)
 
     def list_bots(self) -> List[dict]:
         return [bot.info() for bot in self.bots.values()]

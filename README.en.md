@@ -434,9 +434,13 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Version history
 
-### v2.0.6 "Desktop" (上桌) (2026-10-22)
+### v2.0.7 "Desktop" (上桌) (2026-10-22)
 
 > Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
+
+**v2.0.7**
+- 💬 **WeChat bridge SDK 0.3.0**: when login asks for a pairing code, an input box appears in the WeChat panel; already-bound bots reuse their login; online/offline is reported to the server.
+- 🔄 **Desktop updates straight from GitHub**: releasing means pushing a tag; the tray reads `latest.json` in the repo and installs that tag's source archive.
 
 **v2.0.6**
 - ⚙️ **Settings**: model-reference fields, search mode and log level are dropdowns; the current model's id/URL follow the model list; DAG tool steps offer tool and sub-DAG names in a dropdown.

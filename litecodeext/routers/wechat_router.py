@@ -67,6 +67,14 @@ async def wx_relogin(bot_id: str, request: Request):
     return await mgr.relogin(bot_id)
 
 
+@router.post("/api/wechat/bots/{bot_id}/verify_code")
+async def wx_verify_code(bot_id: str, request: Request):
+    require_auth(request)
+    mgr = _need_wx()
+    body = await request.json()
+    return mgr.submit_verify_code(bot_id, str(body.get("code", "")))
+
+
 @router.get("/api/wechat/bots/{bot_id}")
 async def wx_bot_info(bot_id: str, request: Request):
     require_auth(request)

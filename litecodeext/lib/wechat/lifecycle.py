@@ -11,6 +11,14 @@ if _SDK_AVAILABLE:
     from lib.wechat.common import WeChatBot
 
 
+def _bot_agent() -> str:
+    try:
+        from lib.version import VERSION
+        return f"LiteCode/{VERSION.lstrip('v')}"
+    except Exception:
+        return "LiteCode/2"
+
+
 class WeChatLifecycleMixin:
     """WeChatBotInstance 的登录/回调/保活/停止/状态部分 (依赖实例在 __init__ 中初始化的属性)"""
 
@@ -34,13 +42,13 @@ class WeChatLifecycleMixin:
             cred_dir = Path.home() / ".wechatbot"
             cred_dir.mkdir(parents=True, exist_ok=True)
             cred_path = str(cred_dir / f"{self.bot_id}_creds.json")
-            self._bot = WeChatBot(
-                cred_path  = cred_path,
-                on_qr_url  = self._on_qr_url,
-                on_scanned = self._on_scanned,
-                on_expired = self._on_expired,
-                on_error   = self._on_error,
-            )
+            kw = dict(cred_path=cred_path, on_qr_url=self._on_qr_url, on_scanned=self._on_scanned,
+                      on_expired=self._on_expired, on_error=self._on_error)
+            try:   # wechatbot-sdk >= 0.3.0: 扫码后可能要输手机上显示的配对码; 0.2.x 没有这两个参数
+                self._bot = WeChatBot(**kw, on_verify_code=self._on_verify_code, bot_agent=_bot_agent())
+                self._hook_verify_poll()
+            except TypeError:
+                self._bot = WeChatBot(**kw)
 
             # 注册消息处理器
             @self._bot.on_message
@@ -120,17 +128,64 @@ class WeChatLifecycleMixin:
                 self.status = "offline"
                 self._last_hint = "请检查网络连接，或点击「重新登录」"
 
+    # ── 配对码 (wechatbot-sdk 0.3.0) ─────────────────────────
+    # SDK 的 on_verify_code 是同步回调、直接要返回值, 默认实现是从命令行 input() 读 —— 服务里没有命令行,
+    # 而且同步等待会卡住整个事件循环。做法: 回调只把状态置成 need_code 并返回空; 在 SDK 下一次轮询扫码状态时
+    # (这里包了一层, 是异步的) 等网页提交的配对码, 带上它再去轮询。
+    def _on_verify_code(self, is_retry: bool):
+        self.status = "need_code"
+        self._need_code = True
+        self._last_hint = ("配对码不对，请对照手机微信上的数字重新输入" if getattr(self, "_code_tried", False)
+                           else "请输入手机微信上显示的配对码")
+        log.info(f"[wx:{self.bot_id}] 需要配对码 (retry={is_retry or getattr(self, '_code_tried', False)})")
+        return None
+
+    def _hook_verify_poll(self):
+        api = getattr(self._bot, "_api", None)
+        orig = getattr(api, "poll_qr_status", None)
+        if orig is None:
+            return
+
+        async def poll(base_url, qrcode, verify_code=None):
+            if getattr(self, "_need_code", False) and not verify_code:
+                deadline = time.time() + 300
+                while getattr(self, "_need_code", False) and not getattr(self, "_submitted_code", None):
+                    if time.time() > deadline:
+                        self._need_code = False
+                        break
+                    await asyncio.sleep(0.5)
+                verify_code = getattr(self, "_submitted_code", None)
+                self._submitted_code = None
+                self._need_code = False
+                if verify_code:
+                    self._code_tried = True
+            return await orig(base_url, qrcode, verify_code)
+        api.poll_qr_status = poll
+
+    def submit_verify_code(self, code: str) -> dict:
+        code = "".join(ch for ch in str(code or "") if ch.isdigit())
+        if not code:
+            return {"ok": False, "error": "配对码是手机微信上显示的数字"}
+        if self.status != "need_code":
+            return {"ok": False, "error": f"当前状态是 {self.status}，不需要配对码"}
+        self._submitted_code = code
+        self.status = "scanned"
+        self._last_hint = "已提交配对码，等待确认…"
+        return {"ok": True}
+
     # ── SDK 回调 ─────────────────────────────────────────────
     def _on_qr_url(self, url: str):
         """SDK 回调：二维码 URL 已就绪"""
         self.qr_url = url
         self.status = "wait_scan"
+        self._need_code = False      # 配对码错太多次被拦后 SDK 会换新二维码
         self._last_error = None
         log.info(f"[wx:{self.bot_id}] 📱 二维码已生成，等待扫码")
 
     def _on_scanned(self):
         """SDK 回调：用户已扫码，等待手机确认"""
         self.status = "scanned"
+        self._code_tried = False
         log.info(f"[wx:{self.bot_id}] ✅ 已扫码，等待确认")
 
     def _on_expired(self):
@@ -273,7 +328,7 @@ class WeChatLifecycleMixin:
             "msg_count": self.msg_count,
             "last_active": self.last_active,
             "users": active_users,
-            "qr_url": self.qr_url if self.status == "wait_scan" else None,
+            "qr_url": self.qr_url if self.status in ("wait_scan", "need_code") else None,
             "last_error": self._last_error,
             "hint": self._last_hint,
         }

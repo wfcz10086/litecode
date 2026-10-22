@@ -23,6 +23,18 @@ prep_fail() { echo "APPLY_FAILED: $*" >&2; rm -rf "$NEW"; exit 2; }
 # ── 1. 准备 (不碰运行中的版本) ──
 rm -rf "$NEW" && mkdir -p "$NEW" || prep_fail "无法创建临时目录 $NEW"
 tar -xzf "$PKG" -C "$NEW" || prep_fail "代码包解压失败 (文件损坏或磁盘已满)"
+# GitHub 标签源码包 (<仓库>-<版本>/litecodeext/...) 转成代码包结构 (litecode/ + entrypoint.sh)
+if [ ! -d "$NEW/litecode" ]; then
+  SRC=$(find "$NEW" -mindepth 2 -maxdepth 2 -type d -name litecodeext | head -1)
+  if [ -n "$SRC" ]; then
+    TOP=$(dirname "$SRC")
+    mv "$SRC" "$NEW/litecode" || prep_fail "源码包结构转换失败"
+    [ -d "$TOP/skills_extra" ] && cp -a "$TOP/skills_extra/." "$NEW/litecode/skills/"
+    [ -f "$TOP/config.example.json" ] && cp "$TOP/config.example.json" "$NEW/litecode/config.default.json"
+    [ -f "$TOP/entrypoint.sh" ] && cp "$TOP/entrypoint.sh" "$NEW/entrypoint.sh"
+    rm -rf "$TOP"
+  fi
+fi
 [ -f "$NEW/litecode/web_ui.py" ] && [ -f "$NEW/litecode/litecode_server.py" ] || prep_fail "代码包不完整"
 [ -d "$APP" ] || prep_fail "当前版本目录 $APP 不存在"
 if [ -f "$APP/config.json" ]; then

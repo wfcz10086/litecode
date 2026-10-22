@@ -209,3 +209,24 @@ func sha256Is(p, want string) (bool, string) {
 	got := hex.EncodeToString(h.Sum(nil))
 	return want == "" || strings.EqualFold(got, want), got
 }
+
+
+// urlFor: latest.json 里的文件名是相对 BaseURL 的; 写成完整网址时直接用
+// (代码更新包可以指向 GitHub 的标签源码包, 发版 = 推标签)
+func urlFor(name string) string {
+	if strings.HasPrefix(name, "https://") || strings.HasPrefix(name, "http://") {
+		return name
+	}
+	return BaseURL + name
+}
+
+// localName: 下载到本地用的文件名 (完整网址取最后一段; GitHub 源码包网址最后一段是标签名, 补上扩展名)
+func localName(name string) string {
+	if i := strings.LastIndex(name, "/"); i >= 0 && strings.Contains(name, "://") {
+		name = name[i+1:]
+		if !strings.Contains(name, ".") || strings.HasPrefix(name, "v") && !strings.HasSuffix(name, ".gz") {
+			name += ".tar.gz"
+		}
+	}
+	return name
+}

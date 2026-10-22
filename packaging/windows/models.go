@@ -53,7 +53,7 @@ func ensureModels() {
 	if _, err := inDistro(30*time.Second, "test", "-f", marker); err == nil {
 		return // 已就绪
 	}
-	dst := filepath.Join(dataDir(), rel.ModelsFile)
+	dst := filepath.Join(dataDir(), localName(rel.ModelsFile))
 	if ok, _ := sha256Is(dst, rel.ModelsSHA256); !ok {
 		if rel.Version == "local" {
 			logf("模型包: 本地文件 %s 校验不符, 不导入", rel.ModelsFile)
@@ -66,7 +66,7 @@ func ensureModels() {
 		logf("模型包: 开始下载 %s (%d MB)", rel.ModelsFile, rel.ModelsSize>>20)
 		go zenity.Notify("正在后台下载本地语音和知识库模型 (约 "+fmt.Sprint(rel.ModelsSize>>20)+" MB), 期间配音会先用在线语音。",
 			zenity.Title(appName))
-		err := download(BaseURL+rel.ModelsFile, dst, rel.ModelsSHA256, func(done, total int64) {
+		err := download(urlFor(rel.ModelsFile), dst, rel.ModelsSHA256, func(done, total int64) {
 			if total > 0 {
 				setTip(fmt.Sprintf("LiteCode · 下载模型 %d%%", done*100/total))
 			}

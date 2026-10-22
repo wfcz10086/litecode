@@ -7,6 +7,8 @@ RUN rm -rf /opt/litecode /root/.ssh /root/.litecode /root/.wechatbot /root/.npm 
  && chmod 700 /root/.ssh
 # 底层镜像缺 openpyxl (Excel) 和 edge-tts (配音); 跑分里桌面版靠现场 pip 补, 会改动用户子系统 (2026-10-21)
 RUN pip3 install --break-system-packages openpyxl edge-tts && python3 -c "import openpyxl, edge_tts"
+# 2026-10-22 微信桥 SDK 0.3.0: 扫码后的配对码登录、已绑定机器人复用凭据、上下线通知 (基础镜像里是 0.2.0)
+RUN pip3 install --break-system-packages wechatbot-sdk==0.3.0 && python3 -c "import wechatbot"
 # [2026-10-22] 本地纯 CPU 语音合成 (默认引擎): sherpa-onnx 运行库进系统包; 模型文件 (Kokoro + 知识库向量模型, 约 860MB)
 # 不进系统包 —— 会让安装包超过 NSIS 单包 2GB 上限。模型单独发布为模型包, 托盘后台下载解到 /var/lib/litecode/models
 # (升级保留区, packaging/windows/models.go), 这里只建软链 /opt/litecode-models → 它 (tts_local / kb embed 按这个路径找)。

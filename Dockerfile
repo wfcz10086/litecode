@@ -158,8 +158,8 @@ RUN pip3 install --break-system-packages selenium || true
 RUN pip3 install --break-system-packages mcp cryptography pycryptodome qrcode paramiko || true
 
 # Group 5: 微信桥（pip 包名 wechatbot-sdk, import 名 wechatbot）
-RUN pip3 install --break-system-packages wechatbot-sdk==0.2.0 || \
-    pip3 install -i https://pypi.org/simple/ --break-system-packages wechatbot-sdk==0.2.0 || \
+RUN pip3 install --break-system-packages wechatbot-sdk==0.3.0 || \
+    pip3 install -i https://pypi.org/simple/ --break-system-packages wechatbot-sdk==0.3.0 || \
     echo "WARN: wechatbot-sdk 失败，微信桥不可用"
 # 验证 import 名（pip 装 wechatbot-sdk → import wechatbot）
 RUN python3 -c "import wechatbot; print('  ✓ wechatbot import OK')" || \

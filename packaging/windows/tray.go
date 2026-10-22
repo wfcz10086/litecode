@@ -198,9 +198,9 @@ func codeUpdate(rel *Release) {
 			dlg.Close()
 		}
 	}()
-	f := filepath.Join(dataDir(), "downloads", rel.CodeFile)
+	f := filepath.Join(dataDir(), "downloads", localName(rel.CodeFile))
 	os.MkdirAll(filepath.Dir(f), 0o755)
-	if err := download(BaseURL+rel.CodeFile, f, rel.CodeSHA256, func(d, t int64) {
+	if err := download(urlFor(rel.CodeFile), f, rel.CodeSHA256, func(d, t int64) {
 		dlg.Text(fmt.Sprintf("下载… %s / %s", mb(d), mb(t)))
 		dlg.Value(int(50 * d / max64(t, 1)))
 	}); err != nil {
@@ -265,9 +265,9 @@ func codeUpdate(rel *Release) {
 
 func fullUpdate(rel *Release) {
 	dlg, _ := zenity.Progress(zenity.Title("下载 LiteCode "+rel.Version), zenity.MaxValue(100))
-	f := filepath.Join(dataDir(), "downloads", rel.InstallerFile)
+	f := filepath.Join(dataDir(), "downloads", localName(rel.InstallerFile))
 	os.MkdirAll(filepath.Dir(f), 0o755)
-	err := download(BaseURL+rel.InstallerFile, f, rel.InstallerSHA256, func(d, t int64) {
+	err := download(urlFor(rel.InstallerFile), f, rel.InstallerSHA256, func(d, t int64) {
 		dlg.Text(fmt.Sprintf("下载完整安装包… %s / %s", mb(d), mb(t)))
 		dlg.Value(int(100 * d / max64(t, 1)))
 	})

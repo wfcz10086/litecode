@@ -6,7 +6,7 @@ let _wxForceRender=true;   // 首次 / 操作后强制全量渲染
 
 function _wxStateHash(d){
   // 生成轻量哈希：只关心会变化的字段
-  const bots=(d.bots||[]).map(b=>b.bot_id+':'+b.status+':'+(b.qr_url||'')+':'+b.msg_count+':'+(b.last_error||'')+':'+(b.users||[]).map(u=>u.user_id+u.token_expired+u.hours_remaining).join(',')).join('|');
+  const bots=(d.bots||[]).map(b=>b.bot_id+':'+b.status+':'+(b.qr_url||'')+':'+b.msg_count+':'+(b.last_error||'')+':'+(b.hint||'')+':'+(b.users||[]).map(u=>u.user_id+u.token_expired+u.hours_remaining).join(',')).join('|');
   const cfg=d.config||{};
   return bots+'##'+cfg.enabled+'##'+cfg.keepalive_hours+'##'+(cfg.keepalive_message||'')+'##'+(cfg.vision_model||'')+'##'+cfg.send_interval;
 }
@@ -35,8 +35,8 @@ async function loadWx(){
     const bots=d.bots||[];
     const allModels=mdlData.models||[];
     const visionModels=allModels.filter(m=>m.supports_vision);
-    const stColors={online:'var(--ac3)',wait_scan:'var(--wn)',scanned:'var(--ac2)',expired:'var(--dg)',offline:'var(--tx3)'};
-    const stLabels={online:'● 在线',wait_scan:'◎ 等待扫码',scanned:'◉ 已扫码',expired:'✕ 已过期',offline:'○ 离线'};
+    const stColors={online:'var(--ac3)',wait_scan:'var(--wn)',scanned:'var(--ac2)',need_code:'var(--wn)',expired:'var(--dg)',offline:'var(--tx3)'};
+    const stLabels={online:'● 在线',wait_scan:'◎ 等待扫码',scanned:'◉ 已扫码',need_code:'◉ 输入配对码',expired:'✕ 已过期',offline:'○ 离线'};
     let h='';
     // SDK 状态提示
     if(cfg.sdk_available===false){
@@ -113,6 +113,19 @@ async function loadWx(){
             <div class="dots" style="justify-content:center"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
             <div style="font-size:11px;color:var(--tx3);margin-top:6px">正在获取二维码…</div>
           </div>`;
+        } else if(b.status==='need_code'){
+          // wechatbot-sdk 0.3.0: 扫码后手机微信上会显示一串数字, 填进来才算登录完成
+          const cid='wx-code-'+b.bot_id.replace(/[^a-zA-Z0-9]/g,'_');
+          h+=`<div style="text-align:center;padding:12px;background:rgba(245,158,11,.06);border:1px solid var(--wn);border-radius:var(--rs);margin-bottom:6px">
+            <div style="font-size:12px;color:var(--wn);font-weight:600;margin-bottom:8px">🔢 ${esc(b.hint||'请输入手机微信上显示的配对码')}</div>
+            <div style="display:flex;gap:6px;justify-content:center">
+              <input id="${cid}" inputmode="numeric" autocomplete="one-time-code" placeholder="配对码" maxlength="12"
+                style="width:140px;padding:6px 8px;font-size:16px;letter-spacing:3px;text-align:center;border:1px solid var(--bd2);border-radius:6px;background:var(--bg);color:var(--tx)"
+                onkeydown="if(event.key==='Enter')wxSubmitCode('${b.bot_id}','${cid}')">
+              <button class="abtn" onclick="wxSubmitCode('${b.bot_id}','${cid}')" style="padding:6px 14px">确认</button>
+            </div>
+          </div>`;
+          setTimeout(()=>{const i=document.getElementById(cid);if(i&&document.activeElement!==i)i.focus();},0);
         } else if(b.status==='scanned'){
           h+=`<div style="text-align:center;padding:10px;background:rgba(59,130,246,.06);border:1px solid rgba(59,130,246,.2);border-radius:var(--rs);margin-bottom:6px">
             <div style="font-size:12px;color:var(--ac2);font-weight:600">✅ 已扫码，请在微信上确认登录</div>
@@ -155,7 +168,7 @@ async function loadWx(){
 function _wxSchedulePoll(bots){
   if(_wxPoll)clearTimeout(_wxPoll);
   if(!document.getElementById('pnl-wechat').classList.contains('open'))return;
-  const hasPending=bots.some(b=>b.status==='wait_scan'||b.status==='scanned');
+  const hasPending=bots.some(b=>b.status==='wait_scan'||b.status==='scanned'||b.status==='need_code');
   const hasOnline=bots.some(b=>b.status==='online');
   if(hasPending){
     // 扫码中：5秒轮询（足够快又不会造成闪烁）
@@ -462,4 +475,17 @@ function promptCard(title,desc,ph,defval=''){
     inp.onkeydown=(e)=>{if(e.key==='Enter')done(inp.value);if(e.key==='Escape')done('');};
     w.onclick=(e)=>{if(e.target===w)done('');};
   });
+}
+
+
+async function wxSubmitCode(botId, inputId){
+  const el=document.getElementById(inputId); const code=(el&&el.value||'').trim();
+  if(!code){toast('请输入配对码');return;}
+  try{
+    const r=await fetch(`/api/wechat/bots/${encodeURIComponent(botId)}/verify_code`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code})});
+    const d=await r.json();
+    if(!d.ok){toast('❌ '+(d.error||'提交失败'));return;}
+    toast('已提交配对码');
+  }catch(ex){toast('❌ '+ex);}
+  _wxForceRender=true;loadWx();
 }
