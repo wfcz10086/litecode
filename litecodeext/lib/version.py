@@ -3,7 +3,7 @@
 /health、/api/health、网页顶栏、启动日志、命令行横幅都从这里读。
 发版只改这里, 并在 README 的「版本更新」里补一段。
 """
-VERSION = "v2.0.9"
+VERSION = "v2.0.10"
 CODENAME = "上桌"
 CODENAME_EN = "Desktop"
 

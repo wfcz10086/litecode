@@ -38,10 +38,28 @@ def _is_ssrf_target(url: str) -> Optional[str]:
         except Exception as e:
             return f"DNS resolve failed: {e}"
     for ip in ips:
+        if _proxy_fake_ip(ip):
+            continue
         if (ip.is_private or ip.is_loopback or ip.is_link_local
                 or ip.is_multicast or ip.is_reserved or ip.is_unspecified):
             return f"target IP {ip} in disallowed range (private/loopback/link-local/metadata)"
     return None
+
+
+_FAKE_IP_V4 = ipaddress.ip_network("198.18.0.0/15")   # Clash/sing-box 等 fake-ip 模式的假地址段 (基准测试保留段, 无真实内网服务)
+_TEREDO = ipaddress.ip_network("2001::/32")
+
+
+def _proxy_fake_ip(ip) -> bool:
+    """本机开代理时 DNS 返回的"假地址": 真实连接由代理转发到公网, 不是内网目标, 放行。
+    2026-10-22 用户桌面版 (WSL 镜像网络 + 本机代理): coingecko 解析成 2001::6817:7dbd (= 104.23.125.189 的映射),
+    被当成保留段拦掉。Teredo 形式只在里面嵌的 IPv4 本身是公网地址时放行。"""
+    if ip.version == 4:
+        return ip in _FAKE_IP_V4
+    if ip in _TEREDO:
+        low = int(ip) & 0xFFFFFFFF
+        return any(ipaddress.ip_address(v).is_global for v in (low, low ^ 0xFFFFFFFF))
+    return False
 
 # ── 从 tool_dispatch 复用模块级依赖 (避免重复初始化 / 双份状态) ──
 # tool_dispatch 不 import web_search, 所以这里直接反向 import 安全.
