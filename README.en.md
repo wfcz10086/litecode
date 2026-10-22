@@ -434,9 +434,12 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Version history
 
-### v2.0.10 "Desktop" (上桌) (2026-10-22)
+### v2.0.11 "Desktop" (上桌) (2026-10-22)
 
 > Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
+
+**v2.0.11**
+- 🔍 **Remote SearXNG**: set `search.searxng_url` in `config.json` (a token path works) so desktop installs without a local SearXNG still get the primary search engine.
 
 **v2.0.10**
 - 🌐 **Web fetch works behind a local proxy**: fake-IP addresses (198.18.x) and IPv6-mapped public addresses are no longer blocked as internal; real private ranges still are.

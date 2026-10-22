@@ -686,7 +686,23 @@ def browser_read(url: str, wait_for: Optional[str] = None,
 # 部署: docker-compose 起 searxng/searxng + host network, 默认 127.0.0.1:18888
 # 配置端口由 env SEARXNG_URL 覆盖 (默认 http://127.0.0.1:18888)
 # ═══════════════════════════════════════════════════════
-_SEARXNG_URL = os.environ.get("SEARXNG_URL", "http://127.0.0.1:18888").rstrip("/")
+def _searxng_url_default() -> str:
+    """SearXNG 地址: 环境变量 SEARXNG_URL > config.json 的 search.searxng_url > 本机 18888。
+    桌面版本机没有 SearXNG, 可在配置里填远程的 (如带口令路径的 https://…/sx/<口令>), 一句话让 LiteCode 改配置即可。"""
+    env = os.environ.get("SEARXNG_URL", "").strip()
+    if env:
+        return env
+    try:
+        from lib.config import CFG
+        url = str((CFG.get("search") or {}).get("searxng_url") or "").strip()
+        if url:
+            return url
+    except Exception:
+        pass
+    return "http://127.0.0.1:18888"
+
+
+_SEARXNG_URL = _searxng_url_default().rstrip("/")
 _SEARXNG_TIMEOUT = float(os.environ.get("SEARXNG_TIMEOUT", "8"))
 
 
