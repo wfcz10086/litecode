@@ -1,0 +1,169 @@
+{
+ "_litecode_template": {
+  "name": "qwen21_edit",
+  "kind": "image",
+  "desc": "Qwen-Image-2.1 图片编辑 (1 张图 + 指令; 尺寸跟随原图比例)",
+  "requires_nodes": [
+   "TextEncodeQwenImage21",
+   "QwenImage21Cache"
+  ],
+  "params": {
+   "prompt": [
+    "enc.prompt"
+   ],
+   "negative": [
+    "enc.negative_prompt"
+   ],
+   "seed": [
+    "ks.seed"
+   ],
+   "steps": [
+    "ks.steps"
+   ],
+   "cfg": [
+    "ks.cfg"
+   ],
+   "sampler": [
+    "ks.sampler_name"
+   ],
+   "scheduler": [
+    "ks.scheduler"
+   ],
+   "resolution": [
+    "enc.resolution"
+   ]
+  },
+  "inputs": {
+   "image": "img1.image"
+  },
+  "required_inputs": [
+   "image"
+  ],
+  "defaults": {
+   "steps": 15,
+   "sampler": "dpmpp_2m",
+   "scheduler": "simple",
+   "cfg": 1.0
+  },
+  "notes": "enc.resolution=1024≈1MP / 2048≈4MP 像素预算 (--set enc.resolution=2048)"
+ },
+ "prompt": {
+  "unet": {
+   "class_type": "UNETLoader",
+   "inputs": {
+    "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+    "weight_dtype": "default"
+   }
+  },
+  "cache": {
+   "class_type": "QwenImage21Cache",
+   "inputs": {
+    "model": [
+     "unet",
+     0
+    ],
+    "device": "auto",
+    "dtype": "default"
+   }
+  },
+  "clip": {
+   "class_type": "CLIPLoader",
+   "inputs": {
+    "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+    "type": "qwen_image",
+    "device": "default"
+   }
+  },
+  "vae": {
+   "class_type": "VAELoader",
+   "inputs": {
+    "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+   }
+  },
+  "img1": {
+   "class_type": "LoadImage",
+   "inputs": {
+    "image": "input_1.png"
+   }
+  },
+  "enc": {
+   "class_type": "TextEncodeQwenImage21",
+   "inputs": {
+    "clip": [
+     "clip",
+     0
+    ],
+    "prompt": "Change the background to a sunset beach",
+    "negative_prompt": "",
+    "resolution": 1024,
+    "vae": [
+     "vae",
+     0
+    ],
+    "images.image_1": [
+     "img1",
+     0
+    ]
+   }
+  },
+  "ks": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "cache",
+     0
+    ],
+    "positive": [
+     "enc",
+     0
+    ],
+    "negative": [
+     "enc",
+     1
+    ],
+    "latent_image": [
+     "enc",
+     2
+    ],
+    "seed": 42,
+    "steps": 25,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "denoise": 1.0
+   }
+  },
+  "dec": {
+   "class_type": "VAEDecode",
+   "inputs": {
+    "samples": [
+     "ks",
+     0
+    ],
+    "vae": [
+     "vae",
+     0
+    ]
+   }
+  },
+  "rgb": {
+   "class_type": "SplitImageWithAlpha",
+   "inputs": {
+    "image": [
+     "dec",
+     0
+    ]
+   }
+  },
+  "save": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "rgb",
+     0
+    ],
+    "filename_prefix": "litecode/qwen21_edit"
+   }
+  }
+ }
+}

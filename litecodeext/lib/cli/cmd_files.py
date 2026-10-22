@@ -54,11 +54,23 @@ def _fetch_to(path: str, params: dict, what: str, name: str, out):
     dest = Path(out) if out else Path(name)
     if dest.is_dir():
         dest = dest / name
+    # [large-file 2026-10-21] 先写 .part, 收全 (且与 Content-Length 一致) 再改名: 断网不会留下"看着完整"的半截文件
     size = 0
-    with dest.open("wb") as fh:
-        for chunk in r.iter_content(65536):
-            fh.write(chunk)
-            size += len(chunk)
+    part = dest.with_name(dest.name + ".part")
+    try:
+        with part.open("wb") as fh:
+            for chunk in r.iter_content(1024 * 1024):
+                fh.write(chunk)
+                size += len(chunk)
+    except (requests.RequestException, OSError) as e:
+        part.unlink(missing_ok=True)
+        _err(f"下载 {what} 中断 (已收 {_human(size)}): {e}")
+    hdrs = getattr(r, "headers", None) or {}
+    expect = str(hdrs.get("Content-Length", ""))
+    if expect.isdigit() and not hdrs.get("Content-Encoding") and int(expect) != size:
+        part.unlink(missing_ok=True)
+        _err(f"下载 {what} 不完整: 收到 {size} / {expect} 字节")
+    part.replace(dest)
     _ok(f"已下载 {what} → {dest} ({_human(size)})")
 
 

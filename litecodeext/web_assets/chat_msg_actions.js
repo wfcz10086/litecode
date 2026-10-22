@@ -109,13 +109,15 @@ async function _truncateSession(keep){
 /* [P54+] 扫消息文本里的绝对路径 → 渲染预览块 */
 const _PV_EXT_IMG = /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i;
 const _PV_EXT_VID = /\.(mp4|mov|webm)$/i;
-const _PV_EXT_AUD = /\.(mp3|wav|ogg)$/i;
+const _PV_EXT_AUD = /\.(mp3|wav|ogg|m4a|flac)$/i;
 const _PV_EXT_PDF = /\.pdf$/i;
 const _PV_EXT_TXT = /\.(md|txt|json|csv|tsv|log|yaml|yml|py|sh|js|ts|html|css)$/i;
 const _PV_EXT_OFFICE = /\.(pptx?|docx?|xlsx?|odt|odp|ods)$/i;
 /* [Q15 2026-07-24] 扩宽路径匹配 — /tmp/pptx_plugin_out /tmp/cad_plugin_out
  * /tmp/{任何}_plugin_out 都算合法工件路径, 支持 plugin 自建输出目录 */
-const _PV_PATH_RE = /(?:^|[\s`"'(\[])(\/(?:tmp\/(?:openclaw_workspace|litecode_workspace|[\w-]+_plugin_out|[\w-]+_out)|root\/\.litecode|home\/[\w-]+\/\.litecode)\/[\w./_\-一-鿿]+\.\w{2,6})/g;
+/* [2026-10-21] 前缀原来只认空格/引号/括号, 中文回复常写「报告：/tmp/…pdf」, 全角冒号/逗号/括号后的路径都不出预览;
+ * 改成前一个字符不是路径字符即可 */
+const _PV_PATH_RE = /(?:^|[^\w/.\-~])(\/(?:tmp\/(?:openclaw_workspace|litecode_workspace|[\w-]+_plugin_out|[\w-]+_out)|root\/\.litecode|home\/[\w-]+\/\.litecode)\/[\w./_\-一-鿿]+\.\w{2,6})/g;
 
 async function _scanAndPreview(container, rawText){
   if (!rawText || !container) return;
@@ -129,9 +131,13 @@ async function _scanAndPreview(container, rawText){
     if (paths.length >= 6) break;
   }
   if (!paths.length) return;
+  /* [ui-audit 2026-10-21] 同一条消息里正文和工具结果都提到同一路径时只出一张预览卡 (原来重复两张) */
+  const root = (container.closest && container.closest('.msg')) || container;
   for (const p of paths){
+    if (Array.from(root.querySelectorAll('.pv-card')).some(c => c.dataset.path === p)) continue;
     const card = document.createElement('div');
     card.className = 'pv-card';
+    card.dataset.path = p;
     card.style.cssText = 'margin:8px 0;border:1px solid var(--bd);border-radius:6px;overflow:hidden;background:var(--bg1)';
     const name = p.split('/').pop();
     const header = document.createElement('div');
@@ -143,7 +149,7 @@ async function _scanAndPreview(container, rawText){
     else if (_PV_EXT_PDF.test(name)) icon = '📕';
     // [C 2026-05-22] 图片/视频卡默认展开 (用户最常想直接看图, 不用再点开)
     // 文本/PDF 类默认收起 (避免长文本撑爆消息列表)
-    const _autoOpen = _PV_EXT_IMG.test(name) || _PV_EXT_VID.test(name);
+    const _autoOpen = _PV_EXT_IMG.test(name) || _PV_EXT_VID.test(name) || _PV_EXT_AUD.test(name);  /* [tts 2026-10-22] 音频也直接出播放器 */
     header.innerHTML = `<span><span class="arr" style="display:inline-block;transition:transform .15s${_autoOpen?';transform:rotate(90deg)':''}">&#x25BA;</span> ${icon} <span style="color:var(--ac)">${esc(name)}</span></span><span style="display:flex;gap:6px;align-items:center"><a href="/api/media?path=${encodeURIComponent(p)}" target="_blank" style="color:var(--tx3);font-size:10px;text-decoration:none" title="新标签打开">↗</a><a href="/api/media?path=${encodeURIComponent(p)}" download="${esc(name)}" style="color:var(--ac2);font-size:10px;text-decoration:none;font-weight:600" title="下载">↓</a></span>`;
     const body = document.createElement('div');
     body.style.cssText = `display:${_autoOpen?'block':'none'};padding:8px 10px;max-height:480px;overflow:auto`;
@@ -213,6 +219,8 @@ async function _scanAndPreview(container, rawText){
         body.innerHTML = _lcImgHtml(p, name, 480);  /* [perf] 缩略图 + lazy, 点击看原图 */
       } else if (_PV_EXT_VID.test(name)){
         body.innerHTML = `<video controls style="max-width:100%;border-radius:4px"><source src="/api/media?path=${encodeURIComponent(p)}"></video>`;
+      } else if (_PV_EXT_AUD.test(name)){
+        body.innerHTML = `<audio controls preload="metadata" style="width:100%"><source src="/api/media?path=${encodeURIComponent(p)}"></audio>`;
       }
     }
   }

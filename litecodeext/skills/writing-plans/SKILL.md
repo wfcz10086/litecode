@@ -1,6 +1,7 @@
 ---
 name: writing-plans
 description: 当你有规格说明或需求用于多步骤任务时使用，在动手写代码之前
+aliases: ["规划", "计划", "plan", "实现计划", "任务拆解"]
 ---
 
 # 编写计划

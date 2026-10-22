@@ -56,12 +56,28 @@ async def delete_session_api(sid: str, request: Request):
 async def interrupt_session_api(sid: str, request: Request):
     """标记 session 中断，agent 循环在下一轮迭代时会检测并退出。"""
     require_auth(request)
-    with _interrupt_lock:
-        _interrupt_flags.add(sid)
-    from lib.session import _stop_background_agents
-    _stop_background_agents(sid)
+    from lib.session import set_interrupt
+    set_interrupt(sid)          # 打标记 + 停后台子代理 + 停本会话的后台进程 (keep_alive 的不动)
     log.info(f"[INTERRUPT] flagged session {sid}")
     return {"ok": True, "sid": sid}
+
+
+@router.post("/v1/sessions/{sid}/steer")
+async def steer_session_api(sid: str, request: Request):
+    """运行中插话: 回合进行中才排队, 由 agent 循环在两步之间接进上下文; 没有进行中的回合返回 queued=False。"""
+    require_auth(request)
+    from lib.session import _session_locks, push_steer
+    body = await request.json()
+    text = str(body.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "empty")
+    lock = _session_locks.get(sid)
+    if not (lock and lock.locked()):
+        return {"ok": True, "queued": False}
+    urgent = bool(body.get("urgent"))
+    push_steer(sid, text[:4000], urgent=urgent)
+    log.info(f"[STEER] {sid} {'立即' if urgent else '排队'}: {text[:60]}")
+    return {"ok": True, "queued": True, "urgent": urgent}
 
 
 @router.get("/v1/bgprocs")

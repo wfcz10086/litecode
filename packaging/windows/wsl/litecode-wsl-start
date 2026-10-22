@@ -1,0 +1,34 @@
+#!/bin/bash
+# WSL 里启动 LiteCode (相当于容器的 ENTRYPOINT); 前台运行, 托盘程序持有这个进程, 退出即服务停止。
+set -a; . /etc/litecode.env; set +a
+# 桌面版只监听本机: WSL 默认 NAT 外部本来访问不到, 但用户开了镜像网络 (networkingMode=mirrored) 时
+# 0.0.0.0 会让局域网直连 Web UI / Server。托盘也会经 WSLENV 传这个变量; 这里兜底 (服务器版 docker 不经过本脚本)。
+export LITECODE_BIND_HOST=${LITECODE_BIND_HOST:-127.0.0.1}
+# 同一子系统里只跑一份服务 ([2026-10-21 实机] 安装时已拉起, 托盘启动又拉一次 → 两个 wsl.exe 两套服务抢端口)。
+# exec 后 entrypoint.sh 沿用本进程 PID, pid 文件即服务主进程; 已在跑就以 75 退出, 托盘据此不当作崩溃。
+PIDF=/run/litecode-service.pid
+mkdir -p /run
+exec 8>/run/litecode-service.lock
+flock 8
+p=$(cat "$PIDF" 2>/dev/null)
+if [ -n "$p" ] && [ "$p" != "$$" ] && grep -qaE 'entrypoint.sh|litecode-wsl-start' "/proc/$p/cmdline" 2>/dev/null; then
+  echo "LiteCode 服务已在运行 (pid $p), 不重复启动"
+  exit 75
+fi
+echo $$ > "$PIDF"
+exec 8>&-
+# WSLg 会把 /tmp/.X11-unix 挂成只读, 我们自己的 Xvfb :99 要在这里建套接字
+if mountpoint -q /tmp/.X11-unix 2>/dev/null; then umount -l /tmp/.X11-unix 2>/dev/null || true; fi
+mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+# WSLg 还会设 WAYLAND_DISPLAY / DISPLAY=:0: x11vnc 看到 Wayland 直接退出 (远程桌面连不上),
+# 浏览器/录屏也会跑到 WSLg 的显示器上。统一用我们自己的 Xvfb :99 (2026-10-21 实机)
+unset WAYLAND_DISPLAY XDG_RUNTIME_DIR PULSE_SERVER
+export DISPLAY=:99
+# playwright 要的浏览器版本 (1223) 和系统包里带的 (1234) 不同: 建好链接, 否则浏览器起不来,
+# 模型自己跑 playwright install 还会把 1234 当"过时"删掉 (2026-10-21 实机踩过)
+python3 /usr/local/bin/playwright_link_browsers.py 2>/dev/null || true
+# 内置知识库数据库 (PostgreSQL 16 + pgvector, 只听 127.0.0.1:15432, 数据在升级保留区 /var/lib/litecode/kb_pg);
+# 首次自动 initdb 并把 kb.dsn 写进 config.json。起不来只记日志, 不挡 LiteCode 启动 (知识库面板会显示原因)
+/usr/local/bin/litecode-kb-pg >> /root/.litecode/kb_pg.log 2>&1 || echo "知识库数据库没有启动, 见 /root/.litecode/kb_pg.log"
+cd /opt/litecode
+exec /entrypoint.sh all

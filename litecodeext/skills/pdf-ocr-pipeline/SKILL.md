@@ -2,8 +2,8 @@
 name: pdf-ocr-pipeline
 description: >
   把任意大小的 PDF (尤其是带图片/扫描件/混合版式) 提取为按页面顺序拼接的 Markdown.
-  自动检测每页有没有文字层: 有 → pdfplumber 直接抽取; 没有 → vision_ocr 识别图片.
-  最后按页号顺序合并成单一 out.md. 支持 30MB / 200+ 页大文件, 走 DAG 并行分批.
+  自动检测每页有没有文字层: 有 → pdfplumber 直接抽取; 没有 → 栅格化成 PNG 后 vision_ocr 识别
+  (paths 多页一批, 每批 ≤8 张). 最后按页号顺序合并成单一 out.md. 支持 30MB / 200+ 页大文件.
   触发词: pdf转md, pdf ocr, 扫描件识别, pdf提取, pdf to markdown, 论文pdf, 报告pdf.
 ---
 
@@ -16,7 +16,7 @@ description: >
 - ✅ 纯文字 PDF (论文 / 小说 / 报告)
 - ✅ 纯扫描件 PDF (图片化的古籍 / 合同扫描)
 - ✅ 混合 PDF (有文字层 + 有嵌入图片/图表)
-- ✅ 大文件 (30MB / 200+ 页, 走 DAG 并行)
+- ✅ 大文件 (30MB / 200+ 页, 分批 + 断点续跑)
 - ❌ 带加密/密码的 PDF (先 `qpdf --decrypt`)
 
 ## 环境依赖
@@ -38,10 +38,10 @@ pip3 install pdfplumber pypdfium2 pillow --break-system-packages
 │     - 没文字: page → png @ 200 DPI           │
 └──────────────────────────────────────────────┘
          ↓
-┌─ 2. 并行 OCR (vision_ocr) ────────────────────┐
-│   批次 ≤ 5 页, 避免视觉模型并发爆                │
-│   spawn_agent(parallel_tasks=[...])            │
-│   每 task = vision_ocr(page_NNN.png)           │
+┌─ 2. 分批 OCR (vision_ocr paths) ──────────────┐
+│   每批 1~8 页 (按文字密度), 一次调用           │
+│   vision_ocr(paths=[page_012.png, ...])        │
+│   按 <<<PAGE N>>> 切开写 page_NNN.md           │
 └──────────────────────────────────────────────┘
          ↓
 ┌─ 3. 顺序合并 ────────────────────────────────┐
@@ -54,14 +54,14 @@ pip3 install pdfplumber pypdfium2 pillow --break-system-packages
 ## Step 1: 写 extract.py (分页 + 分流)
 
 ```python
-# write_file: /tmp/openclaw_workspace/pdf_extract.py
+# write_file: /tmp/litecode_workspace/pdf_extract.py
 import pdfplumber
 import pypdfium2 as pdfium
 from pathlib import Path
 import sys, json, os
 
 pdf_path = sys.argv[1]
-out_dir = Path(sys.argv[2])  # e.g. /tmp/openclaw_workspace/pdf_pages
+out_dir = Path(sys.argv[2])  # e.g. /tmp/litecode_workspace/pdf_pages
 out_dir.mkdir(parents=True, exist_ok=True)
 
 text_layer = {}  # page_num -> text (非空表示有文字层)
@@ -101,33 +101,43 @@ print(f"meta: {out_dir}/meta.json")
 
 运行:
 ```
-execute_shell('python3 /tmp/openclaw_workspace/pdf_extract.py input.pdf /tmp/openclaw_workspace/pdf_pages')
+execute_shell('python3 /tmp/litecode_workspace/pdf_extract.py input.pdf /tmp/litecode_workspace/pdf_pages')
 ```
 
-## Step 2: 并行 OCR (调用 vision_ocr)
+## Step 2: OCR (vision_ocr, 多页一批)
 
-**大文件批处理原则**: 一次 ≤ 5 页 OCR, 防视觉模型并发崩。
+`vision_ocr` 支持 `paths` 一次传多张图 (**上限 8 张**), 主 agent 直接分批调用即可, 一般不需要派子代理。
+
+**批大小按文字密度定** (一次调用的所有图共用 `max_tokens`, 塞多了后几页会被截断):
+| 页面类型 | 每批 | max_tokens |
+| --- | --- | --- |
+| 幻灯片、图片为主、字少 | 6~8 页 | 8192 |
+| 普通正文页 | 2~3 页 | 8192 |
+| 密集小字、表格、古籍 | 1 页 | 8192 |
 
 ```
-# 伪代码: 遍历 meta.ocr_needed, 分批
-# 每批用 spawn_agent(parallel_tasks=[...])
-
-batches = [ocr_needed[i:i+5] for i in range(0, len(ocr_needed), 5)]
-for batch in batches:
-    spawn_agent(parallel_tasks=[
-        {"task": f"调 vision_ocr('/tmp/openclaw_workspace/pdf_pages/page_{p:03d}.png', prompt='请逐字识别页面内容, 保留标题/段落/表格/列表/公式结构, 输出 Markdown.'). 把返回结果 write_file 到 /tmp/openclaw_workspace/pdf_pages/page_{p:03d}.md",
-         "agent_type": "researcher"}  # researcher 有 vision_ocr 权限
-        for p in batch
-    ])
+# 每批调用 (以 3 页为例; 页号来自 meta.ocr_needed)
+vision_ocr(
+  paths=["/tmp/litecode_workspace/pdf_pages/page_012.png",
+         "/tmp/litecode_workspace/pdf_pages/page_013.png",
+         "/tmp/litecode_workspace/pdf_pages/page_014.png"],
+  prompt="这 3 张图依次是 PDF 第 12、13、14 页。逐字识别每页内容, 保留标题/段落/表格/列表/公式结构, 输出 Markdown。"
+         "每页必须以单独一行 `<<<PAGE 12>>>` 这样的标记开头 (用真实页号), 不要省略、不要总结。",
+  max_tokens=8192)
 ```
+拿到结果后:
+1. 按 `<<<PAGE N>>>` 切开, 每页写到 `pdf_pages/page_NNN.md` (用 execute_shell 跑一小段 Python 切分写盘, 别手抄)。
+2. **数标记**: 切出来的页数 ≠ 本批图数, 或某页内容明显被截断 → 把缺的页单独 (1 页 1 批) 重跑。
+3. 只想要纯文字不要画面描述: 不写 prompt 时用 `mode="ocr"`; 写了 prompt 就以 prompt 为准 (prompt 会覆盖 mode)。
 
-> **注意**: writer 也能调 vision_ocr (v1.1 起), 但小文件用 researcher 更便宜。
-> 总页数 < 10 时可以直接主 agent 串行调用 vision_ocr, 不用 spawn_agent。
+主模型不支持视觉也没关系, vision_ocr 会自动转给 `vision_fallback_id` 配置的视觉模型。
+
+**要不要派子代理**: 需要 OCR 的页 ≤ 40 页, 主 agent 串行分批即可。更多页时可以用 `spawn_agent(parallel_tasks=[...])` 按页段拆给 **writer** 子代理 (子代理里只有 writer 带 vision_ocr; researcher 没有), 每个子代理负责一个页段并把 page_NNN.md 写盘, **同时运行的不超过 3 个**, 防视觉模型排队超时。
 
 ## Step 3: 按页号顺序拼接
 
 ```python
-# write_file: /tmp/openclaw_workspace/pdf_concat.py
+# write_file: /tmp/litecode_workspace/pdf_concat.py
 import json, sys
 from pathlib import Path
 
@@ -153,7 +163,7 @@ print(f"合并完成: {out_path} ({Path(out_path).stat().st_size} bytes)")
 
 运行:
 ```
-execute_shell('python3 /tmp/openclaw_workspace/pdf_concat.py /tmp/openclaw_workspace/pdf_pages /tmp/openclaw_workspace/out.md input.pdf')
+execute_shell('python3 /tmp/litecode_workspace/pdf_concat.py /tmp/litecode_workspace/pdf_pages /tmp/litecode_workspace/out.md input.pdf')
 ```
 
 ## 大文件优化 (30MB / 200+ 页)
@@ -168,15 +178,14 @@ for start in range(0, total, 50):
 ```
 
 ### (2) 分片 OCR
-总页数 > 50 时用 DAG 代替 parallel_tasks, 错一批不崩全局:
+需要 OCR 的页 > 40 时按页段拆给子代理 (agent_type 用 **writer**, 只有它带 vision_ocr), 每段 30~50 页, 同时最多 3 个:
 ```
-spawn_agent(dag_tasks=[
-    {"step_id": "batch_1",  "agent_type": "researcher", "task": "OCR page 1-50", ...},
-    {"step_id": "batch_2",  "agent_type": "researcher", "task": "OCR page 51-100", "depends_on": []},
-    ...
-    {"step_id": "merge", "agent_type": "coder", "task": "拼接", "depends_on": ["batch_1","batch_2",...]}
+spawn_agent(parallel_tasks=[
+    {"agent_type": "writer", "task": "对 /tmp/litecode_workspace/pdf_pages/ 下 page_001~050.png 按 pdf-ocr-pipeline 的 Step 2 分批调 vision_ocr(paths=...), 每页结果写 page_NNN.md; 已存在的 page_NNN.md 跳过"},
+    {"agent_type": "writer", "task": "同上, 负责 page_051~100.png"},
 ])
 ```
+子代理结论带 [未验证] 时, 合并前自己数一遍 page_NNN.md 是否齐全。
 
 ### (3) 缓存
 每页 OCR 完立刻 write_file, 中途崩了下次可续跑。合并前检查 page_NNN.md 是否已存在, 存在则跳过。
@@ -185,13 +194,13 @@ spawn_agent(dag_tasks=[
 
 写完 out.md 后:
 ```bash
-wc -m /tmp/openclaw_workspace/out.md  # 字符数
+wc -m /tmp/litecode_workspace/out.md  # 字符数
 # 抽样: head -200, tail -200, grep 100 个随机页号
 python3 -c "
 import re
-t = open('/tmp/openclaw_workspace/out.md').read()
+t = open('/tmp/litecode_workspace/out.md').read()
 pages = len(re.findall(r'^## Page \d+$', t, re.M))
-failed = t.count('[Page') - pages  # [Page N OCR 失败] 算一次失败
+failed = t.count('OCR 失败')
 print(f'已收录 {pages} 页, 失败 {failed} 页')
 "
 ```
@@ -199,8 +208,10 @@ print(f'已收录 {pages} 页, 失败 {failed} 页')
 ## 禁止
 
 - ❌ 不检测文字层就全部走 OCR (浪费视觉模型 token)
-- ❌ 30 页以下用 DAG (增加复杂度, 主 agent 直接串行更好)
-- ❌ 并发 > 5 个 vision_ocr (视觉模型容易超时)
+- ❌ 需要 OCR 的页不多 (≤40) 还派子代理 (主 agent 用 paths 分批更快)
+- ❌ 同时 > 3 个子代理并发调 vision_ocr (视觉模型排队超时)
+- ❌ 文字密集页一批塞 8 张 (共用 max_tokens, 后几页会被截断)
+- ❌ 派 researcher 子代理做 OCR (它没有 vision_ocr)
 - ❌ 合并时忘记按页号排序 (必须 1..N 顺序)
 - ❌ 不清理 pdf_pages/ 临时目录 (大 PDF 几百 MB 图片)
 
@@ -210,7 +221,7 @@ print(f'已收录 {pages} 页, 失败 {failed} 页')
 - `.docx` → load_skill docx (python-docx, 不需要 OCR, 直接拿文字)
 - `.xlsx` → load_skill xlsx (openpyxl + pandas)
 - `.pptx` → load_skill pptx (python-pptx)
-- `.jpg/.png` → 直接调 `vision_ocr(path)`
+- `.jpg/.png` → load_skill image-ocr (vision_ocr, 多图对比用 paths)
 
 ## 触发示例
 
@@ -222,8 +233,8 @@ print(f'已收录 {pages} 页, 失败 {failed} 页')
 3. execute_shell: 运行 pdf_extract.py
 4. 根据 meta.json.ocr_pages:
    - 0 页: 跳到 Step 3 直接合并
-   - 1-10 页: 主 agent 串行调 vision_ocr
-   - 11+ 页: spawn_agent(parallel_tasks) 分批 5 页 OCR
+   - 1-40 页: 主 agent 按 Step 2 分批调 vision_ocr(paths=...)
+   - 40+ 页: spawn_agent(parallel_tasks) 按页段拆给 writer 子代理
 5. write_file: pdf_concat.py (Step 3)
 6. execute_shell: 运行 pdf_concat.py
 7. wc + head + tail 验证

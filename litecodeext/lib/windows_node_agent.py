@@ -511,7 +511,14 @@ def run_job(config, root, job, capabilities=None):
                 images[name] = base64.b64encode((folder / name).read_bytes()).decode()
         return {'result': result, 'images': images}
     except Exception as exc:
-        return {'result': {'ok': False, 'state': 'error', 'error': str(exc)}, 'images': {}}
+        error = str(exc)
+        try:   # 截图失败: 附上本会话真实状态 (断开/锁屏/远程桌面最小化), 免得模型凭 LogonUI 进程误判
+            from windows_system_actions import capture_failure_hint, is_capture_failure
+            if is_capture_failure(error):
+                error += capture_failure_hint()
+        except Exception:
+            pass
+        return {'result': {'ok': False, 'state': 'error', 'error': error}, 'images': {}}
     finally:
         for file in folder.glob('*'):
             file.unlink(missing_ok=True)

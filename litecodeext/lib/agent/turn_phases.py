@@ -31,6 +31,7 @@ from lib.session import _interrupt_flags
 from lib.session import _interrupt_lock
 from lib.session import get_history as _get_history
 from lib.skills import auto_load_skills
+from lib import skill_turn as _skill_turn
 from lib.sse import sse_content
 from lib.sse import sse_done
 from lib.sse import sse_error
@@ -113,7 +114,9 @@ async def _turn_finalize(
         )
         if not _had_assistant_msg:
             _empty_reason = "LLM 返回空 (可能上游超时/限流), 请重试"
-            yield sse_error(_empty_reason, retry_hint=True, model=model)
+            from lib.friendly_errors import empty_reply as _fe_empty   # [trace] 友好错误卡片字段
+            yield sse_error(_empty_reason, retry_hint=True, model=model,
+                            friendly=_fe_empty(f"{_empty_reason} (model={model})"))
             # 落埋点
             try:
                 from pathlib import Path
@@ -136,6 +139,8 @@ async def _turn_finalize(
         _bg_note = _sa_reg.turn_end_note(_ctx.session_id, _ctx.new_msgs)
         if _bg_note:
             yield sse_content(_bg_note, model)
+        if _ctx.turn_skills:   # 本轮用到的技能 → web_ui 写进助手消息 meta.skills
+            yield sse_status("turn_skills", sorted(_ctx.turn_skills), model)
         yield sse_usage(_usage.total_prompt_tokens, _usage.total_completion_tokens,
                        _usage.total_iterations, _usage.elapsed, model)
         yield sse_stop(model)
@@ -248,6 +253,7 @@ def _turn_setup_context(
         (_sess_dir / "memory").mkdir(exist_ok=True)
 
     _ctx.base_history = _get_history(_ctx.session_id) if _ctx.session_id else []
+    _skill_turn.begin(_ctx.turn_skills, _ctx.forced_skills)   # 本轮技能: 强制指定 + 使用记录
     # 随消息变化的委派指令/匹配技能/记忆召回挂到本轮 user 消息前, system prompt 逐轮字节不变
     # (lib/turn_context.py + lib/turn_sources.py); 历史里存过的上下文按原样拼回
     _hist_anchor, _ctx.turn_context, _ctx.base_history = _turn_prepare(
@@ -278,11 +284,21 @@ def _turn_setup_context(
     if HAS_MEMORY_INDEX and not _turn_ctx_enabled():   # 开启时由 turn_sources.memory_index 提供
         try:
             _midx = memory_index_get(WORKSPACE)
-            _hist_ctx = _midx.search_as_context(user_message, limit=3, max_chars=1500)
+            _hist_ctx = _midx.search_as_context(user_message, limit=3, max_chars=1500,
+                                                exclude_categories=("profile",))
             if _hist_ctx:
                 sys_prompt += "\n\n" + _hist_ctx
         except Exception as _me:
             log.warning(f"  [memory_index] search failed: {_me}")
+    if not _turn_ctx_enabled():   # 旧路径: 全局用户档案进 system prompt (开启时由 turn_sources.user_profile 提供)
+        try:
+            from lib.turn_sources import user_profile as _up_src
+            from lib.turn_context import TurnInput as _TI
+            _up = _up_src(_TI(user_message, _ctx.session_id or ""))
+            if _up:
+                sys_prompt += "\n\n" + _up
+        except Exception as _upe:
+            log.warning(f"  [user_profile] inject failed: {_upe}")
     if not _turn_ctx_enabled():   # 旧路径: 失败经验同样进 system prompt (开启时由 turn_sources 提供)
         _fl_exp = _fl_recall(user_message, _ctx.session_id)
         if _fl_exp:

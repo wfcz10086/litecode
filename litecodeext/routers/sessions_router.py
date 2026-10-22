@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 from lib.audit import audit_log
 from lib.owner import current_user, require_owner
@@ -30,6 +31,30 @@ def _wui():
     return web_ui
 
 
+def session_exists(sid: str, wui=None) -> bool:
+    """[ui-audit 2026-10-21] web 缓存或 server 会话文件任一存在即视为存在。
+    load_session() 对不存在的 sid 会合成一个空 "New Chat" (前端墓碑等老逻辑依赖),
+    所以读/改/导出/分享这类接口要先用它判 404, 否则不存在的 sid 也回 200 (PATCH 还会凭空建出会话)。"""
+    if not sid or "/" in sid or sid.startswith("."):
+        return False
+    sf = getattr(wui if wui is not None else _wui(), "_sf", None)
+    if sf is None:   # 测试替身 / 无磁盘层的 web_ui: 判不了就不拦
+        return True
+    try:
+        if sf(sid).exists():
+            return True
+        paths = S.cfg.get("paths", {}) or {}
+        ws = Path(paths.get("workspace_base", "/tmp/litecode_workspace"))
+        return (Path(paths.get("sessions_dir", str(ws / "sessions"))) / f"{sid}.json").exists()
+    except Exception:
+        return False
+
+
+def _require_session(sid: str) -> None:
+    if not session_exists(sid):
+        raise HTTPException(404, "会话不存在或已删除")
+
+
 _EDITABLE_MDS = {"MEMORY.md", "USER.md", "TOOLS.md", "SOUL.md",
                  "IDENTITY.md", "HEARTBEAT.md", "BOOTSTRAP.md", "AGENTS.md"}
 
@@ -43,7 +68,7 @@ async def api_sessions(request: Request):
 @router.post("/api/sessions")
 async def api_create(request: Request):
     require_auth(request)
-    b = await request.json()
+    b = await json_object(request)
     d = _wui().create_session(b.get("name", "New Chat"), owner=current_user(request))
     audit_log(request, "session.create", d.get("id", ""), name=d.get("name", ""))
     return d
@@ -120,6 +145,7 @@ async def api_get(sid: str, request: Request):
     """不带参数: 原样返回整份会话 (向后兼容)。?tail=N / ?before=i&limit=N: 分段, 见 page_session。"""
     require_auth(request)
     tail, before, limit = (_page_int(request, k) for k in ("tail", "before", "limit"))
+    _require_session(sid)
     d = _wui().load_session(sid)
     require_owner(d, request)
     if tail is None and before is None:
@@ -132,7 +158,8 @@ async def api_get(sid: str, request: Request):
 @router.patch("/api/sessions/{sid}")
 async def api_rename(sid: str, request: Request):
     require_auth(request)
-    b = await request.json()
+    _require_session(sid)
+    b = await json_object(request)
     wui = _wui()
     d = wui.load_session(sid)
     require_owner(d, request)
@@ -190,8 +217,12 @@ async def api_truncate(sid: str, request: Request):
     import json
     from pathlib import Path
     require_auth(request)
-    b = await request.json()
-    keep = int(b.get("keep", 0))
+    b = await json_object(request)
+    try:
+        keep = int(b.get("keep", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "keep 必须是整数")
+    _require_session(sid)
     wui = _wui()
     d = wui.load_session(sid)
     require_owner(d, request)
@@ -284,21 +315,32 @@ async def api_delete(sid: str, request: Request):
     return {"ok": True, "deleted": deleted}
 
 
+def _export_disposition(sid: str, name):
+    """[ui-audit 2026-10-21] 下载文件名用会话标题 (RFC 5987 filename*), 原来一律 web-xxxx.md 认不出是哪个对话。
+    filename= 仍给 ASCII 的 sid 兜底老浏览器。"""
+    import re
+    from urllib.parse import quote
+    title = re.sub(r'[\\/:*?"<>|\r\n\t]+', "_", str(name or "")).strip(" ._")[:60] or sid
+    return lambda ext: f"attachment; filename=\"{sid}.{ext}\"; filename*=UTF-8''{quote(title)}.{ext}"
+
+
 @router.get("/api/sessions/{sid}/export")
 async def api_export(sid: str, request: Request, fmt: str = "md"):
     """导出会话为 Markdown 或 JSON."""
     require_auth(request)
+    _require_session(sid)
     wui = _wui()
     session = wui.load_session(sid)
     require_owner(session, request)
     # [P0-#16] 导出前脱敏 (sk-*/Bearer/Basic/~/.ssh/env-*=)
     session = scrub_session(session)
     msgs = session.get("messages", [])
+    disp = _export_disposition(sid, session.get("name"))
     if fmt == "json":
         content = json.dumps(session, ensure_ascii=False, indent=2)
         audit_log(request, "session.export", sid, fmt="json", bytes=len(content), scrubbed=True)
         return Response(content=content, media_type="application/json",
-                        headers={"Content-Disposition": f'attachment; filename="{sid}.json"'})
+                        headers={"Content-Disposition": disp("json")})
     lines = [f"# {session.get('name', sid)}", ""]
     for m in msgs:
         role = m.get("role", "?")
@@ -322,7 +364,7 @@ async def api_export(sid: str, request: Request, fmt: str = "md"):
     content = "\n".join(lines)
     audit_log(request, "session.export", sid, fmt="md", bytes=len(content), scrubbed=True)
     return Response(content=content, media_type="text/markdown; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="{sid}.md"'})
+                    headers={"Content-Disposition": disp("md")})
 
 
 @router.get("/api/sessions/{sid}/files")
@@ -406,8 +448,11 @@ async def api_session_file_write(sid: str, name: str, request: Request):
     # [sec 2026-10-19] 之前 name 带 ../ 可写出 session 目录 (只校验了 basename)
     fp = _session_file_path(sid, name)
     fp.parent.mkdir(parents=True, exist_ok=True)
-    body = await request.json()
-    fp.write_text(body.get("content", ""))
+    body = await json_object(request)
+    content = body.get("content", "")
+    if not isinstance(content, str):
+        raise HTTPException(400, "content 必须是字符串")
+    fp.write_text(content)
     audit_log(request, "session.file_write", sid, file=name, bytes=fp.stat().st_size)
     return {"ok": True, "name": name, "size": fp.stat().st_size}
 
@@ -555,15 +600,24 @@ async def api_share_create(sid: str, request: Request):
     require_auth(request)
     d = _wui().load_session(sid)
     require_owner(d, request)
+    _require_session(sid)
     body = {}
     try:
         body = await request.json()
     except Exception:
         pass
+    if not isinstance(body, dict):
+        body = {}
+    try:
+        ttl = int(body.get("ttl_sec") or 7 * 86400)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "ttl_sec 必须是整数秒")
+    if ttl <= 0:
+        raise HTTPException(400, "ttl_sec 必须大于 0")
     rec = _share.create_share(
         sid=sid,
         created_by=current_user(request),
-        ttl_sec=int(body.get("ttl_sec") or 7 * 86400),
+        ttl_sec=ttl,
         read_only=bool(body.get("read_only", True)),
     )
     audit_log(request, "share.create", sid,

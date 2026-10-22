@@ -15,6 +15,7 @@ description: >
 webhook 通知 notification 邮件 email 开机自启 daemon 守护进程
 supervisor 定期 every hour daily weekly 每天 每小时 每周
 inotify watch 文件监控 热重载 restart 自愈 healthcheck
+aliases: ["自动化", "定时任务", "cron", "crontab", "计划任务", "自动备份", "定期执行", "开机自启", "守护进程", "supervisor", "systemd timer", "webhook"]
 ---
 
 # Automation Skill

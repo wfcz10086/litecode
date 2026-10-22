@@ -3,7 +3,6 @@
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TAR_NAME="litecodeext_v12.tar.gz"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
 IMAGE_TAG="litecode:v12-r1"
@@ -62,6 +61,23 @@ setup_env() {
     esac
 }
 
+setup_config() {
+    # 第一次运行: 没有 config.json 就从示例生成 (不然 docker 会把挂载点建成目录)
+    if [ ! -f "$SCRIPT_DIR/config.json" ]; then
+        [ -f "$SCRIPT_DIR/config.example.json" ] || die "缺 config.json 和 config.example.json"
+        cp "$SCRIPT_DIR/config.example.json" "$SCRIPT_DIR/config.json"
+        warn "已从 config.example.json 生成 config.json —— 请改 model.backend_url / api_key 和两处 CHANGE_ME 后再 ./start.sh --restart"
+    fi
+}
+
+setup_searxng() {
+    # 公开包里 SearXNG 的 secret_key 是占位符, 首次启动换成随机值
+    local f="$SCRIPT_DIR/searxng_config/settings.yml"
+    if [ -f "$f" ] && grep -q CHANGE_ME_SEARXNG_SECRET "$f"; then
+        sed -i "s/CHANGE_ME_SEARXNG_SECRET/$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')/" "$f"
+    fi
+}
+
 setup_dirs() {
     # [v12.6-fix] 去掉笔误的 's' 目录（原来会创建一个无意义的空目录）
     mkdir -p "$SCRIPT_DIR"/{workspace,sessions,web_sessions,wechat_creds,wechat_media,litecode_state/dag_jobs}
@@ -75,7 +91,6 @@ image_exists() {
 }
 
 do_build() {
-    [ ! -f "$SCRIPT_DIR/$TAR_NAME" ] && die "未找到 $TAR_NAME"
     info "构建 $IMAGE_TAG（首次约 10-15 分钟）..."
     cd "$SCRIPT_DIR"
     COMPOSE --env-file "$ENV_FILE" build --progress=plain
@@ -128,9 +143,9 @@ case "${1:-}" in
         exit 0 ;;
     --shell)      check_deps; docker exec -it litecode /bin/bash; exit 0 ;;
     --build)
-        check_deps; setup_env; setup_dirs; do_build; do_up ;;
+        check_deps; setup_env; setup_config; setup_searxng; setup_dirs; do_build; do_up ;;
     "")
-        check_deps; setup_env; setup_dirs
+        check_deps; setup_env; setup_config; setup_searxng; setup_dirs
         if ! image_exists; then
             info "未找到镜像，开始构建..."
             do_build

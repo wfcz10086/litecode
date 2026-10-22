@@ -6,6 +6,8 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="theme-color" content="#0c0f14">
 <title>LiteCode</title>
+<!-- [ui-v2 2026-10-21] 首帧就套上主题 (默认暖白), 避免先闪一下暗色再切 -->
+<script>try{var _t=localStorage.getItem('theme');if(_t===null)_t='kimi';if(_t)document.documentElement.dataset.theme=_t;}catch(e){}</script>
 <!-- 本地静态资源：所有 CSS/JS/字体均本地托管，无任何 CDN 外链 -->
 <link rel="stylesheet" href="/assets/fonts.css">
 <link rel="stylesheet" href="/assets/app.css">
@@ -13,11 +15,20 @@
 <link rel="stylesheet" href="/assets/canvas.css">
 <link rel="stylesheet" href="/assets/project_groups.css">
 <link rel="stylesheet" href="/assets/subagent_panel.css">
+<link rel="stylesheet" href="/assets/ui_v2.css">
+<link rel="stylesheet" href="/assets/skills.css">
+<link rel="stylesheet" href="/assets/usage_dashboard.css">
+<!-- [trace 2026-10-22] 调用链路状态/展开 + 友好错误卡片 -->
+<link rel="stylesheet" href="/assets/chat_timeline.css">
+<link rel="stylesheet" href="/assets/kb_panel.css">
+<!-- [subagent-view 2026-10-22] 子代理任务树 / 步骤时间线 / 只读视图 / 分支操作 -->
+<link rel="stylesheet" href="/assets/subagent_view.css">
 <script src="/assets/vendor.js"></script>
 <script src="/assets/qrcode.js"></script>
 <script src="/assets/i18n.js"></script>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.css">
-<script src="https://cdn.jsdelivr.net/npm/drawflow@0.0.59/dist/drawflow.min.js"></script>
+<!-- [ui-audit 2026-10-21] drawflow 本地化 (原外链 CDN 同步脚本: 外网慢/断网时整页白屏卡住) -->
+<link rel="stylesheet" href="/assets/vendor/drawflow.min.css">
+<script src="/assets/vendor/drawflow.min.js" defer></script>
 <!-- [dag-v2 2026-08-04] Jenkins-lite 3 屏 DAG (list / editor / build) -->
 <script src="/assets/dag_worktrees.js" defer></script>
 <script src="/assets/dag_build_view.js" defer></script>
@@ -32,23 +43,31 @@
 <script src="/assets/chat_paging.js" defer></script>
 <script src="/assets/chat_msg_actions.js" defer></script>
 <script src="/assets/chat_stream.js" defer></script>
+<script src="/assets/chat_timeline.js" defer></script>
 <script src="/assets/chat_upload.js" defer></script>
 <script src="/assets/chat_panels.js" defer></script>
+<script src="/assets/settings_panel.js" defer></script>
 <script src="/assets/chat_attach.js" defer></script>
 <!-- [per-chat-model 2026-10-19] 输入框旁「🤖 模型」chip: 本会话模型 + 测试 -->
 <script src="/assets/model_switch.js" defer></script>
 <!-- [subagent-panel 2026-10-18] 后台子代理面板 (列表/结果/停止/补充指令) -->
+<script src="/assets/subagent_view.js" defer></script>
 <script src="/assets/subagent_panel.js" defer></script>
+<!-- [ui-v2 2026-10-21] 对话过程折叠 + 统计行人话化 -->
+<script src="/assets/ui_steps.js" defer></script>
+<script src="/assets/ui_files.js" defer></script>
+<script src="/assets/usage_charts.js" defer></script>
+<script src="/assets/usage_dashboard.js" defer></script>
 </head>
 <!-- /* E2E-polish:C-079 */ -->
-<body>
+<body class="v2">
 <div id="ls"><div class="lbox"><div class="ll">&#x26A1;</div><div class="lt">LiteCode</div><div class="ls2">AI Development Agent</div><input class="li_" id="lpwd" type="password" placeholder="密码" data-i18n-placeholder="login.password" autocomplete="current-password"><button class="lb_" onclick="doLogin()" data-i18n="login.sign_in">登录</button><div class="le" id="lerr" data-i18n="login.incorrect">密码错误</div></div></div>
 <!-- 图片全屏预览 Modal -->
 <div id="imgModal" onclick="this.classList.remove('show')"><img id="imgModalImg" src="" alt="预览"></div>
 <div id="ov" onclick="closeSB()"></div>
 <div id="app">
   <div id="sb">
-    <div id="sbh"><div class="logo"><div class="lm">&#x26A1;</div><span>Lite<span class="ld">Code</span></span></div><button id="ncb" onclick="newChat()" title="新建">+</button></div>
+    <div id="sbh"><div class="logo"><div class="lm">&#x26A1;</div><span>Lite<span class="ld">Code</span></span></div><button class="ud-entry" id="ud-entry" onclick="openUsageDash()" title="token 用量看板">📊 看板</button><button id="ncb" onclick="newChat()" title="新建">+</button></div>
     <div id="sb-tools" style="padding:6px 8px;border-bottom:1px solid var(--bd)">
       <input id="sess-search" placeholder="搜索会话..." oninput="renderSL()" style="width:100%;padding:4px 6px;font-size:11px;background:var(--bg2);border:1px solid var(--bd);border-radius:4px;color:var(--tx);margin-bottom:4px">
       <select id="sess-sort" onchange="renderSL()" style="width:100%;padding:3px 4px;font-size:10px;background:var(--bg2);border:1px solid var(--bd);border-radius:4px;color:var(--tx);font-family:var(--mono)">
@@ -62,8 +81,10 @@
       <button class="sbt" data-panel="windows_nodes" onclick="openWindowsNodes()" title="新 Windows 一条命令主动回连"><span>添加 Windows</span></button>
       <button class="sbt" onclick="openP('stats')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span data-i18n="nav.token_stats">用量统计</span></button>
       <button class="sbt" onclick="openP('memory')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg><span data-i18n="nav.memory">记忆</span></button>
+      <button class="sbt" id="sk-entry" data-panel="skills" onclick="openSkills()" title="技能: 已安装 / 技能市场 / 草稿审核"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 3h4v3a2 2 0 104 0V3h3v7h-3a2 2 0 100 4h3v7h-7v-3a2 2 0 10-4 0v3H3v-7h3a2 2 0 100-4H3V3h7z"/></svg><span>技能</span><span class="sk-dot" id="sk-dot"></span></button>
       <button class="sbt" onclick="openP('wechat')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8.5 2C5.46 2 3 4.46 3 7.5c0 1.63.71 3.1 1.83 4.12L4 14l2.76-1.38c.54.15 1.12.23 1.74.23.17 0 .34-.01.5-.02"/><path d="M15.5 8C12.46 8 10 10.46 10 13.5s2.46 5.5 5.5 5.5c.62 0 1.2-.08 1.74-.23L20 20l-.83-2.38C20.29 16.6 21 15.13 21 13.5 21 10.46 18.54 8 15.5 8z"/></svg><span data-i18n="nav.wechat">微信</span></button>
       <button class="sbt" onclick="openP('wecom')" title="企业微信智能机器人 (bot_id+secret 长连接)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9l3 3-3 3M13 15h4"/></svg><span>企微</span></button>
+      <button class="sbt" data-panel="kb" onclick="openKB()" title="知识库: 上传文档, 对话里按资料回答并标出处"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 016.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 014 19.5v-15A2.5 2.5 0 016.5 2z"/><line x1="9" y1="7" x2="16" y2="7"/><line x1="9" y1="11" x2="14" y2="11"/></svg><span>知识库</span></button>
       <button class="sbt" onclick="openP('timer')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg><span data-i18n="nav.timer">定时任务</span></button>
       <button class="sbt" onclick="openP('sfiles')"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg><span data-i18n="nav.workspace">工作区</span></button>
       <button class="sbt" onclick="openP('artifacts')" title="产出物 (timer/bg/plugin 生成)"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg><span>产出物</span></button>
@@ -86,9 +107,9 @@
     </div>
   </div>
   <div id="main">
-    <div id="hdr"><button id="mbu" onclick="togSB()">&#x2630;</button><span id="ct" ondblclick="renameCurSession()" title="双击重命名" style="cursor:pointer" data-i18n="btn.new_chat">新建会话</span><span class="hp" id="mpill">&#x2014;</span><span class="hp" id="verpill" style="display:none;opacity:.75"></span><button id="ib" onclick="interrupt()" data-i18n="btn.stop">&#x23F9; 停止</button><button class="abtn" id="exp-btn" onclick="exportSession()" style="font-size:10px;padding:2px 8px;margin-left:4px;display:none" data-i18n="btn.export">&#x2B07; 导出</button><button class="abtn" onclick="openP('vnc')" title="桌面预览 (noVNC)" style="font-size:11px;padding:2px 8px;margin-left:auto">🖥️ 桌面</button><button class="abtn" id="theme-btn" onclick="toggleThemeMenu(event)" title="切换主题" style="padding:2px 8px;font-size:11px;position:relative">🎨 主题</button><button class="abtn" onclick="I18N.setLocale(I18N.locale==='zh'?'en':'zh')" style="padding:2px 8px;font-size:11px" data-i18n="i18n.toggle">🌐 中/EN</button></div>
+    <div id="hdr"><button id="mbu" onclick="togSB()">&#x2630;</button><span id="ct" ondblclick="renameCurSession()" title="双击重命名" style="cursor:pointer" data-i18n="btn.new_chat">新建会话</span><span class="hp" id="mpill">&#x2014;</span><span class="hp" id="verpill" style="display:none;opacity:.75"></span><button id="ib" onclick="interrupt()" data-i18n="btn.stop">&#x23F9; 停止</button><button class="abtn" id="exp-btn" onclick="exportSession()" style="font-size:10px;padding:2px 8px;margin-left:4px;display:none" data-i18n="btn.export">&#x2B07; 导出</button><button class="abtn" id="hdr-vnc" onclick="openP('vnc')" title="桌面预览 (noVNC)" style="font-size:11px;padding:2px 8px;margin-left:auto">🖥️ 桌面</button><button class="abtn" id="theme-btn" onclick="toggleThemeMenu(event)" title="切换主题" style="padding:2px 8px;font-size:11px;position:relative">🎨 主题</button><button class="abtn" id="hdr-i18n" onclick="I18N.setLocale(I18N.locale==='zh'?'en':'zh')" style="padding:2px 8px;font-size:11px" data-i18n="i18n.toggle">🌐 中/EN</button></div>
     <div id="mw"><div id="msgs"><div id="empty"><div class="elogo">&#x26A1;</div><div class="etitle">LiteCode Agent</div><div class="ehint" data-i18n="welcome.subtitle">具备工具调用、记忆和多代理流水线的 AI 助手。</div><div class="sugs"><button class="sg" onclick="sug('&#x5199;&#x4E00;&#x4E2A; FastAPI &#x63A5;&#x53E3;&#x670D;&#x52A1;')">FastAPI &#x670D;&#x52A1;</button><button class="sg" onclick="sug('&#x5206;&#x6790;&#x9879;&#x76EE;&#x4EE3;&#x7801;&#x7ED3;&#x6784;')">&#x5206;&#x6790;&#x4EE3;&#x7801;</button><button class="sg" onclick="sug('&#x5E2E;&#x6211;&#x8C03;&#x8BD5;&#x8FD9;&#x4E2A; bug')">&#x8C03;&#x8BD5; Bug</button><button class="sg" onclick="sug('&#x641C;&#x7D22;&#x6700;&#x65B0; AI &#x8D44;&#x8BAF;')">&#x641C;&#x7D22;&#x8D44;&#x8BAF;</button></div></div></div></div>
-    <div id="ia"><div id="pfp"></div><div id="irow"><div id="iw"><textarea id="mi" placeholder="&#x6D88;&#x606F; LiteCode&#x2026;" rows="1" onkeydown="onK(event)" oninput="arx(this)"></textarea><button id="upb" onclick="document.getElementById('fi').click()" title="&#x4E0A;&#x4F20; (&#x53EF;&#x591A;&#x9009;)">&#x1F4CE;</button><button id="thk" onclick="cycleThink()" title="&#x63A8;&#x7406;&#x5F3A;&#x5EA6;: &#x70B9;&#x5207;&#x6362; off/&#x4F4E;/&#x4E2D;/&#x9AD8;" style="background:transparent;border:1px solid var(--bd2);color:var(--tx2);border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer;margin-left:4px;white-space:nowrap">&#x1F9E0; &#x4E2D;</button><button id="strat" onclick="toggleStrat()" title="&#x6743;&#x8C0B;/&#x591A;&#x65B9;&#x535A;&#x5F08;&#x63A8;&#x6F14;&#x6A21;&#x5F0F;: &#x62C6;&#x5229;&#x76CA;/&#x535A;&#x5F08;/&#x53D8;&#x91CF;/&#x6B63;&#x53CD;&#x9762;&#x3002;&#x884C;&#x60C5;&#x3001;AI&#x6CE1;&#x6CAB;&#x3001;&#x804A;&#x5929;&#x622A;&#x56FE;&#x611F;&#x60C5;&#x535A;&#x5F08;&#x90FD;&#x9002;&#x7528;" style="background:transparent;border:1px solid var(--bd2);color:var(--tx2);border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer;margin-left:4px;white-space:nowrap">&#x1F3AD; &#x63A8;&#x6F14;</button></div><button id="sdb" onclick="send()">&#x2191;</button></div><input type="file" id="fi" multiple onchange="upFile(this)"></div>
+    <div id="ia"><div id="pfp"></div><div id="irow"><div id="iw"><textarea id="mi" placeholder="&#x6D88;&#x606F; LiteCode&#x2026;" rows="1" onkeydown="onK(event)" oninput="arx(this)"></textarea><button id="upb" onclick="document.getElementById('fi').click()" title="&#x4E0A;&#x4F20; (&#x53EF;&#x591A;&#x9009;)">&#x1F4CE;</button><button id="thk" onclick="cycleThink()" title="&#x63A8;&#x7406;&#x5F3A;&#x5EA6;: &#x70B9;&#x5207;&#x6362; off/&#x4F4E;/&#x4E2D;/&#x9AD8;" style="background:transparent;border:1px solid var(--bd2);color:var(--tx2);border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer;margin-left:4px;white-space:nowrap">&#x1F9E0; &#x4E2D;</button><button id="strat" onclick="toggleStrat()" title="&#x6743;&#x8C0B;/&#x591A;&#x65B9;&#x535A;&#x5F08;&#x63A8;&#x6F14;&#x6A21;&#x5F0F;: &#x62C6;&#x5229;&#x76CA;/&#x535A;&#x5F08;/&#x53D8;&#x91CF;/&#x6B63;&#x53CD;&#x9762;&#x3002;&#x884C;&#x60C5;&#x3001;AI&#x6CE1;&#x6CAB;&#x3001;&#x804A;&#x5929;&#x622A;&#x56FE;&#x611F;&#x60C5;&#x535A;&#x5F08;&#x90FD;&#x9002;&#x7528;" style="background:transparent;border:1px solid var(--bd2);color:var(--tx2);border-radius:12px;padding:2px 10px;font-size:11px;cursor:pointer;margin-left:4px;white-space:nowrap">&#x1F3AD; &#x63A8;&#x6F14;</button></div><button id="sdb" onclick="send()">&#x2191;</button><button id="stb" onclick="steerSend(true)" title="立即插话: 放弃正在执行的命令, 马上按你的话调整 (不结束任务)">⚡ 立即</button></div><input type="file" id="fi" multiple onchange="upFile(this)"></div>
   </div>
 </div>
 <div class="pnl" id="pnl-stats" onclick="if(event.target===this)closeP('stats')"><div class="pb_"><div class="ph_"><span class="pt_" data-i18n="panel.token_usage">&#x1F4CA; 用量统计</span><button class="px_" onclick="closeP('stats')">&#xD7;</button></div><div class="pbd_" id="stats-bd" data-i18n="status.loading">加载中…</div></div></div>
@@ -137,4 +158,13 @@
 <script src="/assets/canvas.js"></script>
 <script src="/assets/project_card.js"></script>
 <script src="/assets/project_groups.js"></script>
+<script src="/assets/screen_record.js"></script>
+<script src="/assets/share_btn.js"></script>
+<script src="/assets/ui_polish.js"></script>
+<!-- [skills 2026-10-22] 技能包管理: `/` 选择器 + chip / 新建技能卡片 / 技能面板 (已安装 · 技能市场) -->
+<script src="/assets/skill_picker.js"></script>
+<script src="/assets/skill_create.js"></script>
+<script src="/assets/skills_panel.js"></script>
+<script src="/assets/skill_market.js"></script>
+<script src="/assets/kb_panel.js"></script>
 </body></html>

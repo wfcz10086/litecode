@@ -359,6 +359,41 @@ def secret_path_violation(command: str) -> Optional[str]:
     return None
 
 
+# [sec 2026-10-21] 不许自己起对外的静态文件服务来"交付"文件: python -m http.server 默认绑 0.0.0.0,
+# 无认证, 拿到 IP:端口 的人都能下载 (实测: 测试报告被挂到公网 8891)。交付走 Web 预览卡片
+# (带登录)。只绑 127.0.0.1/localhost 的本机调试仍允许。
+_FILE_SERVER_RE = re.compile(
+    r"(?:-m\s+(?:http\.server|SimpleHTTPServer)\b|(?:^|[\s;&|(])http-server(?=\s|$)"
+    r"|\bnpx\s+(?:-y\s+)?(?:serve|http-server)(?=\s|$)|\bphp\s+-S\b)")
+_LOOPBACK_RE = re.compile(r"(?:--bind|-b|-a|--host|-S)[\s=]+(?:127\.0\.0\.1|localhost|::1)\b")
+
+
+def public_file_server_violation(command: str) -> Optional[str]:
+    """命令要起一个不限本机的静态文件服务 → 返回命中的片段, 否则 None。"""
+    if not command:
+        return None
+    m = _FILE_SERVER_RE.search(command)
+    if not m or _LOOPBACK_RE.search(command):
+        return None
+    return m.group(0).strip()
+
+
+def shell_policy_violation(command: str, cwd: str = "") -> Optional[str]:
+    """前台/后台 shell 共用的拒绝规则, 命中时返回给模型的错误文本。"""
+    hit = secret_path_violation(command) or secret_path_violation(cwd or "")
+    if hit:
+        return (f"ERROR[PERMANENT]: 拒绝执行 — 命令引用了受保护的凭据/密钥路径 ({hit})。"
+                f"凭据与签名私钥只能由系统内部使用, 不允许通过 shell 读取、复制或修改; "
+                f"SSH 主机请用 ssh_exec 的 alias, Windows 节点能力开关请让用户在管理界面操作。")
+    hit = public_file_server_violation(command)
+    if hit:
+        return (f"ERROR[PERMANENT]: 拒绝执行 — 不允许自己起对外开放的文件服务 ({hit})。"
+                f"它没有登录认证, 拿到地址的人都能下载。交付文件请在回复里写出绝对路径 "
+                f"(如 /tmp/litecode_workspace/xxx/report.pdf), Web 会自动生成带登录的预览和下载; "
+                f"只做本机调试可加 --bind 127.0.0.1。")
+    return None
+
+
 async def execute_shell_async(
     command: str,
     timeout: int = None,
@@ -369,11 +404,9 @@ async def execute_shell_async(
     完整修复版 execute_shell。
     集成: timeout推断/pip修复/网络probe/包管理锁/apt成功检测/错误分类/退避重试
     """
-    _hit = secret_path_violation(command) or secret_path_violation(cwd or "")
-    if _hit:
-        return (f"ERROR[PERMANENT]: 拒绝执行 — 命令引用了受保护的凭据/密钥路径 ({_hit})。"
-                f"凭据与签名私钥只能由系统内部使用, 不允许通过 shell 读取、复制或修改; "
-                f"SSH 主机请用 ssh_exec 的 alias, Windows 节点能力开关请让用户在管理界面操作。")
+    _deny = shell_policy_violation(command, cwd or "")
+    if _deny:
+        return _deny
     work_dir = Path(cwd) if cwd else (workspace or Path.home())
     work_dir.mkdir(parents=True, exist_ok=True)
 
@@ -409,7 +442,15 @@ async def _run_cmd(command: str, timeout: Optional[int], work_dir: Path) -> str:
 
     for attempt in range(MAX_RETRIES):
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(None, _exec_sync, command, timeout, work_dir)
+        holder: dict = {}
+        try:
+            result = await loop.run_in_executor(None, _exec_sync, command, timeout, work_dir, holder)
+        except asyncio.CancelledError:
+            # 停止 / ⚡立即插话会取消本协程, 但线程池里的 bash 不会跟着停 —— 原来命令照样在后台跑完
+            # (sleep 60 被放弃后还挂着, 重活就一直占资源)。这里按进程组整组杀掉 (2026-10-21)。
+            if holder.get("proc") is not None:
+                await loop.run_in_executor(None, _kill_tree, holder["proc"])
+            raise
 
         output   = result["output"]
         exitcode = result["returncode"]
@@ -469,7 +510,7 @@ def _kill_tree(proc: "subprocess.Popen") -> None:
             continue
 
 
-def _exec_sync(command: str, timeout: Optional[int], work_dir: Path) -> dict:
+def _exec_sync(command: str, timeout: Optional[int], work_dir: Path, holder: Optional[dict] = None) -> dict:
     """[2026-10-19] stdout/stderr 写临时文件而不是管道: 命令里 `python app.py &` 这种没重定向的后台子进程
     会一直占着管道, communicate() 等不到 EOF, 白等满超时后还把刚起的服务连进程组一起杀掉, 模型再起一遍。
     写文件就只等 bash 本身退出; 超时时把已有输出的尾巴一起带回去, 模型能看到卡在哪。"""
@@ -495,6 +536,8 @@ def _exec_sync(command: str, timeout: Optional[int], work_dir: Path) -> dict:
             # 仍可能是 0 (子 shell 失败但外层 || 分支吞掉), 导致结果看似正常实则全错
             executable="/bin/bash",
         )
+        if holder is not None:
+            holder["proc"] = proc
         try:
             proc.wait(timeout=timeout)
         except subprocess.TimeoutExpired:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import json
 import time
@@ -19,22 +20,61 @@ from .types import (
 )
 
 
-def _derive_plan_id(plan: DAGPlan) -> str:
-    """从 DAG 结构 hash 派生 plan_id, 保证同一 DAG 每次 execute 拿到相同 id, checkpoint 才能命中."""
+def _step_canon(s) -> dict:
+    """步骤的全部字段 (tool_args/dag_name/when/context/expect/timeout/...)。
+    [P0-4 2026-10-21] 原来只 hash id/agent_type/task/depends_on/tool_name: 只改 tool_args、子 DAG 名、
+    context、when 时 plan_id 不变, 命中旧 checkpoint 直接恢复旧结果。"""
+    if dataclasses.is_dataclass(s):
+        return dataclasses.asdict(s)
+    return dict(vars(s))
+
+
+def _derive_plan_id(plan: DAGPlan, extra=None) -> str:
+    """从 DAG 定义 hash 派生 plan_id, 同一 DAG 每次 execute 拿到相同 id, checkpoint 才能命中;
+    任何影响结果的参数 (步骤全部字段 + 计划级 critic/预算 + extra 如子 DAG 内容指纹) 变了 id 就变。"""
     try:
-        canon = [
-            (s.id, s.agent_type or "", s.task or "", tuple(s.depends_on or []),
-             getattr(s, "tool_name", "") or "")
-            for s in plan.steps
-        ]
-        blob = json.dumps(canon, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        canon = {
+            "steps": [_step_canon(s) for s in plan.steps],
+            "auto_critic": getattr(plan, "auto_critic", True),
+            "critic_checklist": getattr(plan, "critic_checklist", ""),
+            "total_token_budget": getattr(plan, "total_token_budget", 0),
+        }
+        if extra:
+            canon["extra"] = extra
+        blob = json.dumps(canon, sort_keys=True, ensure_ascii=False, default=repr).encode("utf-8")
         return "plan_" + hashlib.sha1(blob).hexdigest()[:16]
     except Exception:
         return f"plan_{int(time.time())}_{uuid.uuid4().hex[:6]}"
 
 
+def _subdag_fingerprints(workspace, plan: DAGPlan, depth: int = 0, seen=None) -> dict:
+    """子 DAG 步引用的已保存 DAG 内容指纹 (递归, 最多 3 层): 子 DAG 改了, 父 DAG 的 checkpoint 不能命中。"""
+    seen = set() if seen is None else seen
+    out = {}
+    for s in plan.steps:
+        name = getattr(s, "dag_name", "") or ""
+        if getattr(s, "agent_type", "") != "dag" or not name or name in seen or depth >= 3:
+            continue
+        seen.add(name)
+        try:
+            from lib.dag_schema import load_dag, dag_from_dict
+            d = load_dag(workspace, name)
+            fp = {"def": d}
+            if d:
+                fp["sub"] = _subdag_fingerprints(workspace, dag_from_dict(d), depth + 1, seen)
+        except Exception as e:
+            fp = {"error": repr(e)}
+        out[name] = hashlib.sha1(json.dumps(fp, sort_keys=True, ensure_ascii=False, default=repr)
+                                 .encode("utf-8")).hexdigest()
+    return out
+
+
 class _ExecuteMixin:
     """DAG 主入口分片: execute + execute_streaming."""
+
+    def _plan_id(self, plan: DAGPlan) -> str:
+        extra = _subdag_fingerprints(getattr(self, "_workspace", None), plan)
+        return _derive_plan_id(plan, extra or None)
 
     async def execute(
         self,
@@ -42,11 +82,12 @@ class _ExecuteMixin:
         sse_emit: Optional[Callable] = None,
     ) -> OrchestrationResult:
         """执行 DAG 计划。"""
-        plan_id = _derive_plan_id(plan)
+        plan_id = self._plan_id(plan)
         t0 = time.time()
 
-        # 尝试从 checkpoint 恢复
-        completed = self._load_checkpoint(plan_id)  # type: ignore[attr-defined]
+        # 尝试从 checkpoint 恢复: 只有带真实输出的步骤可恢复 (P0-4)
+        restorable = self._load_checkpoint_records(plan_id)  # type: ignore[attr-defined]
+        restored_ids: set = set()
 
         # 构建依赖图
         layers = self._topological_sort(plan.steps)  # type: ignore[attr-defined]
@@ -67,14 +108,21 @@ class _ExecuteMixin:
                     )
                 continue
 
-            # 跳过已完成的步骤（从 checkpoint 恢复）
-            pending = [s for s in layer if s.id not in completed]
-            skipped = [s for s in layer if s.id in completed]
+            # 跳过已完成的步骤（从 checkpoint 恢复）: 输出用 checkpoint 里的真实输出;
+            # 上游这次要重跑 (未恢复) 的步骤不恢复 —— 上游输出可能变了, 下游旧结果失效 (P0-4)
+            def _can_restore(s):
+                return s.id in restorable and all(d in restored_ids for d in (s.depends_on or []))
+            skipped = [s for s in layer if _can_restore(s)]
+            pending = [s for s in layer if not _can_restore(s)]
             for s in skipped:
+                rec = restorable[s.id]
+                restored_ids.add(s.id)
                 results[s.id] = StepResult(
                     step_id=s.id, label=s.label or s.id,
                     agent_type=s.agent_type, task=s.task,
-                    status=StepStatus.SUCCESS, output="[restored from checkpoint]",
+                    status=StepStatus.SUCCESS, output=rec["output"],
+                    elapsed=float(rec.get("elapsed", 0.0) or 0.0),
+                    attempts=int(rec.get("attempts", 1) or 1), restored=True,
                 )
                 if sse_emit:
                     await sse_emit(_sse_step_status(
@@ -191,10 +239,10 @@ class _ExecuteMixin:
                             ))
                         break
 
-            # 保存 checkpoint
+            # 保存 checkpoint (含真实输出)
             done_ids = {sid for sid, r in results.items()
                         if r.status == StepStatus.SUCCESS}
-            self._save_checkpoint(plan_id, done_ids)  # type: ignore[attr-defined]
+            self._save_checkpoint(plan_id, done_ids, results)  # type: ignore[attr-defined]
 
         # ── Critic 审查 + [v1.1] 回炉环 ──
         # 如果 critic 发现 [CRITICAL: ...], 找到提到的 step_id 重跑 (max 2 次)
@@ -235,6 +283,10 @@ class _ExecuteMixin:
                     )
                     r2 = await self._execute_step(spec_retry, results, sse_emit)  # type: ignore[attr-defined]
                     results[sid] = r2
+                # 回炉后的输出才是最终结果: 更新 checkpoint, 否则下次恢复的是回炉前的旧输出 (P0-4)
+                self._save_checkpoint(plan_id, {k for k, r in results.items()  # type: ignore[attr-defined]
+                                                if k != "__critic__" and r.status == StepStatus.SUCCESS},
+                                      results)
 
         # ── 合并最终输出 ──
         final = self._merge_results(results, plan)  # type: ignore[attr-defined]

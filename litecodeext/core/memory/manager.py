@@ -317,12 +317,15 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                     write=60.0,
                     pool=60.0,
                 )
+                from lib.usage_ledger import record_http as _usage_rec   # [usage-ledger] 压缩记账
+                _t0 = time.time()
                 r = httpx.post(
                     f"{self.vllm_url}/chat/completions",
                     headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
                     json=payload,
                     timeout=_http_timeout,
                 )
+                _usage_rec("compress", self.model_id, payload, r, _t0, session_id=self.session_id)
                 if r.status_code != 200:
                     log.warning(f"  [memory] vLLM {r.status_code}: {r.text[:200]}")
                     return ""
@@ -412,7 +415,9 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                 import re as _re2
                 text = _re2.sub(
                     rf'{_re2.escape(heading)}\n.*?(?=\n## |\Z)',
-                    f"{heading}\n{entry}\n",
+                    # 用函数作替换: 用户内容里的反斜杠 (C:\Users\...) 不能被当成转义模板
+                    # (原来报 bad escape \U, 带 Windows 路径的会话记忆全部写不进; 跑分 Bug 2)
+                    lambda _m: f"{heading}\n{entry}\n",
                     text, flags=_re2.DOTALL,
                 )
             else:
@@ -426,6 +431,23 @@ _Auto-managed. Max 160 lines. Older content archived to memory/._
                        "\n".join(lines[L1_MAX_LINES // 2:])
             self._atomic_write_if_changed(self.l1_file, text)
             return "updated" if section == "Question Log" else action
+
+    def forget(self, text: str, section: Optional[str] = None) -> int:
+        """删掉 L1 里含 text 的条目行 ("- " 开头; section 给了就只删该段)。返回删掉的行数。"""
+        text = (text or "").strip()
+        if len(text) < 2 or not self.l1_file.exists():
+            return 0
+        out, cur, n = [], None, 0
+        for ln in self.l1_file.read_text(errors="replace").splitlines():
+            if ln.startswith("## "):
+                cur = ln[3:].strip()
+            elif ln.lstrip().startswith("- ") and text in ln and (section is None or cur == section):
+                n += 1
+                continue
+            out.append(ln)
+        if n:
+            self._atomic_write_if_changed(self.l1_file, "\n".join(out) + "\n", force=True)
+        return n
 
     # ── Structure for web UI ──────────────────────────────────
     def get_structure(self, messages: Optional[list] = None) -> dict:

@@ -1,0 +1,73 @@
+#!/bin/bash
+# 代码更新 (托盘「检查更新」调用, 服务已停): litecode-apply-update <代码包.tar.gz> <版本号>
+# 代码包结构: litecode/ (= /opt/litecode) + entrypoint.sh。保留 config.json 和 skills/drafts, 旧版留在 /opt/litecode.prev 供回滚。
+#
+# 退出码 (托盘按它判定实际状态, 提示文字与之对应):
+#   0  已更新
+#   2  准备阶段失败 (代码包无效/磁盘满等), 运行中的版本没有动过
+#   3  切换中途失败, 已恢复到原版本
+#   4  切换中途失败, 恢复原版本也失败 (需重新运行完整安装包)
+# LITECODE_ROOT 仅供测试把所有路径挪到临时目录; 正式运行为空。
+set -uo pipefail
+PKG=${1:?用法: litecode-apply-update <代码包> <版本号>}
+VER=${2:?用法: litecode-apply-update <代码包> <版本号>}
+R=${LITECODE_ROOT:-}
+APP=$R/opt/litecode
+NEW=$R/opt/litecode.new
+PREV=$R/opt/litecode.prev
+EP=$R/entrypoint.sh
+VF=$R/etc/litecode-version
+
+prep_fail() { echo "APPLY_FAILED: $*" >&2; rm -rf "$NEW"; exit 2; }
+
+# ── 1. 准备 (不碰运行中的版本) ──
+rm -rf "$NEW" && mkdir -p "$NEW" || prep_fail "无法创建临时目录 $NEW"
+tar -xzf "$PKG" -C "$NEW" || prep_fail "代码包解压失败 (文件损坏或磁盘已满)"
+[ -f "$NEW/litecode/web_ui.py" ] && [ -f "$NEW/litecode/litecode_server.py" ] || prep_fail "代码包不完整"
+[ -d "$APP" ] || prep_fail "当前版本目录 $APP 不存在"
+if [ -f "$APP/config.json" ]; then
+  cp -a "$APP/config.json" "$NEW/litecode/config.json" || prep_fail "复制配置失败"
+fi
+if [ -d "$APP/skills/drafts" ]; then
+  rm -rf "$NEW/litecode/skills/drafts" && mkdir -p "$NEW/litecode/skills" && cp -a "$APP/skills/drafts" "$NEW/litecode/skills/drafts" || prep_fail "复制草稿技能失败"
+fi
+# 旧版备份: 先放临时名, 全部成功才替换上一次的 .prev (失败时上一次可回滚的版本不受影响)
+cp -a "$EP" "$EP.prev.tmp" && cp -a "$VF" "$VF.prev.tmp" || { rm -f "$EP.prev.tmp" "$VF.prev.tmp"; prep_fail "保存旧版启动脚本/版本号失败"; }
+
+# ── 2. 切换; 任何一步失败都恢复原版本 ──
+MOVED=0
+recover() {
+  echo "APPLY_FAILED: $*" >&2
+  local rc=3
+  if [ "$MOVED" = 1 ]; then
+    rm -rf "$APP.failed"
+    if [ -d "$APP" ]; then mv "$APP" "$APP.failed" || rc=4; fi
+    if [ "$rc" = 3 ]; then mv "$PREV.tmp" "$APP" || rc=4; fi
+  fi
+  cp -a "$EP.prev.tmp" "$EP" || rc=4
+  cp -a "$VF.prev.tmp" "$VF" || rc=4
+  if [ "$rc" = 3 ]; then
+    rm -rf "$NEW" "$APP.failed" "$EP.prev.tmp" "$VF.prev.tmp"
+    echo "APPLY_FAILED_RESTORED: 已恢复到原版本 $(cat "$VF" 2>/dev/null)" >&2
+  else
+    echo "APPLY_FAILED_NOT_RESTORED: 恢复原版本失败; 原版本在 $PREV.tmp, 新版本在 $APP.failed" >&2
+  fi
+  exit $rc
+}
+rm -rf "$PREV.tmp"
+mv "$APP" "$PREV.tmp" || recover "移走当前版本失败"
+MOVED=1
+mv "$NEW/litecode" "$APP" || recover "放入新版本失败"
+if [ -f "$NEW/entrypoint.sh" ]; then
+  install -m 755 "$NEW/entrypoint.sh" "$EP" || recover "安装新的启动脚本失败"
+fi
+{ echo "$VER" > "$VF.tmp" && mv "$VF.tmp" "$VF"; } || recover "写版本号失败"
+
+# ── 3. 成功: 旧版成为可回滚的 .prev ──
+rm -rf "$PREV"
+mv "$PREV.tmp" "$PREV" || echo "WARN: 旧版没能保存为 $PREV (不影响新版本使用, 但无法回滚)" >&2
+mv "$EP.prev.tmp" "$EP.prev" 2>/dev/null
+mv "$VF.prev.tmp" "$VF.prev" 2>/dev/null
+rm -rf "$NEW"
+sync
+echo "UPDATED $VER"

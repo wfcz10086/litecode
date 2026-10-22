@@ -24,6 +24,7 @@ v1.0 新增模块。
 import json
 import sqlite3
 import threading
+import math
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -221,7 +222,14 @@ class MemoryIndex:
         try:
             rows = conn.execute(sql, params).fetchall()
         except Exception:
-            return []
+            rows = []
+        if len(rows) < limit:
+            # unicode61 把一整串中文当一个词: "用户最喜欢的水果是山竹" 搜 "山竹"/"水果" 都不中,
+            # 中文记忆等于搜不到 (2026-10-21 桌面版实测: 记住偏好后新会话召回不到)。
+            # 不够时补一路: 中文两字切词 + BM25, 按命中比例设门槛, 免得把不相关的记忆塞进上下文。
+            seen = {r[0] for r in rows}
+            rows = list(rows) + [r for r in self._cjk_search(conn, query, limit, category, min_age_days)
+                                 if r[0] not in seen][: limit - len(rows)]
 
         results = []
         for row in rows:
@@ -246,16 +254,55 @@ class MemoryIndex:
         conn.commit()
         return results
 
+    def _cjk_search(self, conn, query: str, limit: int, category: str = None,
+                    min_age_days: float = 0, scan: int = 5000) -> list:
+        """中文友好的兜底检索: 只扫最近 scan 条, 返回和 search() 同形的行 (rank 位放负分)。"""
+        from core.memory.recall import tokens as _tok
+        q = list(dict.fromkeys(_tok(query)))
+        if not q:
+            return []
+        sql = ("SELECT id, session_id, category, content, solution, tags, created_at, access_count "
+               "FROM memories WHERE 1=1")
+        params: list = []
+        if category:
+            sql += " AND category = ?"; params.append(category)
+        if min_age_days > 0:
+            sql += " AND created_at < ?"; params.append(time.time() - min_age_days * 86400)
+        sql += " ORDER BY created_at DESC LIMIT ?"; params.append(scan)
+        try:
+            docs = conn.execute(sql, params).fetchall()
+        except Exception:
+            return []
+        toks = [set(_tok(f"{d[3]} {d[4]} {d[5]}")) for d in docs]
+        n = len(docs) or 1
+        df = {t: sum(1 for ts in toks if t in ts) for t in q}
+        need = min(2, len(q))
+        scored = []
+        now = time.time()
+        for d, ts in zip(docs, toks):
+            hit = [t for t in q if t in ts]
+            if len(hit) < need or len(hit) / len(q) < 0.3:
+                continue
+            score = sum(math.log(1 + (n - df[t] + 0.5) / (df[t] + 0.5)) for t in hit)
+            # 时效衰减 (半衰期 90 天, 最多压到 0.6) + 被召回次数小幅加权: 新的、常用的排前面
+            decay = 0.5 ** (max(0.0, now - d[6]) / 86400 / 90)
+            score *= (0.6 + 0.4 * decay) * (1 + 0.05 * min(int(d[7] or 0), 10))
+            scored.append((score, d))
+        scored.sort(key=lambda x: -x[0])
+        return [tuple(d) + (-sc,) for sc, d in scored[:limit]]
+
     def search_errors(self, error_msg: str, limit: int = 3) -> List[Dict]:
         """快捷: 搜索历史错误解决方案。"""
         return self.search(error_msg, limit=limit, category="error")
 
     def search_as_context(self, query: str, limit: int = 3,
-                          max_chars: int = 2000) -> str:
+                          max_chars: int = 2000, exclude_categories: tuple = ()) -> str:
         """
         搜索并格式化为 context 字符串，直接注入 Agent prompt。
+        exclude_categories: 已由别的来源注入的类别 (如 "profile" 由用户档案块给), 免得同一事实给两遍。
         """
-        results = self.search(query, limit=limit)
+        results = self.search(query, limit=limit + len(exclude_categories) * 2)
+        results = [r for r in results if r["category"] not in exclude_categories][:limit]
         if not results:
             return ""
 
@@ -274,6 +321,40 @@ class MemoryIndex:
             total += len(entry)
 
         return "".join(parts)
+
+    # ── 查看 / 删除 (记忆面板与"忘掉"用) ──────────────────
+    def list_recent(self, limit: int = 50, category: str = None, query: str = "") -> List[Dict]:
+        if query:
+            return self.search(query, limit=limit, category=category)
+        sql = ("SELECT id, session_id, category, content, solution, tags, created_at, access_count "
+               "FROM memories")
+        params: list = []
+        if category:
+            sql += " WHERE category = ?"; params.append(category)
+        sql += " ORDER BY created_at DESC LIMIT ?"; params.append(int(limit))
+        rows = self._get_conn().execute(sql, params).fetchall()
+        return [{"id": r[0], "session_id": r[1], "category": r[2], "content": r[3], "solution": r[4],
+                 "tags": r[5], "age_days": round((time.time() - r[6]) / 86400, 1), "access_count": r[7]}
+                for r in rows]
+
+    def delete(self, rid: int) -> bool:
+        conn = self._get_conn()
+        cur = conn.execute("DELETE FROM memories WHERE id = ?", (int(rid),))
+        conn.commit()
+        return cur.rowcount > 0
+
+    def delete_containing(self, text: str, categories: tuple = ("profile", "preference", "user_fact")) -> int:
+        """删掉内容含 text 的条目 (只在给定类别里删, 不碰错误经验等)。用户档案某条被替换/删除时
+        调用, 免得旧值经 "历史经验参考" 又被召回 (改喜欢榴莲后还冒出山竹)。"""
+        text = (text or "").strip()
+        if len(text) < 2 or not categories:
+            return 0
+        conn = self._get_conn()
+        marks = ",".join("?" for _ in categories)
+        cur = conn.execute(f"DELETE FROM memories WHERE category IN ({marks}) AND instr(content, ?) > 0",
+                           (*categories, text))
+        conn.commit()
+        return cur.rowcount
 
     # ── 维护 ──────────────────────────────────────────────
 

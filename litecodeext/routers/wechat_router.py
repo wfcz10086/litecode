@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 
 router = APIRouter()
@@ -40,7 +41,7 @@ async def wx_status(request: Request):
 async def wx_update_config(request: Request):
     require_auth(request)
     mgr = _need_wx()
-    body = await request.json()
+    body = await json_object(request)
     return mgr.update_config(body)
 
 
@@ -48,7 +49,7 @@ async def wx_update_config(request: Request):
 async def wx_add_bot(request: Request):
     require_auth(request)
     mgr = _need_wx()
-    body = await request.json()
+    body = await json_object(request)
     return await mgr.add_bot(body.get("bot_id"))
 
 
@@ -83,7 +84,7 @@ async def wx_bot_send(bot_id: str, request: Request):
     """
     require_auth(request)
     mgr = _need_wx()
-    body = await request.json()
+    body = await json_object(request)
     to = (body or {}).get("to", "").strip()
     text = (body or {}).get("text", "")
     if not to or not text:

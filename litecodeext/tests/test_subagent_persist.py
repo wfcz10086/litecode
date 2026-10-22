@@ -69,10 +69,12 @@ def test_persist_on_finish(ws):
     # 运行中的记录不落盘
     run = _mk("sid-A", task="还在跑")
     assert not _file(ws, "sid-A", run.id).exists()
-    # 非后台 (阻塞) 子代理不落盘
+    # [subagent-view] 前台 (阻塞) 子代理也落盘 (界面回看 / 重启后可进入), 结果已取走, 不进 [SYSTEM-AGENTS] 提示
     blk = _mk("sid-A", task="阻塞", background=False)
+    blk.fetched = True
     _finish(blk, "done", "阻塞结论")
-    assert not _file(ws, "sid-A", blk.id).exists()
+    d2 = json.loads(_file(ws, "sid-A", blk.id).read_text("utf-8"))
+    assert d2["background"] is False and d2["fetched"] is True
 
 
 # ── 重启后 result / list / status 仍能取到该结果且内容一致 ──

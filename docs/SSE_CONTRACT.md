@@ -57,6 +57,10 @@
 | `data: [DONE]` | 流结束 | `lib/sse.py:sse_done` | 无 JSON，纯字符串标记 |
 | `error` (顶层) | 错误 | `web_ui.py:874,899` | 非 choices 结构，见第 10 节 |
 | `panel_refresh` | 面板刷新信号 | `lib/sse.py:sse_meta` / `litecode_server.py:2014` | DAG/Timer 工具成功后通知前端刷新对应面板（P43-c 引入） |
+| `tool_done` | 工具调用结果 | `lib/agent/tool_exec.py` (`lib/tool_trace.tool_done`) | 每次工具调用结束: 成败/用时/摘要/友好错误，与 `task_exec.id` 关联（trace 2026-10-22，见 §7.7） |
+| `tool_progress` | 工具进度 / 降级说明 | `lib/agent/tool_exec.py` (工具内 `lib/tool_trace.report`) | 长任务进度、"搜索源 A 失败, 改用 B"（§7.7） |
+| `notice` | 整轮级说明 | `lib/agent/llm_call.py` (`lib/sse.py:sse_notice`) | 模型调用自动重试 / 切备用模型（§7.7） |
+| `error` (delta 内) | 整轮错误 | `lib/sse.py:sse_error` | 空响应 / 回合异常；trace 2026-10-22 起带可选友好字段（§10.1） |
 | `: <注释>` | 注释/心跳 | `litecode_server.py:1039,1916,1948` | internal，消费侧忽略 |
 
 ---
@@ -141,6 +145,9 @@
 | `task_exec.status` | string | 是 | `"executing"` 或 `"done"` |
 | `task_exec.detail` | string | 是 | 工具名+参数摘要，格式为 `"tool_name: 参数摘要"` |
 | `task_exec.agent_label` | string | 否 | 子代理标签（由 `multi_agent.py:538` 注入到 task_exec 内） |
+| `task_exec.id` | string | 否 | （trace 2026-10-22）仅 executing 帧：本次工具调用 id（= tool_call id），与 `tool_done.id` 对应 |
+| `task_exec.name` | string | 否 | （同上）工具名 |
+| `task_exec.args` | string | 否 | （同上）参数 JSON 字符串，脱敏后 ≤600 字 |
 
 **`agent_label` 的两条 emit 路径**：
 
@@ -367,6 +374,55 @@
 
 ---
 
+## 7.7 tool_done / tool_progress / notice — 调用链路（trace 2026-10-22 引入）
+
+**目的**：对话里把"调用了什么"扩展成"每步结果、成败、耗时、自动重试说明"，刷新后可重绘。
+全部是**新增可选**键：老客户端（CLI / 微信 / 企微 / 第三方 OpenAI 兼容端）不认识直接忽略；
+原有 `task_exec` executing/done 两帧照发不变，`tool_done` 紧跟在 `task_exec` done 之后。
+
+**产生位置**：`lib/agent/tool_exec.py`（tool_done / tool_progress），`lib/agent/llm_call.py`（notice，来源是 `lib/transport.py`
+在重试 / 切备用模型时产出的内部说明帧 `{"_lc_notice": ...}`，无 `choices`，其它调用方按"无 choices 跳过"不受影响）。
+
+**tool_done**：
+
+| 字段 | 类型 | 必填 | 含义 |
+|---|---|---|---|
+| `id` | string | 是 | 与 executing 帧 `task_exec.id` 相同 |
+| `name` | string | 是 | 工具名 |
+| `ok` | bool | 是 | 结果不以 `ERROR` 开头即成功 |
+| `duration_ms` | int | 是 | 单次工具耗时 |
+| `summary` | string | 是 | 结果摘要 ≤300 字（去掉 `[SYSTEM…]` 提示、脱敏） |
+| `error_kind` | string | 否 | 失败时：`lib/friendly_errors.py` 分类（见 §10.2） |
+| `error_title` | string | 否 | 失败时：中文一句话 |
+| `error_hint` | string | 否 | 失败时：怎么办 |
+| `retry_of` | string | 否 | 本轮之前有一次**同名同参数**调用失败，这次是重试它（值为那次的 id） |
+
+**tool_progress**：`{id, name, text, pct?}` —— 工具执行中透传（tool_exec 每秒检查一次，工具结束后补发剩余的）。
+工具侧用 `lib.tool_trace.report(sid, "<tool>", text, pct=None)` 上报；目前 `web_search` 的降级链路会报
+"搜索源 SearXNG 超时, 改用 deep_search" 之类。
+
+**notice**：`{text, level: "info"|"warn", kind: "retry"|"failover"|""}` —— 例："模型服务返回 503, 已自动重试 1/3"、
+"主模型暂不可用, 已自动改用备用模型 X"、"模型拒收了这轮请求 (400), 已自动整理对话记录重试 1/3"。
+
+**JSON 示例**：
+
+```json
+{"choices":[{"delta":{"task_exec":{"status":"executing","detail":"read_file: /tmp/a.txt","id":"call_7","name":"read_file","args":"{\"filepath\": \"/tmp/a.txt\"}"}}}]}
+{"choices":[{"delta":{"task_exec":{"status":"done","detail":"ERROR: [Errno 2] No such file or directory: '/tmp/a.txt'"}}}]}
+{"choices":[{"delta":{"tool_done":{"id":"call_7","name":"read_file","ok":false,"duration_ms":3,"summary":"ERROR: [Errno 2] No such file…","error_kind":"file_not_found","error_title":"文件或路径不存在","error_hint":"确认路径拼写…"}}}]}
+{"choices":[{"delta":{"tool_progress":{"id":"call_8","name":"web_search","text":"搜索源 SearXNG 超时, 改用 deep_search"}}}]}
+{"choices":[{"delta":{"notice":{"text":"模型服务返回 503, 已自动重试 1/3","level":"warn","kind":"retry"}}}]}
+```
+
+**落库（web_ui）**：`routers/chat_router._collect` → `lib/tool_trace.collect_delta` 把本轮 `tool_done`（含其 progress 文本 `notes`）
+和 `notice` 收成 `trace_steps`，整轮错误收成 `turn_error`；`web_ui._save_assistant_msg` / `_turn_already_imported`
+按工具调用 id 挂到所属 assistant 消息，`_merge_cached_turn_meta` 在 server 历史重导时从老缓存带回。
+前端 `chat_render.addMsg(..., extra={trace_steps, turn_error})` 据此重绘。
+
+**消费状态**：Web（`web_assets/chat_timeline.js`）已消费；CLI / 微信 / 企微未消费（忽略）。
+
+---
+
 ## 8. usage — 用量统计
 
 **产生位置**：`litecodeext/lib/sse.py:32-40`，在流末 `sse_stop` 之前发出
@@ -446,6 +502,48 @@
 
 **触发条件**：web_ui 向 litecode_server 转发时，后端返回非 200 状态码，或网络异常。
 
+**可选 `friendly`（trace 2026-10-22）**：顶层错误帧同时带 `friendly` 对象（结构同 §10.1），`error` 字符串保持原样
+（CLI / 微信只读它）。例：`{"error": "HTTP 503 ...", "friendly": {"kind": "upstream_5xx", "title": "...", ...}}`
+
+### 10.1 delta.error 友好字段（trace 2026-10-22）
+
+`lib/sse.py:sse_error(reason, retry_hint, model, friendly=None)`：`delta.error` 原有 `reason` / `retry_hint` 不变，
+传了 `friendly` 时追加：
+
+| 字段 | 类型 | 含义 |
+|---|---|---|
+| `kind` | string | 分类（§10.2） |
+| `title` | string | 中文一句话 |
+| `hint` | string | 建议怎么办 |
+| `actions` | string[] | 前端按钮：`retry` 重试本轮 / `switch_model` 换个模型 / `open_settings` 打开设置 / `details` 查看详情 |
+| `details` | string | 原始报错，**已脱敏**（key / token / 密码样式串替换为 `***`），≤2000 字 |
+| `content_echo` | string | 后端已经用 `content` 流出过的同义人话（回合异常时），前端据此从正文去重 |
+
+发出时机：回合异常（`litecode_server.py` agent_stream except，先发原来的人话 content 再发本帧）、空响应（P46）。
+Web 渲染为错误卡片（保留已完成步骤和部分正文，有进度时多一个「从失败处继续」）；CLI / 微信不读 `delta.error`，行为不变。
+
+### 10.2 错误分类表（`lib/friendly_errors.py`，按顺序匹配）
+
+| kind | 标题 | 按钮 |
+|---|---|---|
+| `user_interrupt` | 已按你的要求停下 | retry |
+| `context_overflow` | 对话太长, 超出了模型能处理的长度 | retry / switch_model / details |
+| `comfyui_model_missing` | ComfyUI 缺少所需的模型文件 | retry / details |
+| `comfyui_busy` | ComfyUI 正忙, 任务在排队 | retry / details |
+| `ssh_unreachable` | SSH 连不上目标主机 | retry / details |
+| `model_unavailable` | 所选模型不存在或暂不可用 | switch_model / open_settings / details |
+| `auth` | 密钥无效或没有权限 (401/403) | open_settings / switch_model / details |
+| `rate_limit` | 请求太频繁, 被上游限流了 (429) | retry / switch_model / details |
+| `disk_full` | 磁盘空间不足 | retry / details |
+| `upstream_5xx` | 上游服务出故障了 (5xx) | retry / switch_model / details |
+| `timeout` | 等待响应超时 | retry / details |
+| `network` | 网络不通, 连不上服务 | retry / open_settings / details |
+| `permission` | 权限不足, 操作被拒绝 | retry / details |
+| `file_not_found` | 文件或路径不存在 | retry / details |
+| `bad_args` | 工具参数有误 | retry / details |
+| `empty_reply` | 模型这一轮没有返回任何内容（P46 空响应专用） | retry / switch_model / details |
+| `unknown` | 出错了 | retry / details |
+
 ---
 
 ## 11. SSE 注释行（internal）
@@ -494,6 +592,8 @@
 | `agent`（兼容字段，**deprecated**） | 兜底回退 `or ev.get("agent")` | 兜底回退 `\|\| .agent` | — |
 | `orchestrator_step` | **未消费**（v1.8 后续决定） | **未消费**（v1.8 后续决定） | 未消费 |
 | `panel_refresh` | 未消费（丢弃） | 自动刷新 DAG/Timer 面板 + toast | 未消费（丢弃） |
+| `tool_done` / `tool_progress` / `notice` | 未消费（忽略） | 时间线状态 / 用时 / 展开详情 / 说明行（`chat_timeline.js`） | 未消费（忽略） |
+| `delta.error` 友好字段 | 未消费 | 错误卡片 | 未消费 |
 | `usage` | 耗时+token 统计行 | 底部显示（`_lu`） | 累积入 `result["usage"]` |
 | `finish_reason: stop` | 流结束检测 | 流结束检测 | 流结束检测 |
 | `data: [DONE]` | 跳出读循环 | 跳出读循环 | 跳出读循环 |

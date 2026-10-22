@@ -9,12 +9,13 @@ import uuid
 LEGACY_ACTIONS = ('initialize', 'screenshot', 'wechat_login', 'wechat_status', 'ocr', 'click_text', 'type_secret',
                   'open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window', 'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover')
 NEW_ACTIONS = ('system_info', 'processes', 'kill_process', 'services', 'run_powershell',
-               'list_dir', 'download', 'upload', 'launch_app', 'window_state', 'double_click', 'inspect_file')
+               'list_dir', 'download', 'upload', 'launch_app', 'window_state', 'double_click', 'inspect_file',
+               'ui_tree', 'click_element')
 # inspect_file 是纯服务端编排的动作: 不下发给节点, 由服务端复用已有节点动作完成 (inspect_file = download + 服务端解析),
 # 因此节点端无需新代码; 仍放进 NEW_ACTIONS, 让版本门禁按它依赖的 download 能力把关。
 ACTIONS = LEGACY_ACTIONS + NEW_ACTIONS
 # 幂等/只读动作: 网络类错误可安全重试; 点击/输入/结束进程/传输等有副作用动作绝不自动重试。
-IDEMPOTENT_ACTIONS = ('screenshot', 'system_info', 'processes', 'list_dir', 'services', 'windows', 'inspect_file')
+IDEMPOTENT_ACTIONS = ('screenshot', 'system_info', 'processes', 'list_dir', 'services', 'windows', 'inspect_file', 'ui_tree')
 
 
 def desktop_request(args, workspace):
@@ -22,6 +23,11 @@ def desktop_request(args, workspace):
     request['amount'] = args.get('amount', -5)
     request['input_method'] = args.get('input_method', 'clipboard')
     request['window_handle'] = args.get('window_handle')
+    for key in ('control_type', 'browser'):
+        if isinstance(args.get(key), str) and args[key].strip():
+            request[key] = args[key].strip()[:40]
+    if args.get('action') == 'click_element' and not str(args.get('text', '')).strip():
+        raise ValueError('click_element 需要 text：ui_tree 返回的控件名称')
     if args.get('action') in ('click', 'double_click', 'right_click', 'hover', 'drag') or args.get('x') is not None or args.get('y') is not None:
         from PIL import Image
         reference = Path(args.get('reference_image', '')).resolve()
@@ -38,6 +44,8 @@ def desktop_request(args, workspace):
                 request['screen_size'] = list(image.size)
         for key in ('x', 'y', 'end_x', 'end_y', 'image_width', 'image_height'):
             request[key] = args.get(key)
+        if request.get('image_width') is None or request.get('image_height') is None:
+            request['image_width'], request['image_height'] = _infer_image_size(reference, request)
     if args.get('compress'):
         request['compress'] = True
     action = args.get('action')
@@ -97,6 +105,8 @@ def desktop_request(args, workspace):
         if not isinstance(name, str) or not name.strip():
             raise ValueError('launch_app 需要应用名称 name')
         request['name'] = name
+        if isinstance(args.get('args'), list) and args['args']:
+            request['args'] = [str(x) for x in args['args']][:8]   # 内置程序的参数 (如 vscode 打开的文件夹); 节点侧再校验
     elif action == 'window_state':
         mode = args.get('window_state_mode')
         if mode not in ('maximize', 'minimize', 'restore'):
@@ -126,16 +136,22 @@ def powershell(client, script, timeout=30):
     return text
 
 
+BUSY_WAIT_SECONDS = 45
+
+
 def _run_node_job(nodes, alias, action, request, timeout, idempotent=False):
     """派发单个节点任务并等待结果；幂等/只读动作遇网络类错误重试 1-2 次。
 
     [2026-10-19] 超时 (TimeoutError) 与节点心跳中断 (NodeGoneError) 不再重试: 以前节点掉线后
-    每次都白等满 timeout 再重派, 3 次累计 ~360 秒空转; 节点不回来, 重派只会同样超时。"""
+    每次都白等满 timeout 再重派, 3 次累计 ~360 秒空转; 节点不回来, 重派只会同样超时。
+    [2026-10-21] 节点一次只跑一个任务。真机: 另一个会话在本机传 48MB 文件的两个分块之间插了一条
+    run_powershell, 下一块立刻报"已有桌面任务", 整个传输作废。任务还没派发, 等对方做完再派是安全的:
+    最多等 BUSY_WAIT_SECONDS 秒。"""
     from lib.windows_nodes import NodeGoneError
     attempts = 3 if idempotent else 1
     last = None
     for attempt in range(attempts):
-        job_id = nodes.job(alias, action, request, timeout)
+        job_id = _dispatch_when_free(nodes, alias, action, request, timeout)
         try:
             return nodes.wait(job_id, timeout)
         except (TimeoutError, NodeGoneError):
@@ -144,54 +160,89 @@ def _run_node_job(nodes, alias, action, request, timeout, idempotent=False):
             last = exc
             if not idempotent or attempt == attempts - 1:
                 raise
-            import time
             time.sleep(1)
     raise last
 
 
+def _dispatch_when_free(nodes, alias, action, request, timeout, wait=None, sleep=None):
+    deadline = time.monotonic() + (BUSY_WAIT_SECONDS if wait is None else wait)
+    sleep = sleep or time.sleep
+    while True:
+        try:
+            return nodes.job(alias, action, request, timeout)
+        except ValueError as exc:
+            if '已有桌面任务' not in str(exc):
+                raise
+            if time.monotonic() >= deadline:
+                raise ValueError(f'{exc}。已排队等待 {BUSY_WAIT_SECONDS if wait is None else wait} 秒仍被占用'
+                                 '（可能是别的会话在用这台电脑）；先做不依赖它的步骤或告诉用户稍后再试') from exc
+            sleep(0.5)
+
+
 def _node_upload(nodes, alias, args, workspace, timeout):
-    """服务端工作区文件 → Windows Downloads\\LiteCode，分块 + sha256 校验。"""
+    """服务端工作区文件 → Windows Downloads\\LiteCode，分块 + sha256 校验 (流式, 内存只占一块)。"""
     import base64
-    from lib.windows_transfer import resolve_upload_source, sha256_hex, chunk_count, slice_chunk, sanitize_download_name, CHUNK
+    from lib.windows_transfer import resolve_upload_source, sha256_file, chunk_count, read_chunk, sanitize_download_name
     source = resolve_upload_source(Path(workspace), args.get('source', ''))
     if not source.is_file():
         raise ValueError('上传源文件必须是工作区 uploads/ 目录内的已有文件')
-    data = source.read_bytes()
-    total = chunk_count(len(data))   # 同时校验 ≤50MB
-    digest = sha256_hex(data)
+    size = source.stat().st_size
+    total = chunk_count(size)   # 同时校验传输上限
+    digest = sha256_file(source)
     name = sanitize_download_name(args.get('dest_name') or source.name)
     transfer_id = _uuid()
     result = None
+    started = time.monotonic()
     for index in range(total):
         request = {'transfer_id': transfer_id, 'name': name, 'index': index, 'total': total,
-                   'sha256': digest, 'data': base64.b64encode(slice_chunk(data, index)).decode()}
+                   'sha256': digest, 'data': base64.b64encode(read_chunk(source, index)).decode()}
         result = _run_node_job(nodes, alias, 'upload', request, timeout)
         if not result.get('ok'):
-            raise RuntimeError('上传失败: ' + str(result.get('error', '未知错误')))
+            raise RuntimeError(f'上传失败 (第 {index + 1}/{total} 块): ' + str(result.get('error', '未知错误')))
+    seconds = max(time.monotonic() - started, 0.001)
     return {'ok': True, 'state': 'upload_done', 'path': result.get('path'), 'name': result.get('name'),
-            'size': len(data), 'sha256': digest, 'chunks': total}
+            'size': size, 'sha256': digest, 'chunks': total, 'verified': 'Windows 端已按 sha256 校验整文件',
+            'seconds': round(seconds, 1), 'mb_per_s': round(size / 1048576 / seconds, 2)}
 
 
 def _node_download(nodes, alias, args, workspace, timeout, idempotent=False):
-    """Windows 文件 → 服务端工作区 uploads/，分块 + sha256 校验。"""
+    """Windows 文件 → 服务端工作区 uploads/，分块 + sha256 校验；边收边写临时文件, 校验通过才改名。"""
     import base64
-    from lib.windows_transfer import reassemble, sanitize_download_name
+    import hashlib
+    from lib.windows_transfer import sanitize_download_name, MAX_TRANSFER
     meta = _run_node_job(nodes, alias, 'download', {'path': args.get('path', '')}, timeout, idempotent)
     if not meta.get('ok'):
         raise RuntimeError('读取远端文件失败: ' + str(meta.get('error', '未知错误')))
     total = int(meta['chunks'])
-    chunks = {}
-    for index in range(total):
-        part = _run_node_job(nodes, alias, 'download', {'path': args.get('path', ''), 'index': index}, timeout, idempotent)
-        if not part.get('ok'):
-            raise RuntimeError('下载分块失败: ' + str(part.get('error', '未知错误')))
-        chunks[index] = base64.b64decode(part['chunk'], validate=True)
-    data = reassemble(chunks, meta['sha256'])
-    target = Path(workspace) / 'uploads' / ('Node-Download-' + _uuid()[:8] + '-' + sanitize_download_name(meta['name']))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(data)
+    uploads = Path(workspace) / 'uploads'
+    uploads.mkdir(parents=True, exist_ok=True)
+    target = uploads / ('Node-Download-' + _uuid()[:8] + '-' + sanitize_download_name(meta['name']))
+    temp = target.with_name('.part-' + target.name)
+    digest = hashlib.sha256()
+    size = 0
+    started = time.monotonic()
+    try:
+        with temp.open('wb') as handle:
+            for index in range(total):
+                part = _run_node_job(nodes, alias, 'download', {'path': args.get('path', ''), 'index': index},
+                                     timeout, idempotent)
+                if not part.get('ok'):
+                    raise RuntimeError(f'下载分块失败 (第 {index + 1}/{total} 块): ' + str(part.get('error', '未知错误')))
+                block = base64.b64decode(part['chunk'], validate=True)
+                size += len(block)
+                if size > MAX_TRANSFER:
+                    raise ValueError('下载超过传输上限')
+                digest.update(block)
+                handle.write(block)
+        if digest.hexdigest() != meta['sha256']:
+            raise ValueError('整体 sha256 校验失败，传输已损坏（文件可能在传输中被修改）')
+        temp.replace(target)
+    finally:
+        temp.unlink(missing_ok=True)
+    seconds = max(time.monotonic() - started, 0.001)
     return {'ok': True, 'state': 'download_done', 'path': str(target), 'name': meta['name'],
-            'size': len(data), 'sha256': meta['sha256']}
+            'size': size, 'sha256': meta['sha256'], 'verified': '服务端已按 sha256 校验整文件',
+            'seconds': round(seconds, 1), 'mb_per_s': round(size / 1048576 / seconds, 2)}
 
 
 def _node_inspect(nodes, alias, args, workspace, timeout):
@@ -232,10 +283,21 @@ def wait_until_updated(nodes, alias, node, limit=None):
     return node
 
 
+# [2026-10-21] 真机 E2E: 模型反复发 action="press" 被拒 ("不支持的操作") 后原地打转。常见别名归一到正式动作。
+ACTION_ALIASES = {'press': 'hotkey', 'key': 'hotkey', 'keypress': 'hotkey', 'key_press': 'hotkey', 'keys': 'hotkey',
+                  'type': 'type_text', 'input': 'type_text', 'left_click': 'click', 'tap': 'click',
+                  'doubleclick': 'double_click', 'rightclick': 'right_click', 'tree': 'ui_tree',
+                  'accessibility_tree': 'ui_tree', 'elements': 'ui_tree', 'list_windows': 'windows',
+                  'open_app': 'launch_app', 'launch': 'launch_app', 'navigate': 'open_url', 'goto': 'open_url'}
+
+
 def execute(args, workspace):
     from core.tools.handlers.remote import _conn, _connect, _close
     from lib.windows_desktop_actions import shell_guard
     action = args.get('action', 'screenshot')
+    if action not in ACTIONS and isinstance(action, str) and action.strip().lower() in ACTION_ALIASES:
+        action = ACTION_ALIASES[action.strip().lower()]
+        args = {**args, 'action': action}
     if action not in ACTIONS:
         raise ValueError('不支持的操作')
     from lib.windows_nodes import Nodes
@@ -374,3 +436,21 @@ def execute(args, workspace):
                     pass
             sftp.close()
         _close(client, jump)
+
+
+def _infer_image_size(reference, request):
+    """模型没传 image_width/height 时推断坐标体系 (2026-10-22 真机: 抖音卡片 x=1970 连点 9 次都报"必须提供图片尺寸",
+    被循环保护封禁)。ocr/ui_tree 给的 rect/center 是屏幕像素, 看压缩图估的是图片像素:
+    截图没压缩 → 两者一样; 坐标超出图片但在屏幕内 → 屏幕像素; 两种都说得通 → 报错讲清楚怎么传。"""
+    from PIL import Image
+    with Image.open(reference) as image:
+        img = list(image.size)
+    screen = list(request.get('screen_size') or img)
+    coords = [(request.get(a), request.get(b)) for a, b in (('x', 'y'), ('end_x', 'end_y'))]
+    coords = [(x, y) for x, y in coords if isinstance(x, (int, float)) and isinstance(y, (int, float))]
+    if img == screen or not coords:
+        return img
+    if any(x >= img[0] or y >= img[1] for x, y in coords) and all(x < screen[0] and y < screen[1] for x, y in coords):
+        return screen
+    raise ValueError(f'缺 image_width/image_height, 无法判断坐标体系: 按截图图片定位传 image_width={img[0]},image_height={img[1]}; '
+                     f'用 ocr/ui_tree 返回的 rect/center (屏幕像素) 传 image_width={screen[0]},image_height={screen[1]}')

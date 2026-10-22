@@ -212,7 +212,10 @@ async def api_login(request: Request, response: Response):
         return {"ok": True, "msg": "auth disabled"}
     ip = (request.client.host if request.client else "?") or "?"
     _rate_check(ip)
-    b = await request.json()
+    try:
+        b = await request.json()
+    except ValueError:   # [ui-audit 2026-10-21] 非法 JSON 原来 500
+        raise HTTPException(status_code=400, detail="请求体不是合法 JSON")
     pwd = b.get("password", "") if isinstance(b, dict) else ""
     if not _pw_eq(pwd, _AUTH_PASSWORD):
         _rate_record_fail(ip)

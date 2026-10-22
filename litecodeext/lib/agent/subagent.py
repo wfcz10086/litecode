@@ -23,7 +23,7 @@ from ..config import (
     WORKSPACE, ENABLE_THINKING, THINKING_BUDGET, log,
 )
 from ..tools.defs import TOOL_DEFS
-from ..transport import vllm_stream as _vllm_stream
+from ..transport import subagent_stream as _vllm_stream   # [usage-ledger] 账记在 subagent
 from ..tool_args import parse_tool_args as _parse_tool_args
 from ..sse import sse_status, sse_content
 
@@ -59,7 +59,7 @@ _SUBAGENT_CONFIGS: dict = {
     "researcher": {
         "system": (
             "你是信息收集专家。任务：搜索网络获取所需数据（价格/新闻/文档/API等）。\n"
-            "工具：web_fetch / web_search / browser_search / browser_read / execute_shell。\n"
+            "工具：web_fetch / web_search / browser_search / browser_read / execute_shell / github_search / github_repo / package_search。\n"
             "搜索策略 (v1.2):\n"
             "  1. 任务明确指明 REST API 端点 (含 api. 域名 / .json 路径) → 直接 execute_shell 跑 curl\n"
             "     例: `curl -s 'https://api.binance.com/api/v3/ticker/24hr' | jq '.[:40]'`\n"
@@ -67,10 +67,12 @@ _SUBAGENT_CONFIGS: dict = {
             "  2. 通用网页/新闻/文档 → 先 web_search (免费 API: DuckDuckGo + Wikipedia + SearXNG)\n"
             "  3. web_search 结果为空或被反爬挡住 → browser_search (真实浏览器 + 截图)\n"
             "  4. 需要看 JS 渲染后的页面 → browser_read(url)\n"
+            "  5. 开源项目/库/参考实现 → github_search (kind=repositories 按 stars, kind=code 搜片段) + "
+            "package_search, 再用 github_repo 看 readme/tree/file; 开发类网页用 web_search(category='it')\n"
             "输出：原始数据 + 来源 URL + 截图路径 (若有)，不要分析，直接返回数据供下游。"
         ),
         "allowed": {"web_fetch", "web_search", "browser_search", "browser_read",
-                     "execute_shell"},
+                     "execute_shell", "github_search", "github_repo", "package_search"},
     },
     "coder": {
         "system": (
@@ -93,12 +95,15 @@ _SUBAGENT_CONFIGS: dict = {
             "  c. 拿到 github/SO 结果 → 说 '这个问题在 issue #N 修过, 我照它的思路改'\n"
             "  d. 改代码 + 重新验证\n\n"
             "## 输出\n"
-            "每完成一个子任务: 代码文件路径 + 运行命令 + stdout/stderr/exit code. 不要抽象描述。"
+            "每完成一个子任务: 代码文件路径 + 运行命令 + stdout/stderr/exit code. 不要抽象描述。\n"
+            "要看截图/图片就用 vision_ocr(path 或 paths), 不要为看图安装 OCR/opencv 库。"
         ),
-        "allowed": {"write_file", "patch_file", "execute_shell", "read_file",
+        "allowed": {"write_file", "patch_file", "execute_shell", "read_file", "vision_ocr",
                      "get_tree", "update_global_context",
                      # [v1.0.3] 错误语义搜索
                      "search_code_error", "github_search_issues", "stackoverflow_search",
+                     # [2026-10-20] 看别人怎么实现 / 查库版本
+                     "github_search", "github_repo", "package_search",
                      # [v1.0.4] 项目地图 (大项目导航 + 索引)
                      "update_map", "find_files", "search_code"},
         "max_iter": 50,
@@ -118,7 +123,8 @@ _SUBAGENT_CONFIGS: dict = {
         "allowed": {"web_fetch", "web_search", "browser_search", "browser_read",
                      "execute_shell", "write_file", "read_file",
                      "update_global_context",
-                     "search_code_error", "github_search_issues", "stackoverflow_search"},
+                     "search_code_error", "github_search_issues", "stackoverflow_search",
+                     "github_search", "github_repo", "package_search"},
         "max_iter": 40,
     },
     "tester": {
@@ -131,9 +137,12 @@ _SUBAGENT_CONFIGS: dict = {
             "**4. 验证**: 失败的点要再读源码 + 复跑, 给出根因指导意见 (不改代码, 只诊断).\n\n"
             "## 错误根因\n"
             "看到 traceback → search_code_error 找社区已知问题, 返回给上游 (coder) 参考.\n"
-            "输出: PASS/FAIL 表格 + 每个 FAIL 的根因分析 + 修复建议 (如'issue #123 建议改 X')."
+            "输出: PASS/FAIL 表格 + 每个 FAIL 的根因分析 + 修复建议 (如'issue #123 建议改 X').\n\n"
+            "## 看图\n"
+            "截图/图片 (png/jpg) 用 vision_ocr(path=... 或 paths=[...] 多张对比) 识别, read_file 读不了图片。"
+            "禁止为了看图去 pip 安装 pytesseract/opencv 等库或改系统环境 (2026-10-21 跑分: 单题因此耗时 743 秒)。"
         ),
-        "allowed": {"execute_shell", "read_file",
+        "allowed": {"execute_shell", "read_file", "vision_ocr",
                      "search_code_error", "github_search_issues", "stackoverflow_search"},
         "max_iter": 30,
     },
@@ -620,7 +629,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
 
         _sanitize_history(messages)
 
-        async for chunk in _vllm_stream(messages, sa_tools):
+        async for chunk in _reg.observe(_vllm_stream(messages, sa_tools)):   # [subagent-view] 记思考/正文摘要
             choices = chunk.get("choices", [])
             if not choices:
                 continue
@@ -778,7 +787,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                     log.warning(f"  [subagent:{agent_type}] injection gate failed: {_ige}")
                 if _ig_block:
                     _win_err = _ig_block
-            _reg.tool_begin(fn_name, fn_args)   # [agent-control] send 时可告知主代理"当前工具已运行 N 秒"
+            _reg.tool_begin(fn_name, fn_args, tc["id"])   # [agent-control] send 时可告知主代理"当前工具已运行 N 秒"
             # v1.0: 黑板工具特殊处理
             if fn_name == "update_global_context" and _active_blackboard:
                 key = fn_args.get("key", "")
@@ -798,7 +807,7 @@ async def _run_subagent_core(task: str, agent_type: str, context: str = "",
                 result = f"ERROR: execute_tool not available for {fn_name}"
             if _ev is not None:
                 _ev.observe(fn_name, fn_args, result)
-            _reg.note_tool(fn_name, fn_args)
+            _reg.note_tool(fn_name, fn_args, result, tc["id"])   # [subagent-view] 结果摘要/用时/成败进事件
             if _op and fn_name == "windows_desktop":
                 _raw_desktop.append({"tool_call_id": tc["id"], "content": result})
 

@@ -138,12 +138,20 @@ RUN pip3 install --break-system-packages pypdfium2 || \
 
 # Group 4: 数据库 + 浏览器 + MCP + 其他（拆开避免一个失败带走全组）
 # 4a: HTML 解析（Web UI 必装）
+# [2026-10-21] 上面 openpyxl 那行带 || true, 实际构建失败被吞 (镜像里没有 openpyxl, Excel 任务靠运行时现装);
+# edge-tts 是配音技能 (video-studio) 依赖。这里单独装, 失败就让构建失败。
+RUN pip3 install --break-system-packages openpyxl edge-tts
+# [2026-10-22] 本地纯 CPU 语音合成 (core/tts_local.py); 模型 kokoro-multi-lang-v1_1 放工作区 models/ 下, 不进镜像
+RUN pip3 install --break-system-packages sherpa-onnx==1.13.8 soundfile && python3 -c "import sherpa_onnx, soundfile"
 RUN pip3 install --break-system-packages beautifulsoup4 lxml || \
     pip3 install -i https://pypi.org/simple/ --break-system-packages beautifulsoup4 lxml
 # 4b: ORM + 数据库驱动（部分功能用）
 RUN pip3 install --break-system-packages sqlalchemy redis || true
 RUN pip3 install --break-system-packages psycopg2-binary pymysql || \
     echo "WARN: psycopg2/pymysql 失败，PG/MySQL 不可用"
+# 4b': 内置知识库 plugins/kb (2026-10-22): 本地向量模型推理 onnxruntime + PG 驱动; 文档解析用上面的
+#      pypdf/pypdfium2/python-docx/python-pptx/openpyxl。现有镜像已带齐, 这里显式声明, 缺了就让构建失败
+RUN pip3 install --break-system-packages onnxruntime psycopg2-binary && python3 -c "import onnxruntime, psycopg2"
 # 4c: 浏览器
 RUN pip3 install --break-system-packages selenium || true
 # 4d: MCP + 加密 + qrcode

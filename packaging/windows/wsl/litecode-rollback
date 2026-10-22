@@ -1,0 +1,36 @@
+#!/bin/bash
+# 更新后起不来时回到上一版 (保留新版期间改过的 config.json)。
+# 退出码: 0 已回滚; 1 没有可回滚的旧版 (什么都没改); 4 回滚失败 (输出里写明各目录现状)
+# LITECODE_ROOT 仅供测试把所有路径挪到临时目录; 正式运行为空。
+set -uo pipefail
+R=${LITECODE_ROOT:-}
+APP=$R/opt/litecode
+PREV=$R/opt/litecode.prev
+BAD=$R/opt/litecode.bad
+EP=$R/entrypoint.sh
+VF=$R/etc/litecode-version
+
+[ -d "$PREV" ] || { echo "ROLLBACK_FAILED: 没有可回滚的旧版 ($PREV 不存在)"; exit 1; }
+[ -f "$PREV/web_ui.py" ] || { echo "ROLLBACK_FAILED: 旧版目录不完整 ($PREV/web_ui.py 不存在)"; exit 1; }
+if [ -f "$APP/config.json" ]; then
+  cp -a "$APP/config.json" "$PREV/config.json" || echo "WARN: 没能带回当前 config.json, 使用更新前的配置"
+fi
+rm -rf "$BAD"
+if [ -d "$APP" ]; then
+  mv "$APP" "$BAD" || { echo "ROLLBACK_FAILED: 无法移走当前版本, 未做改动"; exit 4; }
+fi
+if ! mv "$PREV" "$APP"; then
+  if [ -d "$BAD" ] && mv "$BAD" "$APP"; then
+    echo "ROLLBACK_FAILED: 无法换回旧版, 已放回当前版本"
+  else
+    echo "ROLLBACK_FAILED: 无法换回旧版, 当前版本在 $BAD, 旧版在 $PREV"
+  fi
+  exit 4
+fi
+RC=0
+if [ -f "$EP.prev" ]; then mv "$EP.prev" "$EP" || { echo "ROLLBACK_FAILED: 恢复旧版启动脚本失败"; RC=4; }; fi
+if [ -f "$VF.prev" ]; then mv "$VF.prev" "$VF" || { echo "ROLLBACK_FAILED: 恢复旧版版本号失败"; RC=4; }; fi
+rm -rf "$BAD"
+sync
+[ "$RC" = 0 ] && echo "ROLLED_BACK $(cat "$VF" 2>/dev/null)"
+exit $RC

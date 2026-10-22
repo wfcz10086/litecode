@@ -1,0 +1,60 @@
+{
+  "name": "doc_studio",
+  "description": "文档工坊: 大纲 → HTML → 配图 → 导出 PDF + PPTX → 质检 (每步独立节点; $TOPIC 换成主题, 目录 /tmp/litecode_workspace/doc_studio)",
+  "steps": [
+    {
+      "id": "outline",
+      "agent_type": "researcher",
+      "label": "大纲",
+      "task": "围绕 $TOPIC 做一份 10 页幻灯片大纲 (先 web_search 核实事实与数据, 标注年份)。每页: 标题(一句话观点) + 2~4 要点 + 配图需求 (照片拍什么/英文搜索词, 或图表数据)。写到 /tmp/litecode_workspace/doc_studio/outline.md, 输出该路径。",
+      "timeout": 900
+    },
+    {
+      "id": "html",
+      "agent_type": "coder",
+      "label": "HTML 设计",
+      "task": "按 doc-studio 技能 (load_skill doc-studio) 把 ${step:outline:output} 的大纲写成 /tmp/litecode_workspace/doc_studio/deck.html: 每页 <section class=\"slide\"> (1280×720), <link rel=\"stylesheet\" href=\"base.css\">, 统一 --ds-* tokens, 图片一律用 data-need/data-kind/data-query 占位, 末页放 <div class=\"credits\" data-credits></div>。只输出 HTML 路径。",
+      "depends_on": ["outline"],
+      "timeout": 1200
+    },
+    {
+      "id": "images",
+      "agent_type": "shell",
+      "label": "配图",
+      "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/images.py /tmp/litecode_workspace/doc_studio/deck.html  输出最后的 JSON 汇总。",
+      "depends_on": ["html"],
+      "timeout": 600
+    },
+    {
+      "id": "pdf",
+      "agent_type": "shell",
+      "label": "导出 PDF",
+      "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/render.py /tmp/litecode_workspace/doc_studio/deck.html --pdf /tmp/litecode_workspace/doc_studio/deck.pdf --long /tmp/litecode_workspace/doc_studio/deck_long.jpg  输出 JSON。",
+      "depends_on": ["images"],
+      "timeout": 300
+    },
+    {
+      "id": "pptx",
+      "agent_type": "shell",
+      "label": "导出 PPTX",
+      "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/html2pptx.py /tmp/litecode_workspace/doc_studio/deck.html -o /tmp/litecode_workspace/doc_studio/deck.pptx  输出 JSON。",
+      "depends_on": ["images"],
+      "timeout": 300
+    },
+    {
+      "id": "qa",
+      "agent_type": "shell",
+      "label": "质检",
+      "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/qa.py /tmp/litecode_workspace/doc_studio/deck.html --shots /tmp/litecode_workspace/doc_studio/qa_shots -o /tmp/litecode_workspace/doc_studio/qa.json  输出 counts 和 error 级问题。",
+      "depends_on": ["images"],
+      "timeout": 300
+    },
+    {
+      "id": "report",
+      "agent_type": "writer",
+      "label": "交付汇总",
+      "task": "汇总交付: 列出 PDF / PPTX / 长图路径, 配图来源 (${step:images:output}), 质检结论 (${step:qa:output}); 有 error 就写明哪页什么问题、建议怎么改。",
+      "depends_on": ["pdf", "pptx", "qa"]
+    }
+  ]
+}

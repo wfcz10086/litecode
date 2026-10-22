@@ -31,7 +31,7 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urljoin, urlparse
 
 try:
     import httpx
@@ -384,12 +384,19 @@ def _vision_extract_from_screenshot(b64_png: Optional[str], *,
             key = mdl.get("api_key", "EMPTY")
             payload = dict(payload_tmpl)
             payload["model"] = mdl["id"]
+            import time as _time
+            _t0 = _time.time()
             r = httpx.post(
                 f"{url}/chat/completions",
                 headers={"Authorization": f"Bearer {key}",
                          "Content-Type": "application/json"},
                 json=payload, timeout=45.0,
             )
+            try:   # [usage-ledger] 浏览器搜索截图识别记账
+                from lib.usage_ledger import record_http as _usage_rec
+                _usage_rec("vision", mdl["id"], payload, r, _t0)
+            except ImportError:
+                pass
             if r.status_code != 200:
                 continue
             data = r.json()
@@ -536,6 +543,8 @@ def browser_search(query: str, engine: str = "bing", top_k: int = 5,
                     url_ = real
                 else:
                     continue   # 解不出就放弃
+            if url_.startswith("/"):   # sogou 等给站内相对跳转 (/link?url=...), 补成绝对地址才点得开
+                url_ = urljoin(cfg["url"], url_)
             if not title or not url_ or _is_useless_url(url_):
                 continue
             results.append({"title": title[:200], "url": url_, "snippet": snippet[:400]})
@@ -689,6 +698,11 @@ def searxng_search(query: str, top_k: int = 8,
     """
     if httpx is None:
         return {"ok": False, "message": "ERROR: httpx 未安装", "results": []}
+    # [2026-10-22] 中文查询按 zh-CN 搜; auto 时上游会走日本区, 中文问题出一堆日文页面
+    _cjk_query = bool(re.search(r"[一-龥]", query))
+    _kana_query = bool(re.search(r"[぀-ヿ]", query))
+    if language == "auto" and _cjk_query and not _kana_query:
+        language = "zh-CN"
     try:
         params = {
             "q": query,
@@ -721,6 +735,8 @@ def searxng_search(query: str, top_k: int = 8,
         u = (it.get("url") or "").strip()
         if not u or u in seen_urls:
             continue
+        if _cjk_query and not _kana_query and re.search(r"[぀-ヿ]", it.get("title") or ""):
+            continue   # 中文问题混进来的日文页面
         seen_urls.add(u)
         results.append({
             "title":   (it.get("title") or "").strip()[:200],

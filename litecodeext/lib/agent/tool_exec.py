@@ -17,6 +17,19 @@ from lib.sse import sse_meta
 from lib.sse import sse_status
 from lib.tool_args import parse_tool_args as _parse_tool_args
 from tool_dispatch import execute_tool
+from lib.session import check_interrupt, has_steers, steer_urgent
+from lib import tool_trace as _tt
+
+_STOPPED_SKIP = "ERROR: 用户已点停止, 本工具未执行。"
+_STEER_SKIP = "ERROR: 用户插话了, 本工具暂缓未执行。先看用户的插话; 看完如果仍需要, 请重新调用。"
+
+
+def _stopped_msg(fn_name: str, elapsed: float, steer: bool = False) -> str:
+    why = "用户立即插话要求调整" if steer else "用户已点停止"
+    msg = f"ERROR: {why}, {fn_name} 在执行 {elapsed:.0f}s 后被放弃, 结果未知。"
+    if fn_name in ("ssh_exec", "execute_shell", "windows_exec", "desktop_exec"):
+        msg += " 已发出的命令可能仍在目标机上继续运行, 需要时请先检查进程状态再决定是否重做。"
+    return msg
 
 
 def _write_call_confirmed_success(fn_name: str, result: str) -> bool:
@@ -51,6 +64,16 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
     try:
         for tc in tool_call_list:
             fn_name = tc["function"]["name"]
+            # [stop 2026-10-21] 用户已点停止: 本批剩下的工具不再执行 (仍补一条结果, 保持 tool_call/结果成对)。
+            # 不清标记, 交给调用方的 POST-TOOL-INTERRUPT 统一收尾。
+            if check_interrupt(_ctx.session_id):
+                tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _STOPPED_SKIP})
+                continue
+            # 有插话 (普通或立即): 本批剩余工具暂缓, 插话由调用方接进上下文。普通插话不打断正在跑的那一个,
+            # 但不再等整批跑完 —— 模型常把几条命令放一批, 原来要等全部跑完才看到插话 (实测 55s)
+            if has_steers(_ctx.session_id):
+                tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _STEER_SKIP})
+                continue
             fn_args, _args_err = _parse_tool_args(tc["function"]["arguments"], fn_name)
             if _args_err:
                 tool_results.append({"role": "tool", "tool_call_id": tc["id"], "content": _args_err})
@@ -119,9 +142,12 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                 )
             else:
                 log.info(f"  \033[35m⚙ {fn_name}\033[0m {_fmt_full[:240]}")
+            # [trace 2026-10-22] 新增可选 id/name/args: 与结束时的 tool_done.id 关联; 老客户端只读 status/detail
+            _call_id = str(tc.get("id") or f"call-{time.time_ns()}")
             yield sse_status(
                 "task_exec",
-                {"status": "executing", "detail": detail_str},
+                {"status": "executing", "detail": detail_str,
+                 "id": _call_id, "name": fn_name, "args": _tt.args_preview(fn_args)},
                 model
             )
 
@@ -147,16 +173,32 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                     _tool_task = _prefetch.take(tc["id"], fn_args) or asyncio.ensure_future(
                         execute_tool(fn_name, fn_args, sid=_ctx.session_id)
                     )
-                    _hb_interval = 15  # 每 15 秒一次心跳
+                    # [stop 2026-10-21] 每秒查一次停止标记, 心跳仍 15 秒一次。原来只等工具自己结束,
+                    # ssh_exec 跑远程 pip install 这类命令时点停止要等几分钟 (实测 web-xxxx)。
+                    _hb_interval, _hb_last = 15, time.time()
+                    _stopped = False
                     while not _tool_task.done():
                         try:
-                            await asyncio.wait_for(
-                                asyncio.shield(_tool_task), timeout=_hb_interval
-                            )
+                            await asyncio.wait_for(asyncio.shield(_tool_task), timeout=1)
                         except asyncio.TimeoutError:
-                            # 工具仍在执行，发送心跳
-                            yield f": heartbeat {fn_name}\n\n"
-                    result, diff = _tool_task.result()
+                            if check_interrupt(_ctx.session_id) or steer_urgent(_ctx.session_id):
+                                _stopped = "steer" if not check_interrupt(_ctx.session_id) else "stop"
+                                _tool_task.cancel()
+                                break
+                            # [trace] 工具内部上报的进度 / 降级说明 (lib/tool_trace.report) 逐条透传
+                            for _pg in _tt.drain(_ctx.session_id, fn_name):
+                                yield sse_status("tool_progress", {"id": _call_id, "name": fn_name, **{
+                                    k: _pg[k] for k in ("text", "pct") if k in _pg}}, model)
+                                _hb_last = time.time()
+                            if time.time() - _hb_last >= _hb_interval:
+                                _hb_last = time.time()
+                                yield f": heartbeat {fn_name}\n\n"   # 工具仍在执行，发送心跳
+                    if _stopped:
+                        result, diff = _stopped_msg(fn_name, time.time() - _tool_t0, steer=_stopped == "steer"), None
+                        log.warning(f"  [INTERRUPT@in-tool:{_ctx.sid_tag}] {fn_name} 执行中被用户"
+                                    f"{'立即插话' if _stopped == 'steer' else '停止'}")
+                    else:
+                        result, diff = _tool_task.result()
                 except Exception as _tool_exc:
                     result = f"ERROR: tool execution failed: {_tool_exc}"
                     diff = None
@@ -189,6 +231,25 @@ async def _run_tool_calls(_ctx, _st, tool_call_list, tool_results,
                 "status": "done",
                 "detail": ("[warn] " if is_warn else "") + preview
             }, model)
+            # [trace 2026-10-22] 结构化结果事件: 成败 / 用时 / 摘要 / 友好错误 / 是否重试了之前失败的同一调用
+            for _pg in _tt.drain(_ctx.session_id, fn_name):   # 跑得快的工具: 进度在这里补发
+                yield sse_status("tool_progress", {"id": _call_id, "name": fn_name, **{
+                    k: _pg[k] for k in ("text", "pct") if k in _pg}}, model)
+            _failed = getattr(_ctx, "_trace_failed", None)
+            if _failed is None:
+                _failed = {}
+                try:
+                    _ctx._trace_failed = _failed
+                except Exception:
+                    pass
+            _sig = _tt.call_signature(fn_name, fn_args)
+            _retry_of = _failed.get(_sig)
+            yield sse_status("tool_done", _tt.tool_done(_call_id, fn_name, result, time.time() - _tool_t0,
+                                                        retry_of=_retry_of), model)
+            if is_err:
+                _failed[_sig] = _call_id
+            else:
+                _failed.pop(_sig, None)
 
             # [P43-c] DAG/Timer 工具变更后通知前端刷新面板
             if not is_err:

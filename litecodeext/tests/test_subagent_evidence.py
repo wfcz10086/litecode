@@ -288,3 +288,65 @@ def test_section_limit_and_windows_readback():
     sec = col.render(ok, why)
     assert len(sec) <= ev.SECTION_MAX and sec.startswith("【证据】")
     assert "Windows 回读: inspect_file C:/t.xlsx: Sheet1 B10=1964" in sec
+
+
+# ── P0-3: "已验证"必须针对最后一次修改, 且验证命令与改动相关 ──
+def _coder():
+    return ev.EvidenceCollector("coder", write_role=True)
+
+
+def test_p03_tests_before_last_edit_do_not_verify():
+    col = _coder()
+    col.observe("write_file", {"filepath": "/p/a.py"}, "wrote")
+    col.observe("execute_shell", {"command": "pytest -q"}, PYTEST_OK)
+    assert col.verdict()[0]
+    col.observe("patch_file", {"filepath": "/p/a.py"}, "patched")     # 测完又改
+    ok, why = col.verdict()
+    assert not ok and "最后一次修改之前" in why, why
+    col.observe("execute_shell", {"command": "pytest -q"}, PYTEST_OK)
+    assert col.verdict()[0]
+
+
+def test_p03_later_failing_test_overrides_earlier_pass():
+    col = _coder()
+    col.observe("write_file", {"filepath": "/p/a.py"}, "wrote")
+    col.observe("execute_shell", {"command": "pytest -q"}, PYTEST_OK)
+    col.observe("execute_shell", {"command": "pytest -q tests/test_a.py"}, PYTEST_FAIL)
+    ok, why = col.verdict()
+    assert not ok and "测试未通过" in why, why
+    assert col.explicit_failure() and "pytest -q tests/test_a.py" in col.explicit_failure()
+
+
+def test_p03_unrelated_run_command_does_not_verify():
+    col = _coder()
+    col.observe("write_file", {"filepath": "/p/calc.py"}, "wrote")
+    col.observe("execute_shell", {"command": "python /p/other_script.py"}, "hello")
+    assert not col.verdict()[0], "运行与改动无关的脚本不能当作验证"
+    assert col.explicit_failure() is None
+    col.observe("execute_shell", {"command": "python /p/calc.py"}, "42")
+    assert col.verdict()[0]
+
+
+def test_p03_operator_readback_must_hit_the_changed_file(monkeypatch):
+    from lib.agent import subagent_operator as so
+    monkeypatch.setattr(so, "is_operator", lambda t: t == "operator")
+    col = ev.EvidenceCollector("operator", write_role=True)
+    saved = json.dumps({"ok": True, "windows": [{"title": "销售表.xlsx - WPS Office", "foreground": True}]},
+                       ensure_ascii=False)
+    col.observe("windows_desktop", {"action": "hotkey", "keys": "ctrl+s"}, saved)
+    col.observe("windows_system", {"action": "inspect_file", "path": r"C:\Users\me\Desktop\旧表.xlsx"},
+                json.dumps({"ok": True, "type": "xlsx"}))
+    ok, why = col.verdict()
+    assert not ok and "回读" in why, "读的是另一个文件, 不能算回读了刚保存的文件"
+    col.observe("windows_system", {"action": "run_powershell", "script": "Get-Date"}, json.dumps({"ok": True}))
+    assert not col.verdict()[0]
+    col.observe("windows_system", {"action": "inspect_file", "path": r"C:\Users\me\Desktop\销售表.xlsx"},
+                json.dumps({"ok": True, "type": "xlsx"}))
+    assert col.verdict()[0]
+
+
+def test_p03_test_command_that_writes_its_own_log_still_counts():
+    col = _coder()
+    col.observe("write_file", {"filepath": "/p/a.py"}, "wrote")
+    col.observe("execute_shell", {"command": "pytest -q > /tmp/log.txt"}, PYTEST_OK)
+    assert col.verdict()[0]

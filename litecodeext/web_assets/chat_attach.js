@@ -89,9 +89,10 @@
       if (first < 0) { await resume(sid); return; }
       // 只追加新轮次，避免定时巡检反复重绘、语法高亮整段历史。
       const delta = st.running ? [msgs[first]] : msgs.slice(first);
-      _mergeConsecutiveAssistants(delta).forEach(m => addMsg(m.role, m.content, m.tools || [], false,
+      _mergeConsecutiveAssistants(delta).forEach(m => { const r = addMsg(m.role, m.content, m.tools || [], false,
         m.diffs || [], m.usage, m.source || '', m.wx_user || '', m.reasoning || '',
-        m._tool_results || [], m.desktop_steps || []));
+        m._tool_results || [], m.desktop_steps || [], {trace_steps: m.trace_steps || [], turn_error: m.turn_error || null});
+        if (m.steer && typeof _lcMarkSteer === 'function') _lcMarkSteer(r && r.wrap, m.urgent); });
       observed.set(sid, st.started);
       sbot(true);
       if (st.running) attach(sid);

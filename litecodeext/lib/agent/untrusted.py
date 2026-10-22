@@ -42,12 +42,13 @@ _ALWAYS_EXTERNAL = frozenset({
     "browser_login", "stackoverflow_search", "github_search_issues", "search_code_error", "vision_ocr",
     "desktop_screenshot", "ssh_exec", "ssh_read_file", "docker_remote_inspect", "docker_remote_ps",
     "deep_search", "url_to_pdf", "browser_fetch",
+    "github_search", "github_repo", "package_search",   # 2026-10-20: 别人仓库的 README/源码/issue 正文都是外部内容
 })
 # windows_desktop 的观察类动作带回屏幕文字 (聊天窗口里别人发的消息); 纯点击/按键结果也带 OCR, 一并包
 _DESKTOP_EXTERNAL_ACTIONS = frozenset({
     "screenshot", "ocr", "clipboard", "click_text", "wechat_status", "windows", "open_url", "scroll",
     "click", "double_click", "right_click", "hover", "focus_window", "launch_app", "type_text", "hotkey",
-    "drag", "window_state",
+    "drag", "window_state", "ui_tree", "click_element",   # ui_tree 带回界面控件名称/输入框内容
 })
 _WINSYS_EXTERNAL_ACTIONS = frozenset({"inspect_file", "run_powershell", "list_dir", "download", "processes",
                                       "services"})
@@ -82,6 +83,8 @@ def source_of(fn: str, args) -> Optional[str]:
     a = args if isinstance(args, dict) else {}
     if fn in _ALWAYS_EXTERNAL:
         detail = a.get("url") or a.get("query") or a.get("q") or a.get("host") or a.get("image_path") or ""
+        if fn == "github_repo":
+            detail = " ".join(str(x) for x in (a.get("action"), a.get("repo"), a.get("path") or a.get("query")) if x)
         if fn == "ssh_exec":
             detail = a.get("host") or a.get("alias") or ""
         return f"{fn} {_clip(detail, 100)}".strip()
@@ -299,6 +302,26 @@ _DL_EXEC = re.compile(
 _EXFIL = re.compile(
     r"\bcurl\b[^\n]*\s(-d|--data\S*|-F|--form|-T|--upload-file)\s"
     r"|\bwget\b[^\n]*--post-(data|file)|\b(scp|rsync)\b[^\n]*\s\S+@\S+:|\bnc\s+\S+\s+\d+\s*<", re.I)
+# [2026-10-22 事故] 生产模型为了"给人看图"把生成图片传到 uguu.se / 0x0.st —— 上传即公开且撤不回。
+# 公网文件站/图床/贴图站 + 上传动作 = 始终拦截 (不依赖是否中了注入), 除非主人本回合原话就要求公开分享。
+_PUBLIC_DROP = re.compile(
+    r"\b(0x0\.st|uguu\.se|transfer\.sh|catbox\.moe|litterbox\.catbox\.moe|file\.io|tmpfiles\.org|bashupload\.com|"
+    r"temp\.sh|oshi\.at|gofile\.io|pixeldrain\.com|wetransfer\.com|termbin\.com|paste\.rs|ix\.io|sprunge\.us|"
+    r"pastebin\.com|dpaste\.\w+|imgur\.com|sm\.ms|imgbb\.com|postimages\.org|freeimage\.host|telegra\.ph)\b", re.I)
+_UPLOAD_ACT = re.compile(
+    r"\s(-F|--form|-T|--upload-file|--data-binary|-d)\s|requests\.(post|put)|httpx\.(post|put)|\.post\(|files\s*=|"
+    r"\bupload|Invoke-RestMethod[^\n]*-Method\s+(Post|Put)|-InFile\b|\bnc\s", re.I)
+_OWNER_PUBLIC = re.compile(r"公网|外链|图床|分享链接|公开链接|上传到|传到网上|发到网上|网盘|\bupload\b|share\s*link|public\s*link|"
+                           r"0x0|uguu|transfer\.sh|catbox|imgur|file\.io", re.I)
+
+
+def public_upload_target(args) -> Optional[str]:
+    """工具参数里要往公网文件站/图床上传东西 → 返回站点名; 只是从这些站下载不算。"""
+    blob = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False, default=str)
+    m = _PUBLIC_DROP.search(blob or "")
+    return m.group(1) if (m and _UPLOAD_ACT.search(blob)) else None
+
+
 _RM = re.compile(r"\brm\s+(-[a-zA-Z]*[rf][a-zA-Z]*\s+)+(?P<paths>[^\n;&|]+)|\b(Remove-Item|rmdir|rd|del)\b[^\n]*(-Recurse|/s)\b"
                  r"|\b(mkfs|format\s+[a-z]:|dd\s+if=[^\n]*of=/dev/)", re.I)
 
@@ -353,14 +376,14 @@ def classify_action(fn: str, args, workspace: str = "") -> Optional[tuple]:
     act = a.get("action")
     blob = json.dumps(a, ensure_ascii=False)
     if fn in ("browser_act", "windows_desktop", "desktop_click", "desktop_type") and _PAY_WORDS.search(blob):
-        if fn != "windows_desktop" or act in ("click_text", "type_text", "hotkey", "click", "double_click"):
+        if fn != "windows_desktop" or act in ("click_text", "click_element", "type_text", "hotkey", "click", "double_click"):
             return "payment", f"{fn}({act or ''})"
     if fn == "windows_desktop":
         if act == "type_text":
             return "send", "windows_desktop(type_text)"
         if act == "hotkey" and "enter" in str(a.get("keys", "")).lower():
             return "send", "windows_desktop(hotkey enter)"
-        if act == "click_text" and _SEND_CLICK.search(str(a.get("text", ""))):
+        if act in ("click_text", "click_element") and _SEND_CLICK.search(str(a.get("text", ""))):
             return "send", f"windows_desktop(click_text {a.get('text')})"
         return None
     if fn == "desktop_type":
@@ -377,7 +400,7 @@ def classify_action(fn: str, args, workspace: str = "") -> Optional[tuple]:
         if m and (fn != "execute_shell" or _rm_outside_workspace(m, workspace)):
             return "delete", f"{fn}: {_clip(cmd, 80)}"
         return None
-    if fn == "save_memory" or (fn == "update_profile" and a.get("action", "read") != "read") or fn == "create_skill":
+    if (fn == "save_memory" and a.get("action", "save") != "list") or (fn == "update_profile" and a.get("action", "read") != "read") or fn == "create_skill":
         return "memory", fn
     if fn in ("create_timer", "update_timer", "create_dag", "update_dag", "patch_dag_node"):
         return "schedule", fn
@@ -436,6 +459,13 @@ class TurnGuard:
 
     def check(self, fn: str, args) -> Optional[str]:
         """返回拦截文案 (None = 放行)。"""
+        host = public_upload_target(args)
+        if host and not _OWNER_PUBLIC.search(self.owner_text or ""):
+            self.blocked += 1
+            _record_stat("PUBLIC-UPLOAD-GATE")
+            return (f"{GATE_PREFIX} 已拦截: 要把内容上传到公网文件站/图床 {host}。主人没有要求公开分享, 而上传后任何人"
+                    "拿到链接都能看, 也无法撤回。要给主人看图片/音视频/文件, 直接在回复里写本地完整路径 —— 网页会显示预览, "
+                    "微信加一行 [发送文件: 路径] 会发过去。不要换站点或换写法绕过; 确需外链请先在回复里问主人。")
         if not self.tainted:
             return None
         cls = classify_action(fn, args, self.workspace)

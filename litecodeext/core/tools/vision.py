@@ -25,6 +25,7 @@ def _wire(mid: str) -> str:
     except Exception:
         return mid
 
+_MAX_IMAGES = 8
 _VISION_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
 _VISION_MIME = {
     ".png":  "image/png",  ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
@@ -32,16 +33,9 @@ _VISION_MIME = {
 }
 
 
-async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
-    """
-    把本地图片送到当前激活模型的 /v1/chat/completions, 走 vision content parts.
-    用 lib.config._LIVE 现读 backend_url / model_id / api_key, 模型切换后立即生效。
-
-    返回: 识别结果字符串 (纯文本). 错误以 "ERROR: ..." 开头。
-    """
+def _load_image(path: str) -> str:
+    """读一张本地图片 → data URL (过大自动压缩); 出错返回 "ERROR: ..."。"""
     import base64 as _b64
-    from lib.config import _LIVE as _cfg_live
-
     if not path:
         return "ERROR: vision_ocr 需要 path 参数"
     p = Path(path)
@@ -84,7 +78,29 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
 
     b64 = _b64.b64encode(img_bytes).decode("ascii")
     mime = _VISION_MIME.get(ext, "image/png")
-    data_url = f"data:{mime};base64,{b64}"
+    return f"data:{mime};base64,{b64}"
+
+
+
+async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096, paths: list | None = None) -> str:
+    """
+    把本地图片送到当前激活模型的 /v1/chat/completions, 走 vision content parts.
+    用 lib.config._LIVE 现读 backend_url / model_id / api_key, 模型切换后立即生效。
+
+    返回: 识别结果字符串 (纯文本). 错误以 "ERROR: ..." 开头。
+    """
+    from lib.config import _LIVE as _cfg_live
+
+    # 多图 (paths): 一次请求带多张, 用于对比 / 找不同 / 按顺序看一组截图 (2026-10-21 实测 Qwen3.6 一次 4 张 0.4s)
+    files = [x for x in (paths or []) if x] or [path]
+    if len(files) > _MAX_IMAGES:
+        return f"ERROR: 一次最多 {_MAX_IMAGES} 张图, 收到 {len(files)} 张; 请分批"
+    urls = []
+    for f in files:
+        u = _load_image(f)
+        if u.startswith("ERROR"):
+            return u if len(files) == 1 else f"{u} (第 {len(urls) + 1} 张)"
+        urls.append(u)
 
     backend_url = _cfg_live.get("backend_url", BACKEND_URL).rstrip("/")
     model_id    = _cfg_live.get("model_id", MODEL_ID)
@@ -102,16 +118,16 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
             backend_url = fb["backend_url"].rstrip("/")
             api_key     = fb.get("api_key", "")
 
+    parts = [{"type": "image_url", "image_url": {"url": u}} for u in urls]
+    if len(urls) > 1:
+        prompt = f"共 {len(urls)} 张图片, 按上传顺序依次为第 1 ~ {len(urls)} 张。\n" + prompt
     payload = {
         "model": _wire(model_id),
         "stream": False,
         "max_tokens": max_tokens,
         "messages": [{
             "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": data_url}},
-                {"type": "text",      "text": prompt},
-            ],
+            "content": parts + [{"type": "text", "text": prompt}],
         }],
     }
 
@@ -126,6 +142,9 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
     _retryable = {429, 500, 502, 503, 504}
     r = None
     last_err = None
+    from lib.usage_ledger import record_http as _usage_rec   # [usage-ledger] 识图记账
+    import time as _time
+    _t0 = _time.time()
     for attempt in range(_max_retries + 1):
         try:
             async with httpx.AsyncClient(timeout=120) as client:
@@ -151,6 +170,7 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
         except httpx.HTTPError as e:
             return f"ERROR: vision_ocr 请求失败: {type(e).__name__}: {e}"
 
+    _usage_rec("vision", model_id, payload, r, _t0)
     if r is None:
         return f"ERROR: vision_ocr 请求失败: {last_err}"
     if r.status_code != 200:
@@ -167,8 +187,10 @@ async def _do_vision_ocr(path: str, prompt: str, max_tokens: int = 4096) -> str:
                 and "chat_template_kwargs" not in payload:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
             log.warning("  [vision_ocr] 思考耗尽 max_tokens 正文为空, 关思考重试")
+            _t0 = _time.time()
             async with httpx.AsyncClient(timeout=120) as client:
                 r2 = await client.post(url, json=payload, headers=headers)
+            _usage_rec("vision", model_id, payload, r2, _t0)
             if r2.status_code == 200:
                 msg = r2.json()["choices"][0]["message"]
                 content = msg.get("content") or ""

@@ -34,10 +34,14 @@ Superpowers 技能覆盖默认系统提示行为，但**用户指令始终具有
 | 原工具名 | LiteCode 对应 |
 |---------|-------------|
 | Skill 工具 | `load_skill` |
-| Task / 子代理 | `spawn_agent` |
-| TodoWrite | `save_memory` |
+| Task / 子代理 | `spawn_agent` (后台用 background=true + `agent_control`) |
+| TodoWrite / 待办清单 | `task_create` / `task_update` / `task_done` |
 | Read 工具 | `read_file` |
 | Write 工具 | `write_file` |
+| Edit 工具 | `patch_file` / `apply_blocks` |
+| Bash 工具 | `execute_shell` |
+| Grep / Glob | `search_code` / `find_files` |
+| 看图 | `vision_ocr` (paths 多图 ≤8) |
 
 # 使用技能
 
@@ -55,7 +59,7 @@ digraph skill_flow {
     "调用 load_skill 工具" [shape=box];
     "宣布：'使用 [技能] 来 [目的]'" [shape=box];
     "有检查清单？" [shape=diamond];
-    "为每个条目创建 save_memory 待办" [shape=box];
+    "为每个条目创建 task_create 待办" [shape=box];
     "严格遵循技能" [shape=box];
     "响应（包括澄清）" [shape=doublecircle];
 
@@ -69,9 +73,9 @@ digraph skill_flow {
     "可能有技能适用？" -> "响应（包括澄清）" [label="确定不适用"];
     "调用 load_skill 工具" -> "宣布：'使用 [技能] 来 [目的]'";
     "宣布：'使用 [技能] 来 [目的]'" -> "有检查清单？";
-    "有检查清单？" -> "为每个条目创建 save_memory 待办" [label="是"];
+    "有检查清单？" -> "为每个条目创建 task_create 待办" [label="是"];
     "有检查清单？" -> "严格遵循技能" [label="否"];
-    "为每个条目创建 save_memory 待办" -> "严格遵循技能";
+    "为每个条目创建 task_create 待办" -> "严格遵循技能";
 }
 ```
 

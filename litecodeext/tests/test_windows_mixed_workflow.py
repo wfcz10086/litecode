@@ -147,7 +147,7 @@ def test_vscode_launch_finds_user_and_system_installs_with_shell(tmp_path, monke
     monkeypatch.setenv(variable, str(base))
     with patch('subprocess.Popen') as launch:
         result = actions.launch_app({'name': 'vscode', 'shell_allowed': True})
-    assert result == {'method': 'mapping', 'launched': 'vscode'}
+    assert result == {'method': 'mapping', 'launched': 'vscode', 'as_admin': False}
     assert launch.call_args.args[0] == [str(executable)]
     assert launch.call_args.kwargs['shell'] is False
 

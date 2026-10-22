@@ -5,16 +5,18 @@ from datetime import datetime
 from pathlib import Path
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, Response, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 
 BASE = Path(__file__).parent
 sys.path.insert(0, str(BASE / "core"))  # core 模块扁平导入 (timer_manager 等)
 def _cfg():
-    p = BASE/"config.json"
+    # LITECODE_CONFIG 指向配置副本时 (测试/第二实例) 和 lib.config.load_cfg 读同一份
+    p = Path(os.environ.get("LITECODE_CONFIG", "").strip() or BASE/"config.json")
     return json.loads(p.read_text()) if p.exists() else {}
 
 CFG = _cfg()
+from lib import tool_trace as _tool_trace   # [trace 2026-10-22] 调用链路落库 / 重导合并
 _srv = CFG.get("server",{})
 SERVER_URL  = f"http://127.0.0.1:{_srv.get('port',18789)}"
 TOKEN       = _srv.get("token", "")  # [sec 2026-10-19] 只认 config.json, 无字面量兜底 (缺失即 401 fail-closed)
@@ -226,7 +228,8 @@ def _convert_server_session(sid:str, server_data:dict) -> dict:
         # 其他 (system / orphan tool) 跳过
     # 命名
     first_user=[m for m in web_msgs if m["role"]=="user"]
-    prefix="🖥️ " if sid.startswith("cli-") else "🔌 "
+    # [ui-audit 2026-10-21] web 会话不再加 🔌 前缀 (那是"从 CLI/外部导入"的标记, web 自己的会话标题前出现很怪)
+    prefix="🖥️ " if sid.startswith("cli-") else ("" if sid.startswith("web-") else "🔌 ")
     first_q = first_user[0]["content"] if first_user else sid
     name = prefix + (first_q[:35] + "…" if len(first_q) > 35 else first_q)
     return {"id":sid,"name":name,"created":ts,"last_used":ts,"messages":web_msgs}
@@ -251,13 +254,59 @@ def _merge_cached_reasoning(cache_path, web_d):
             key = (m.get("content") or "")[:80]
             if key:  # 空 content (纯工具调用) 不作 key, 那类 reasoning 由 converter 直接带
                 old_rz[key] = m["reasoning"]
-    if not old_rz:
-        return
     for m in web_d.get("messages", []):
-        if m.get("role") == "assistant" and not (m.get("reasoning") or "").strip():
+        if old_rz and m.get("role") == "assistant" and not (m.get("reasoning") or "").strip():
             r = old_rz.get((m.get("content") or "")[:80])
             if r:
                 m["reasoning"] = r
+    _merge_cached_turn_meta(old.get("messages", []), web_d.get("messages", []))
+    # [ui-audit 2026-10-21] 重导会用首条提问重新命名 —— 用户起的名字 / 双击改的名字一刷新就没了; owner 也丢了
+    if old.get("name") and old["name"] != "New Chat":
+        web_d["name"] = old["name"]
+    for k in ("owner", "created"):
+        if old.get(k):
+            web_d[k] = old[k]
+
+
+_TURN_META = ("usage", "desktop_steps", "meta")   # meta.skills: 本轮用到的技能 (SSE turn_skills)
+
+
+def _turns(msgs):
+    """按用户消息切轮: [(用户消息开头, [该轮 assistant 消息...]), ...]"""
+    out = []
+    for m in msgs:
+        if m.get("role") == "user":
+            out.append((str(m.get("content") or "")[:40], []))
+        elif m.get("role") == "assistant" and out:
+            out[-1][1].append(m)
+    return out
+
+
+def _merge_cached_turn_meta(old_msgs, new_msgs):
+    """[2026-10-21] 重导时把旧缓存里每轮的 token 统计 (usage) 和桌面步骤带过来。
+    原来只合并 reasoning: server 历史一比缓存新就整份重导, 之前每一轮回复底部的
+    "P/C/T · N轮 · 耗时" 全被抹掉 (只有刚结束的那轮会补挂, 下次重导又没了)。
+    按 (第几轮, 用户消息开头) 对齐, 挂到该轮最后一条 assistant 上。"""
+    old_t, new_t = _turns(old_msgs), _turns(new_msgs)
+    for i, (head, asst) in enumerate(new_t):
+        if i >= len(old_t) or old_t[i][0] != head or not asst:
+            continue
+        tail = asst[-1]
+        for k in _TURN_META:
+            if tail.get(k):
+                continue
+            v = next((m.get(k) for m in reversed(old_t[i][1]) if m.get(k)), None)
+            if v:
+                tail[k] = v
+        # [trace 2026-10-22] 调用链路 (每步成败/用时/摘要) + 整轮错误卡片, 同样别被重导抹掉
+        from lib import tool_trace as _tool_trace   # 局部导入: 测试会单独抽出本函数执行
+        if not any(m.get("trace_steps") for m in asst):
+            _tool_trace.attach_steps(asst, _tool_trace.turn_steps(old_t[i][1]),
+                                     next((m.get("turn_error") for m in old_t[i][1] if m.get("turn_error")), None))
+        elif not tail.get("turn_error"):
+            te = next((m.get("turn_error") for m in old_t[i][1] if m.get("turn_error")), None)
+            if te:
+                tail["turn_error"] = te
 
 def load_session(sid):
     # [v1.0] 墓碑命中直接返回空, 不触发 server session 自动导入
@@ -547,11 +596,16 @@ def _turn_already_imported(msgs:list, collected:dict) -> bool:
         tail['desktop_steps'] = collected['desktop_steps']
     if collected.get("usage") and not tail.get("usage"):
         tail["usage"] = collected["usage"]
+    if collected.get("meta"):
+        tail["meta"] = {**(tail.get("meta") or {}), **collected["meta"]}
+    # [trace 2026-10-22] 按工具调用 id 分到本轮各条 assistant (刷新后时间线状态/用时/摘要能重绘)
+    _tool_trace.attach_steps(turn, collected.get("trace_steps") or [], collected.get("turn_error"))
     return True
 
 def _save_assistant_msg(sid:str, collected:dict):
     """后台保存 assistant 消息，保证客户端断连后依然能写入。"""
-    if not (collected["text"] or collected["tools"] or collected["diffs"] or collected.get("reasoning") or collected.get('desktop_steps')):
+    if not (collected["text"] or collected["tools"] or collected["diffs"] or collected.get("reasoning")
+            or collected.get('desktop_steps') or collected.get("turn_error")):
         return
     try:
         s2 = load_session(sid)
@@ -559,6 +613,24 @@ def _save_assistant_msg(sid:str, collected:dict):
         msgs = s2.get("messages", [])
         if (msgs and msgs[-1].get("role") == "assistant" and msgs[-1].get("content", "") == collected["text"]
                 and msgs[-1].get('desktop_steps', []) == collected.get('desktop_steps', [])):
+            # [ui-audit 2026-10-21] 轮次结束时 load_session 已从 server 历史重导, 最后一条就是本轮答案,
+            # 原来直接 return —— SSE 才有的 usage 没挂上, 刷新后每轮的 P/C/T · 耗时 统计全没了
+            _changed = False
+            if collected.get("usage") and not msgs[-1].get("usage"):
+                msgs[-1]["usage"] = collected["usage"]
+                _changed = True
+            if collected.get("meta"):
+                msgs[-1]["meta"] = {**(msgs[-1].get("meta") or {}), **collected["meta"]}
+                _changed = True
+            # [trace 2026-10-22] 同理补挂调用链路 / 整轮错误
+            if (collected.get("trace_steps") and not msgs[-1].get("trace_steps")) or \
+                    (collected.get("turn_error") and not msgs[-1].get("turn_error")):
+                _lu = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
+                _tool_trace.attach_steps([m for m in msgs[_lu + 1:] if m.get("role") == "assistant"],
+                                         collected.get("trace_steps") or [], collected.get("turn_error"))
+                _changed = True
+            if _changed:
+                save_session(s2)
             return
         if _turn_already_imported(msgs, collected):
             save_session(s2)
@@ -573,7 +645,11 @@ def _save_assistant_msg(sid:str, collected:dict):
             # [v1.0] 持久化推理 (方案 B): 仅前端展示用,
             # web_ui.py 发请求时不读它, litecode_server 自己管历史, 不会回流到 LLM 上下文
             "reasoning": collected.get("reasoning", ""),
-            "usage": collected.get("usage")
+            "usage": collected.get("usage"),
+            **({"meta": collected["meta"]} if collected.get("meta") else {}),
+            # [trace 2026-10-22] 调用链路 (tool_done/notice) 与整轮错误, 刷新后重绘时间线和错误卡片
+            **({"trace_steps": collected["trace_steps"]} if collected.get("trace_steps") else {}),
+            **({"turn_error": collected["turn_error"]} if collected.get("turn_error") else {}),
         })
         s2["last_used"] = time.time()
         save_session(s2)
@@ -661,45 +737,8 @@ def _build_multimodal_content(message: str):
 # ── 文件上传 ─────────────────────────────────────────────────
 _WORKSPACE = Path(CFG.get("paths",{}).get("workspace_base","/tmp/litecode_workspace"))
 
-# [multi-upload] 从 config.web_ui.max_upload_mb 读, 默认 20MB
-_MAX_UPLOAD_SIZE = int(CFG.get("web_ui", {}).get("max_upload_mb", 20)) * 1024 * 1024
-
-@app.post("/api/upload/{sid}")
-async def api_upload(sid: str, request: Request, file: UploadFile = File(...)):
-    _require_auth(request)
-    # [P0-#4] upload 节流: 10 次 / 60s / IP (大附件重, 数值给紧)
-    from lib.rate_limit import rate_check as _rate_check
-    _rate_check(request, "upload", 10, 60)
-    # [multi-upload] 流式读: 大文件分块落盘, 不再一次性吃进内存
-    # 兼容老协议 — 依旧返回 {ok,path,name,size}
-    dest = _WORKSPACE / "uploads"
-    dest.mkdir(parents=True, exist_ok=True)
-    # 防止同名覆盖: 冲突时加时间戳后缀
-    safe_name = (file.filename or "unnamed").replace("/", "_")
-    fp = dest / safe_name
-    if fp.exists():
-        stem = fp.stem; suf = fp.suffix
-        fp = dest / f"{stem}-{int(time.time())}{suf}"
-    # 分块写 + 边写边量 size; 超限立即删掉半成品并 413
-    size = 0
-    CHUNK = 1024 * 1024
-    with open(fp, "wb") as out:
-        while True:
-            chunk = await file.read(CHUNK)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > _MAX_UPLOAD_SIZE:
-                out.close()
-                try: fp.unlink()
-                except Exception: pass
-                raise HTTPException(
-                    413,
-                    f"文件过大 (>{size//1048576}MB)，限制 {_MAX_UPLOAD_SIZE//1048576}MB "
-                    f"— 请改 config.web_ui.max_upload_mb 或先用 scp 放入 workspace/"
-                )
-            out.write(chunk)
-    return {"ok": True, "path": str(fp), "name": fp.name, "size": size}
+# [large-file 2026-10-21] /api/upload/{sid} 已搬到 routers/upload_router.py: multipart 边收边写盘,
+# Content-Length 超限不读体直接 413, 返回 sha256; 上限仍读 config.web_ui.max_upload_mb
 
 # [router-2026-05] workspace/files, workspace/download, media, preview, workspace/preview,
 # workspace/preview_office 已搬到 routers/workspace_router.py
@@ -844,6 +883,8 @@ def _get_html() -> str:
 _shared_state.get_html = _get_html
 
 if __name__ == "__main__":
+    from lib.bind_host import bind_host
     port = int(sys.argv[1]) if len(sys.argv) > 1 else WEB_PORT
-    print(f"LiteCode Web UI  →  http://0.0.0.0:{port}")
-    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+    host = bind_host()   # 桌面版 LITECODE_BIND_HOST=127.0.0.1; 服务器版默认 0.0.0.0
+    print(f"LiteCode Web UI  →  http://{host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="warning")

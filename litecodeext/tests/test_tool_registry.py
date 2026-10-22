@@ -22,13 +22,15 @@ from lib.tool_registry import build, read_only_names  # noqa: E402
 # 2026-10-18: execute_shell 加可选 cwd (子代理工作树默认 cwd)
 # 2026-10-19: Windows 段落导航与选择快捷键
 # 2026-10-19: 快捷键白名单补 shift/ctrl+h/ctrl+shift+u 等 (生产日志里被拒过)
-TOOL_DEFS_SHA256 = "38607e128b3ff40864721f87328340d35179dd6995b0b9694a8257046af52539"   # 2026-10-19: windows_desktop 描述: shell 关闭时 vscode/ctrl+shift+esc/命令行前台输入受限, type_secret 固定 unicode, elevated 需管理员授权别名
+# 2026-10-19: windows_desktop 描述: shell 关闭时 vscode/ctrl+shift+esc/命令行前台输入受限, type_secret 固定 unicode, elevated 需管理员授权别名
+TOOL_DEFS_SHA256 = "f88adcc7d3f86af15e623acecee3dbccd9936d8a3e589374a9d7f504f5638f21"   # 2026-10-22: windows_desktop 加 args (launch_app 给内置程序传参; 引导用 launch_app 以普通权限打开程序); 2026-10-22b: 末尾追加 kb_search (内置知识库, 按需组 kb; enable_tools 组说明多一行); 2026-10-22: 新增 stock_quote (实时行情, 按需组 market); 2026-10-22: create_skill 描述改为草稿进技能面板审核 (WORKSPACE/skills/_drafts), activate 仍需安全扫描, 描述更短; 2026-10-22: text_to_speech 加 local 引擎 (纯 CPU, 默认先用); 2026-10-22: 末尾追加 text_to_speech / manage_models (按需组 voice / settings, 不进常驻列表; 常驻只多 enable_tools 描述里两行组说明); 2026-10-22: 新增 stock_quote (实时行情, 按需组 market); 2026-10-21g: 降固定前缀 — 末尾追加 enable_tools (低频工具组按需暴露, lib/tool_groups.py; 实际每轮发送的是核心+已激活组), spawn_agent 描述与 batch_items 说明精简 (语义不变); 2026-10-21f: windows_desktop 加 ui_tree/click_element (UIA 控件树) + browser/control_type 参数, 描述写闭环与 focus_failed; windows_system 传输上限 50MB→1GB; 2026-10-21e: read_file/tail_log 分段 + ssh_write_file local_path/resume (大文件); 2026-10-21d: save_memory 加 scope/action (记忆全局档案); 2026-10-21c: load_skill 加 section 参数 (长技能按 ## 章节分段续读, 描述说明读源文件全文); 2026-10-21b: vision_ocr 加 paths 多图; 2026-10-21: ssh_exec 加 sudo 选项; 2026-10-20: 末尾追加 github_search / github_repo / package_search (82 个); web_search 加 category (SearXNG it/packages/repos/q&a/science)
 
-READ_ONLY_21 = {
+READ_ONLY_SET = {
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",
-    "web_fetch", "web_search", "github_search_issues", "stackoverflow_search", "search_code_error",
+    "web_fetch", "web_search", "stock_quote", "kb_search", "github_search_issues", "stackoverflow_search", "search_code_error",
     "tail_log", "list_skills", "git_status", "git_diff", "git_log",
     "list_bg", "list_timers", "snapshot_list", "task_list", "ssh_list_hosts",
+    "github_search", "github_repo", "package_search",   # 2026-10-20
 }
 
 
@@ -45,8 +47,8 @@ def test_tool_defs_bytes_unchanged():
 
 def test_read_only_derived_from_capabilities():
     from lib.tool_prefetch import READ_ONLY
-    assert read_only_names() == READ_ONLY_21
-    assert READ_ONLY == READ_ONLY_21
+    assert read_only_names() == READ_ONLY_SET
+    assert READ_ONLY == READ_ONLY_SET
 
 
 def test_merge_agent_schema_wins_and_caps_overlay():

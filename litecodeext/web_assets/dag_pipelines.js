@@ -21,6 +21,7 @@
     { key: 'host_health', label: '💚 主机健康检查', desc: 'shell → 分析 → 报告' },
     { key: 'web_summary', label: '📰 网页抓取总结', desc: '搜 → 抓 → 提炼' },
     { key: 'illustrated_post', label: '🎨 图文笔记', desc: '短文 → prompt → 生图 → 组装' },
+    { key: 'doc_studio', label: '📑 文档工坊', desc: '大纲 → HTML → 配图 → PDF+PPTX → 质检' },
   ];
 
   function esc(s) {

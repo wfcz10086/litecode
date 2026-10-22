@@ -25,16 +25,46 @@
       en: "I'm a bit tired today. Keep me company for a while" },
   ];
 
-  function render() {
-    const empty = document.getElementById('empty');
-    if (!empty || empty.dataset.sugRendered) return;
-    empty.dataset.sugRendered = '1';
-    let box = empty.querySelector('.sugs');
+  /* [ui-v2 2026-10-21] 空会话: 欢迎语按时段 + 输入框居中 (#main.lc-empty, 样式见 ui_v2.css),
+     建议 chip 放在输入框下方 (#lc-sugs, 在 #ia 里); 有消息后 #empty 消失, 输入框回到底部。 */
+  function greeting() {
+    const h = new Date().getHours();
+    const en = window.I18N && I18N.locale === 'en';
+    if (h >= 5 && h < 11) return en ? 'Good morning' : '早上好';
+    if (h >= 11 && h < 13) return en ? 'Good noon' : '中午好';
+    if (h >= 13 && h < 18) return en ? 'Good afternoon' : '下午好';
+    if (h >= 18 && h < 23) return en ? 'Good evening' : '晚上好';
+    return en ? 'Still up?' : '夜深了';
+  }
+
+  function sugBox() {
+    let box = document.getElementById('lc-sugs');
     if (!box) {
+      const ia = document.getElementById('ia');
+      if (!ia) return null;
       box = document.createElement('div');
+      box.id = 'lc-sugs';
       box.className = 'sugs';
-      empty.appendChild(box);
+      ia.appendChild(box);
     }
+    return box;
+  }
+
+  function syncEmpty() {
+    const empty = document.getElementById('empty');
+    document.getElementById('main')?.classList.toggle('lc-empty', !!empty);
+    if (!empty || empty.dataset.greet) return;
+    empty.dataset.greet = '1';
+    empty.querySelector('.sugs')?.remove();
+    empty.innerHTML = `<div class="lc-hello"><span class="lc-hello-mark">⚡</span>${greeting()}</div>` +
+      `<div class="lc-hello-sub">${(window.I18N && I18N.locale === 'en') ? 'What can I help you with?' : '今天想让 LiteCode 帮你做点什么?'}</div>`;
+  }
+
+  function render() {
+    syncEmpty();
+    const box = sugBox();
+    if (!box || box.dataset.sugRendered) return;
+    box.dataset.sugRendered = '1';
     box.textContent = '';
     SUGGESTIONS.forEach(s => {
       const b = document.createElement('button');

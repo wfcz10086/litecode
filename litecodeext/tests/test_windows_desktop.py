@@ -324,3 +324,23 @@ def test_hover_is_pointer_action():
     props = WINDOWS_DESKTOP_DEFS[0]['function']['parameters']['properties']
     assert 'hover' in ACTIONS and 'hover' in props['action']['enum']
     assert 'hotkey enter' in WINDOWS_DESKTOP_DEFS[0]['function']['description']
+
+
+def test_missing_image_size_inferred(tmp_path):
+    """没传 image_width/height: 未压缩直接用截图尺寸; 坐标超出压缩图但在屏幕内 → 屏幕像素; 有歧义 → 报错讲清怎么传。"""
+    import json
+    import pytest
+    from PIL import Image
+    from lib.windows_desktop import desktop_request
+    raw = tmp_path / 'uploads/raw.png'
+    raw.parent.mkdir()
+    Image.new('RGB', (2560, 1600)).save(raw)
+    r = desktop_request({'action': 'click', 'reference_image': str(raw), 'x': 100, 'y': 50}, tmp_path)
+    assert (r['image_width'], r['image_height']) == (2560, 1600)
+    small = tmp_path / 'uploads/small.jpg'
+    Image.new('RGB', (1600, 1000)).save(small)
+    (tmp_path / 'uploads/small.jpg.screen').write_text(json.dumps([2560, 1600]))
+    r = desktop_request({'action': 'click', 'reference_image': str(small), 'x': 1970, 'y': 701}, tmp_path)
+    assert (r['image_width'], r['image_height']) == (2560, 1600)   # 真机那次: ocr 给的屏幕像素
+    with pytest.raises(ValueError, match='image_width=1600,image_height=1000'):
+        desktop_request({'action': 'click', 'reference_image': str(small), 'x': 800, 'y': 500}, tmp_path)

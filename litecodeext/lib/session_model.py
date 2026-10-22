@@ -130,3 +130,61 @@ def handle_command(sid: str, text: str, active_id: str = "") -> Optional[str]:
     return (f"✓ 本会话已切换到 `{hit['id']}`" +
             (f" ({_label(hit)})" if _label(hit) != hit["id"] else "") +
             ", 下一条消息起生效; 其它会话仍用默认模型。")
+
+
+# ── 会话级思考强度 [session-thinking 2026-10-21] ─────────────────────
+# 输入框「🧠」原来 PATCH 全局 config (影响所有会话 + 微信); 现在只记在本会话。
+# 存储: WORKSPACE/session_thinking.json {sid: "off"|"low"|"mid"|"high"}; 没记录 = 跟随全局默认。
+# 生效: gateway/openai_compat 本轮把 enable_thinking / thinking_budget 叠到 _TURN_MODEL 覆盖层,
+# thinking_adapter 现读 _LIVE 时就拿到本会话的值, 不改全局、不影响并发的其它会话。
+THINK_STORE: Path = WORKSPACE / "session_thinking.json"
+THINK_LEVELS = {
+    "off": {"enable_thinking": False, "thinking_budget": 0},
+    "low": {"enable_thinking": True, "thinking_budget": 2048},
+    "mid": {"enable_thinking": True, "thinking_budget": 4096},
+    "high": {"enable_thinking": True, "thinking_budget": 16384},
+}
+
+
+def _read_think() -> dict:
+    try:
+        d = json.loads(Path(THINK_STORE).read_text())
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def get_thinking(sid: Optional[str]) -> str:
+    """会话指定的思考强度 (off/low/mid/high); 没指定返回 ""。"""
+    if not sid:
+        return ""
+    v = _read_think().get(sid)
+    return v if v in THINK_LEVELS else ""
+
+
+def set_thinking(sid: str, level: Optional[str]) -> None:
+    """level 为空 / None = 跟随全局默认; 非法值抛 ValueError。"""
+    if level and level not in THINK_LEVELS:
+        raise ValueError(f"unknown thinking level: {level}")
+    from lib.atomic_io import atomic_write_json
+    with _lock:
+        d = _read_think()
+        if level:
+            d[sid] = level
+        else:
+            d.pop(sid, None)
+        atomic_write_json(THINK_STORE, d)
+
+
+def thinking_overlay(sid: Optional[str]) -> Optional[dict]:
+    """本轮要叠到 _TURN_MODEL 上的思考参数; 会话没指定返回 None。"""
+    lv = get_thinking(sid)
+    return dict(THINK_LEVELS[lv]) if lv else None
+
+
+def level_of(enable: bool, budget: int) -> str:
+    """全局 (enable_thinking, thinking_budget) → 档位名, 口径同前端 _syncThinkChip。"""
+    if not enable:
+        return "off"
+    b = int(budget or 0)
+    return "low" if b <= 2048 else ("mid" if b <= 8000 else "high")

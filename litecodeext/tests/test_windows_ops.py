@@ -41,7 +41,7 @@ def test_reassemble_verifies_order_and_sha256():
 def test_chunk_count_enforces_size_cap():
     assert wt.chunk_count(0) == 1
     assert wt.chunk_count(wt.CHUNK + 1) == 2
-    with pytest.raises(ValueError, match='50MB'):
+    with pytest.raises(ValueError, match='1GB'):   # 2026-10-21 上限 50MB → 1GB (流式传输)
         wt.chunk_count(wt.MAX_TRANSFER + 1)
 
 

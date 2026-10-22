@@ -89,12 +89,24 @@ def _all_sse_content_first_args() -> list[str]:
     return out
 
 
-def test_loop_message_is_natural_language():
-    values = _all_assigned_str_values("_loop_msg")
-    assert values, "_loop_msg 赋值未找到"
-    assert any("思考绕进了同一个圈子里" in v for v in values)
-    # _loop_msg 只有用户可见这一种用法, 全部不该带调试括号
-    assert not any(any(m in v for m in _BRACKET_MARKERS) for v in values)
+def _all_call_first_args(func_name: str) -> list[str]:
+    out = []
+    for node in ast.walk(_TREE):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == func_name and node.args):
+            s = _str_of(node.args[0])
+            if s is not None:
+                out.append(s)
+    return out
+
+
+# [2026-10-21 b0dd223] 打转/截断提示从正文 (sse_content, 还写进 full_text 和历史) 改走推理面板
+# (sse_reasoning): 原先「已经停下来了, 请再问一次」叠在正文里, 而循环其实会接着跑, 措辞误导。
+# 因此不再有 _loop_msg/_stall_msg 变量; 改为断言: 提示在推理通道, 且没有回到用户正文通道。
+def test_loop_message_goes_to_reasoning_panel_not_content():
+    assert any("原地打转" in a for a in _all_call_first_args("sse_reasoning")), "打转提示应走 sse_reasoning"
+    assert not any("圈子" in a or "原地打转" in a for a in _all_sse_content_first_args()), "打转提示不该进正文"
+    assert not _all_assigned_str_values("_loop_msg"), "_loop_msg 已移除, 不应再写进 full_text"
 
 
 def test_nudge_user_facing_message_is_natural_language():
@@ -114,12 +126,11 @@ def test_nudge_model_facing_messages_kept_as_is():
     assert any("[SYSTEM" in v for v in model)
 
 
-def test_stall_message_is_natural_language():
-    values = _all_assigned_str_values("_stall_msg")
-    assert values, "_stall_msg 赋值未找到"
-    assert any("这轮想得太久了" in v for v in values)
-    assert not any(any(m in v for m in _BRACKET_MARKERS) for v in values)
-    assert not any("字仍未产出" in v for v in values)
+def test_stall_message_goes_to_reasoning_panel_not_content():
+    assert any("思考过长" in a for a in _all_call_first_args("sse_reasoning")), "截断提示应走 sse_reasoning"
+    content = _all_sse_content_first_args()
+    assert not any("想得太久" in a or "思考过长" in a or "字仍未产出" in a for a in content), "截断提示不该进正文"
+    assert not _all_assigned_str_values("_stall_msg"), "_stall_msg 已移除, 不应再写进 full_text"
 
 
 def test_history_corruption_message_is_natural_language():
@@ -132,12 +143,10 @@ def test_history_corruption_message_is_natural_language():
 
 def test_new_wording_passes_wechat_leak_filter_unchanged():
     msgs = (
-        _user_facing(_all_assigned_str_values("_loop_msg"))
-        + _user_facing(_all_assigned_str_values("_nudge"))
-        + _user_facing(_all_assigned_str_values("_stall_msg"))
+        _user_facing(_all_assigned_str_values("_nudge"))
         + [a for a in _all_sse_content_first_args() if "对话记录出了点小问题" in a]
     )
-    assert len(msgs) >= 5
+    assert len(msgs) >= 3
     for msg in msgs:
         assert _filter_system_leak(msg) == msg.strip(), f"应原样透传, 不该被判定为系统泄漏: {msg!r}"
 

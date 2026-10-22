@@ -164,7 +164,7 @@ services:
   # host network 模式下与 litecode 同栈, LiteCode 直接调 http://127.0.0.1:18888
   # 配置文件由 ./searxng_config/settings.yml 提供 (GRANIAN_PORT=18888)
   searxng:
-    image: searxng/searxng:latest
+    image: searxng/searxng:2026.10.19-81371861f   # 2026-10-22 固定版本 (旧 latest=2026.7.24); 升级先在 18889 起测试实例对比再改这里
     container_name: searxng
     restart: unless-stopped
     network_mode: host
@@ -185,3 +185,40 @@ services:
         limits:
           memory: 1G
     depends_on: []
+
+  # [2026-10-22] 内置知识库数据库 (PostgreSQL 16 + pgvector), 供 litecodeext/plugins/kb 使用; 说明见 docs/KNOWLEDGE_BASE.md
+  # host 网络但只监听 127.0.0.1:15432, litecode 容器直连。按需启用 (profile kb), 不用知识库就不起:
+  #   bash scripts/kb_setup.sh     # 生成随机密码写 .env, 起本服务, 建非超级用户 litecode_kb + 库 + vector 扩展, 写 config.json kb.dsn
+  # 卸载: docker compose rm -sf kb-pg && 删 config.json 的 kb 段 (数据在卷 kb_pg_data, 不用了再 docker volume rm)
+  kb-pg:
+    image: pgvector/pgvector:pg16
+    container_name: kb-pg
+    profiles: ["kb"]
+    restart: unless-stopped
+    network_mode: host
+    command: ["postgres", "-c", "listen_addresses=127.0.0.1", "-c", "port=15432",
+              "-c", "shared_buffers=128MB", "-c", "max_connections=40", "-c", "maintenance_work_mem=128MB"]
+    environment:
+      # 超级用户 postgres 只用于 kb_setup.sh 建库; LiteCode 用非超级用户 litecode_kb (密码 KB_PG_PASSWORD)
+      - POSTGRES_PASSWORD=${KB_PG_SUPER_PASSWORD:-}
+      - PGPORT=15432
+      - TZ=Asia/Shanghai
+    volumes:
+      - kb_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "127.0.0.1", "-p", "15432", "-U", "postgres"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
+
+volumes:
+  kb_pg_data:

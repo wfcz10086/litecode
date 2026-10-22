@@ -71,6 +71,8 @@ class DeepSearchTool(DirectQueryMixin, FreeApiSearchMixin, WebFetchSearchMixin):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        import time as _time
+        _t0 = _time.time()
         try:
             resp = httpx.post(
                 f"{self.backend_url}/chat/completions",
@@ -78,6 +80,11 @@ class DeepSearchTool(DirectQueryMixin, FreeApiSearchMixin, WebFetchSearchMixin):
                 headers=headers,
                 timeout=60.0,
             )
+            try:   # [usage-ledger] DeepSearch 查询展开 / 摘要记账
+                from lib.usage_ledger import record_http as _usage_rec
+                _usage_rec("deep_search", self.model_id, payload, resp, _t0)
+            except ImportError:
+                pass
             if resp.status_code != 200:
                 return ""
             data = resp.json()

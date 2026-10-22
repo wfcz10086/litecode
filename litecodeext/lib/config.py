@@ -32,11 +32,53 @@ log = logging.getLogger("openclaw")
 # ── Config JSON ──────────────────────────────────────────────
 BASE = Path(__file__).parent.parent
 
+def config_path() -> Path:
+    """config.json 位置。环境变量 LITECODE_CONFIG 可指向别的文件 (测试 / 第二实例用副本, 不碰真实配置)。"""
+    env = os.environ.get("LITECODE_CONFIG", "").strip()
+    return Path(env) if env else BASE / "config.json"
+
+
 def load_cfg() -> dict:
-    p = BASE / "config.json"
+    p = config_path()
     if not p.exists():
         raise RuntimeError(f"config.json not found at {p}")
     return json.loads(p.read_text())
+
+
+import threading as _threading
+_CFG_WRITE_LOCK = _threading.Lock()
+
+
+def save_cfg(cfg: dict) -> None:
+    """整份写回 config.json: 先序列化并回读自检, 再 tmp+rename 原子替换。
+    容器里 config.json 是单文件 bind-mount, rename 会 EBUSY (换 inode 也会让宿主与容器失联),
+    这种情况退回原地 truncate+write+fsync (同 plugins/auth/core.py)。"""
+    import errno
+    out = json.dumps(cfg, ensure_ascii=False, indent=4)
+    if json.loads(out) != cfg:
+        raise ValueError("config serialization mismatch")
+    data = out.encode("utf-8")
+    p = config_path()
+    with _CFG_WRITE_LOCK:
+        try:
+            if os.path.ismount(p):
+                raise OSError(errno.EBUSY, "bind-mounted file")
+            from .atomic_io import atomic_write_bytes
+            atomic_write_bytes(p, data)
+            return
+        except OSError as e:
+            if e.errno not in (errno.EBUSY, errno.EXDEV, errno.EPERM, errno.EACCES):
+                raise
+        fd = os.open(str(p), os.O_WRONLY)
+        try:
+            os.ftruncate(fd, 0)
+            os.lseek(fd, 0, os.SEEK_SET)
+            view = memoryview(data)
+            while view:
+                view = view[os.write(fd, view):]
+            os.fsync(fd)
+        finally:
+            os.close(fd)
 
 CFG          = load_cfg()
 _SRV         = CFG["server"]
@@ -220,9 +262,13 @@ def model_live_view(entry: dict) -> dict:
     }
 
 
-def set_turn_model(entry: dict | None):
-    """本轮 (当前 asyncio task / context) 改用 entry 这个模型; None = 跟随全局。返回 reset 用的 token。"""
-    return _TURN_MODEL.set(model_live_view(entry) if entry else None)
+def set_turn_model(entry: dict | None, extra: dict | None = None):
+    """本轮 (当前 asyncio task / context) 改用 entry 这个模型; None = 跟随全局。返回 reset 用的 token。
+    extra: 再叠加的少量键 (如会话级 enable_thinking / thinking_budget), 没指定模型时只覆盖这几个键。"""
+    view = model_live_view(entry) if entry else {}
+    if extra:
+        view.update(extra)
+    return _TURN_MODEL.set(view or None)
 
 
 def reset_turn_model(token) -> None:

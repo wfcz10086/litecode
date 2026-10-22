@@ -296,9 +296,21 @@ async def h_ssh_exec(sid: str, args: dict) -> tuple[str, Any]:
         if len(cmd) > POWERSHELL_COMMAND_LIMIT:
             extra['powershell_script'] = script.encode('utf-8-sig')
             cmd = ''  # 连接后上传并生成短引导，不把长脚本送入默认 cmd.exe。
+    if args.get('sudo'):
+        # [2026-10-21] Linux 主机提权: 用主机库里已存的密码经标准输入交给 sudo, 不拼进命令
+        # (原来模型写 `echo 密码 | sudo -S`, 密码进了命令行、日志和工具历史)。
+        if shell != 'auto':
+            return 'ERROR: ssh_exec sudo 只用于 Linux 主机 (shell=auto)', None
+        if not conn["password"]:
+            return 'ERROR: ssh_exec sudo 需要该主机已保存 sudo 密码 (ssh_save_host)', None
+        import shlex
+        cmd = "sudo -S -p '' bash -c " + shlex.quote(cmd)
+        extra['stdin_data'] = (conn["password"] + "\n").encode()
     try:
         rc, out, e = await _ssh(conn["host"], conn["port"], conn["user"], conn["password"], cmd, timeout,
                                 conn["key_file"], conn["jump"], **extra)
+        if args.get('sudo') and conn["password"]:
+            out, e = (out or "").replace(conn["password"], "***"), (e or "").replace(conn["password"], "***")
         head = f"[ssh {conn['user']}@{conn['host']}:{conn['port']}] rc={rc}"
         body = ""
         if out:
@@ -388,40 +400,64 @@ def _close(*clients) -> None:
             pass
 
 
-def _sftp_replace(sftp, path: str, content, backup: bool) -> None:
-    """[2026-10-19] rename 备份后新建的文件是默认 0644, 丢了 x 位/属主 → ./deploy.sh Permission denied。
-    写前记下原 st_mode/uid/gid, 写完恢复 (chown 非 root 常失败, 忽略)。"""
-    try:
-        st = sftp.stat(path)
-    except Exception:
-        st = None
-    if backup:
-        try:
-            sftp.rename(path, path + ".bak")
-        except Exception:
-            pass
-    with sftp.open(path, "w") as f:
-        f.write(content)
-    if st is not None and st.st_mode is not None:
-        try:
-            sftp.chmod(path, _stat.S_IMODE(st.st_mode))
-        except Exception:
-            pass
-        if st.st_uid is not None and st.st_gid is not None:
-            try:
-                sftp.chown(path, st.st_uid, st.st_gid)
-            except Exception:
-                pass
+def _remote_run(client):
+    """给 lib.sftp_transfer 用的远端命令执行器 (算 sha256), 拿不到结果返回 None 由其回退 SFTP 回读。"""
+    def run(cmd: str):
+        _i, so, _e = client.exec_command(cmd, timeout=900)
+        out = so.read()
+        rc = so.channel.recv_exit_status()
+        if not isinstance(out, (bytes, str)) or not isinstance(rc, int):
+            return None
+        return rc, out.decode(errors="replace") if isinstance(out, bytes) else out, ""
+    return run
+
+
+def _sftp_replace(sftp, path: str, content, backup: bool, client=None) -> dict:
+    """[large-file 2026-10-21] 写临时文件 → sha256 校验 → 备份 → 原子改名 → 恢复权限/属主
+    (实现见 lib/sftp_transfer; 2026-10-19 的保留 x 位/属主语义不变)。"""
+    from lib import sftp_transfer as st
+    data = content.encode() if isinstance(content, str) else (content or b"")
+    return st.write_bytes(sftp, path, data, backup, _remote_run(client) if client is not None else None)
+
+
+_LOCAL_DENY = (os.path.expanduser("~/.ssh"), os.path.expanduser("~/.litecode/keys"))
+
+
+def _check_local(local: str) -> str:
+    """ssh 上传的本地源: 必须是普通文件; 不许取 .secrets/ 与 SSH/控制端私钥目录。返回错误串或空串。"""
+    rp = os.path.realpath(local)
+    if not os.path.isfile(rp):
+        return f"本地文件不存在或不是普通文件: {local}"
+    if "/.secrets/" in rp + "/" or any(rp == d or rp.startswith(d + os.sep) for d in _LOCAL_DENY):
+        return f"不允许上传密钥目录里的文件: {local}"
+    return ""
 
 
 def _sftp_write(conn: dict, path: str, content: str, backup: bool) -> str:
     client, jc = _connect(conn)
     try:
         sftp = client.open_sftp()
-        _sftp_replace(sftp, path, content, backup)
-        size = len(content.encode())
+        r = _sftp_replace(sftp, path, content, backup, client)
         sftp.close()
-        return f"OK: wrote {size} bytes → {path}" + (f" (backup: {path}.bak)" if backup else "")
+        return (f"OK: wrote {r['size']} bytes → {path} (sha256 {r['sha256'][:16]}… 已校验, {r['verify']})"
+                + (f" (backup: {path}.bak)" if backup else ""))
+    finally:
+        _close(client, jc)
+
+
+def _sftp_upload(conn: dict, local: str, path: str, backup: bool, resume: bool) -> str:
+    from lib import sftp_transfer as st
+    client, jc = _connect(conn)
+    try:
+        sftp = client.open_sftp()
+        t0 = time.monotonic()
+        r = st.upload_file(sftp, local, path, backup, resume, _remote_run(client))
+        sftp.close()
+        dt = max(time.monotonic() - t0, 1e-6)
+        sent = r["size"] - r["resumed_from"]
+        res = f" (断点续传: 从 {r['resumed_from']} 字节处接着传)" if r["resumed_from"] else ""
+        return (f"OK: uploaded {local} → {path} {r['size']} bytes, {sent / 1048576 / dt:.1f}MB/s{res}; "
+                f"sha256 {r['sha256']} 两端一致 ({r['verify']})" + (f" (backup: {path}.bak)" if backup else ""))
     finally:
         _close(client, jc)
 
@@ -440,13 +476,26 @@ async def _in_thread(fn, timeout: int):
 async def h_ssh_write_file(sid: str, args: dict) -> tuple[str, Any]:
     conn, err = _conn(args)
     path = (args.get("path") or "").strip()
+    local = (args.get("local_path") or "").strip()
     if not conn or not path:
-        return f"ERROR: ssh_write_file {err or '需要 host + path + content'}", None
+        return f"ERROR: ssh_write_file {err or '需要 host + path + content (或 local_path)'}", None
+    backup = args.get("backup", True)
     try:
-        msg = await _in_thread(lambda: _sftp_write(conn, path, args.get("content") or "", args.get("backup", True)), 30)
+        if local:
+            if args.get("content"):
+                return "ERROR: ssh_write_file content 与 local_path 只能给一个", None
+            bad = _check_local(local)
+            if bad:
+                return f"ERROR: ssh_write_file {bad}", None
+            from lib.sftp_transfer import transfer_timeout
+            msg = await _in_thread(lambda: _sftp_upload(conn, local, path, backup, args.get("resume", True)),
+                                   transfer_timeout(os.path.getsize(local)))
+        else:
+            msg = await _in_thread(lambda: _sftp_write(conn, path, args.get("content") or "", backup), 30)
         return f"[sftp {_tag(conn)}] {msg}", None
     except Exception as e:
-        return f"ERROR: ssh_write_file {type(e).__name__}: {e}", None
+        hint = ("; 已传部分留在远端 <path>.lcpart, 原样重试会断点续传" if local and not isinstance(e, ValueError) else "")
+        return f"ERROR: ssh_write_file {type(e).__name__}: {e}{hint}", None
 
 
 @register("ssh_sync_files")
@@ -456,25 +505,39 @@ async def h_ssh_sync_files(sid: str, args: dict) -> tuple[str, Any]:
     backup = args.get("backup", True)
     if not conn or not files:
         return f"ERROR: ssh_sync_files {err or '需要 host + files 字典'}", None
+    from lib import sftp_transfer as st
+    total = 0
+    for v in files.values():
+        if isinstance(v, dict) and v.get("local_path"):
+            bad = _check_local(str(v["local_path"]))
+            if bad:
+                return f"ERROR: ssh_sync_files {bad}", None
+            total += os.path.getsize(str(v["local_path"]))
+        else:
+            total += len(str(v or "").encode())
 
     def _do_sync():
         client, jc = _connect(conn)
         results = []
         try:
             sftp = client.open_sftp()
+            run = _remote_run(client)
             for path, content in files.items():
                 try:
-                    _sftp_replace(sftp, path, content, backup)
-                    results.append(f"  ✓ {path} ({len((content or '').encode())} bytes)")
+                    if isinstance(content, dict) and content.get("local_path"):
+                        r = st.upload_file(sftp, str(content["local_path"]), path, backup, True, run)
+                    else:
+                        r = _sftp_replace(sftp, path, content or "", backup, client)
+                    results.append(f"  ✓ {path} ({r['size']} bytes, sha256 {r['sha256'][:12]}… 已校验)")
                 except Exception as e:
-                    results.append(f"  ✗ {path}: {e}")
+                    results.append(f"  ✗ {path}: {e} (该文件未改动)")
             sftp.close()
         finally:
             _close(client, jc)
         return results
 
     try:
-        results = await _in_thread(_do_sync, 60)
+        results = await _in_thread(_do_sync, max(60, st.transfer_timeout(total)))
         return f"[sftp {_tag(conn)}] sync {len(files)} files:\n" + "\n".join(results), None
     except Exception as e:
         return f"ERROR: ssh_sync_files {type(e).__name__}: {e}", None
@@ -540,7 +603,7 @@ async def h_ssh_str_replace(sid: str, args: dict) -> tuple[str, Any]:
             if count > 1:
                 return False, f"AMBIGUOUS: old_str matches {count} times; make it more specific"
             new_content = content.replace(old_str, new_str, 1)
-            _sftp_replace(sftp, path, new_content, True)     # backup + 保留权限
+            _sftp_replace(sftp, path, new_content, True, client)     # backup + 保留权限 + 校验
             sftp.close()
             return True, f"OK: replaced 1 occurrence in {path} ({len(content)}→{len(new_content)} chars)"
         finally:

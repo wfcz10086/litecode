@@ -56,6 +56,7 @@ from lib.guard_stats import GuardStats as _GuardStats
 from lib.stats import questions_load as _questions_load, questions_append as _questions_append
 from lib.transport import vllm_stream as _vllm_stream, parse_text_tool_calls as _parse_text_tool_calls
 from lib.tool_args import parse_tool_args as _parse_tool_args
+from lib import usage_ledger as _usage_ledger
 from lib.turn_context import (KEY as _TURN_CTX_KEY, attach as _turn_attach,
                               materialize as _turn_materialize, strip as _turn_strip)
 from lib.turn_sources import prepare as _turn_prepare, enabled as _turn_ctx_enabled
@@ -166,6 +167,7 @@ from lib.agent.spawn_dispatch import _dispatch_spawn_agent  # noqa: E402,F401
 from lib.agent.after_tools import _after_tool_batch  # noqa: E402,F401
 from lib.agent.text_reply import _salvage_empty_reply, TextReplyState, _handle_text_reply  # noqa: E402,F401
 from lib.agent.turn_persist import _turn_persist  # noqa: E402,F401
+from lib.agent.steer import apply_steers as _apply_steers
 from lib.agent.tool_exec import ToolRunState, _run_tool_calls, _write_call_confirmed_success  # noqa: E402,F401
 from lib.agent.turn_errors import _turn_error_message  # noqa: E402,F401
 from lib.agent import failure_loop as _fl  # noqa: E402  失败经验记录 (召回走 lib/turn_sources)
@@ -183,6 +185,8 @@ async def agent_stream(
     user_content: Any = None,   # [v1.4] 多模态: 若传 list, 直接作为 user.content
     strategist: bool = False,   # [2026-09-03] 权谋/多方博弈推演模式 (前端 chip)
     disabled_tools: frozenset = frozenset(),   # [2026-10-13] 本次请求禁用的工具, 见 lib/tool_filter.py
+    skills: tuple = (),   # [2026-10-22] 用户本轮强制使用的技能名 (lib/skill_turn.py)
+    usage_source: str = "",     # [usage-ledger] 账本来源 (web/timer/dag...), 空 = 按会话 id 前缀推
 ) -> AsyncGenerator[str, None]:
     # 同 session 的并发请求串行化：防止两个 client 同时跑 agent loop 导致 LLM 并行/文件竞争
     _lock = _get_session_lock(session_id) if session_id else None
@@ -192,7 +196,10 @@ async def agent_stream(
     # finally 依赖 _ctx.new_msgs / _ctx.base_history / _ctx.sid_tag, 若构造放 try 内
     # 且抛异常, finally 引用 _ctx 会 UnboundLocalError (老 bug 换个形式复活)
     _ctx = TurnContext(sid_tag=session_id[:8] if session_id else "anon", session_id=session_id,
-                       disabled_tools=frozenset(disabled_tools or ()))
+                       disabled_tools=frozenset(disabled_tools or ()), forced_skills=tuple(skills or ()))
+    # [usage-ledger 2026-10-22] 本轮记账作用域: turn_id 就是首帧 msg_id; 技能边跑边记进 _ctx.turn_skills
+    _turn_id = uuid.uuid4().hex[:12]
+    _ledger_tok = _usage_ledger.begin_turn(session_id, _turn_id, source=usage_source, skills=_ctx.turn_skills)
     try:
         # ── 防 UnboundLocalError: finally 依赖的变量必须最先赋值 ──
         # 注意: 不用 `x: list = []` 注解赋值，Python 3.11 在某些异常路径下会误判为未绑定
@@ -240,7 +247,7 @@ async def agent_stream(
         )
 
         # [D4] 首 chunk 携带 msg_id, 供前端绑定当前 assistant 消息
-        _new_msg_id = uuid.uuid4().hex[:12]
+        _new_msg_id = _turn_id
         yield f"data: {json.dumps({'choices':[{'delta':{'msg_id': _new_msg_id}}]})}\n\n"
 
         # [stream-feedback 2026-05-22] 立即发占位 status, 让前端 1s 内有反馈
@@ -293,6 +300,8 @@ async def agent_stream(
                 if _ctx.session_id and len(_ctx.new_msgs) > _wal_flushed:
                     _wal_append(_ctx.session_id, _ctx.new_msgs[_wal_flushed:])
                     _wal_flushed = len(_ctx.new_msgs)
+                if _iteration == 0:
+                    _apply_steers(_ctx)   # [steer] 上一轮收尾窗口里才到的插话, 并入这一轮
                 with _interrupt_lock:
                     _interrupted_here = _ctx.session_id in _interrupt_flags
                     if _interrupted_here:
@@ -400,6 +409,7 @@ async def agent_stream(
                 # [v1.4] 推理死循环中断后, 持久化当轮 content 并注入约束消息给下一轮
                 if _loop_broken:
                     _reasoning_stall_count += 1
+                    _ctx.no_think_next = True   # 下一轮关思考直接动手 (见 llm_call)
                     if full_text:
                         _ctx.new_msgs.append({"role": "assistant", "content": full_text})
                         _ctx.messages.append({"role": "assistant", "content": full_text})
@@ -654,6 +664,13 @@ async def agent_stream(
                     _after_tool_batch(_ctx, _guard_stats, _iteration, _iter_write_success, _misc_state, _pm_state,
                                       _test_state, _webtest_state, _batch_state, tool_call_list, tool_results)
 
+                    # [steer 2026-10-21] 用户运行中插话: 本批工具结果之后、下次调模型之前接进上下文
+                    _steered = _apply_steers(_ctx)
+                    if _steered:
+                        log.info(f"  [STEER:{_ctx.sid_tag}] 接入 {len(_steered)} 条插话: {_steered[0][:60]}")
+                        yield sse_status("task_exec", {"status": "done",
+                                                       "detail": f"📝 已收到插话: {_steered[0][:60]}"}, model)
+
 
                     # 重置本轮标志
                     _test_state.iter_wrote_src = False
@@ -673,7 +690,13 @@ async def agent_stream(
                         yield _ev
                     _consecutive_empty, _last_reasoning_salvage = _tr.consecutive_empty, _tr.last_reasoning_salvage
                     if _tr.action == "break":
-                        break
+                        # [steer] 本该收尾时还有插话 → 不结束回合, 接着按插话做
+                        _steered = _apply_steers(_ctx)
+                        if not _steered:
+                            break
+                        log.info(f"  [STEER:{_ctx.sid_tag}] 收尾前接入 {len(_steered)} 条插话, 回合继续")
+                        yield sse_status("task_exec", {"status": "done",
+                                                       "detail": f"📝 已收到插话: {_steered[0][:60]}"}, model)
                     continue
             else:   # for 正常耗尽 (没有任何 break) = 迭代上限
                 _fl.mark(_ctx, "max_iter", detail=f"{_effective_max_iter} 轮迭代用尽")
@@ -697,6 +720,12 @@ async def agent_stream(
             _fl.mark(_ctx, "turn_exception", detail=f"{type(e).__name__}: {_raw_err[:300]}")
             try:
                 yield sse_content(_err_msg, model)
+                # [trace 2026-10-22] 再发一帧结构化错误 (标题/建议/按钮/脱敏原文), Web 渲染成错误卡片;
+                # content_echo = 上面那句人话, 前端据此去重。CLI / 微信不读 delta.error, 行为不变。
+                from lib.friendly_errors import classify as _fe_classify
+                _fe = _fe_classify(e)
+                _fe["content_echo"] = _err_msg.strip()
+                yield sse_error(_fe["title"], retry_hint=True, model=model, friendly=_fe)
             except GeneratorExit:
                 pass
             try:
@@ -726,6 +755,7 @@ async def agent_stream(
                     _interrupt_flags.discard(_ctx.session_id)
             if _lock:
                 _lock.release()
+            _usage_ledger.end_turn(_ledger_tok, ok=_ctx.failure is None, session_id=_ctx.session_id)
 
 
 # ── FastAPI ───────────────────────────────────────────────────
@@ -747,4 +777,7 @@ if __name__ == "__main__":
     print(f"LiteCode Server  port={PORT}  model={MODEL_ID}")
     print(f"Backend : {BACKEND_URL}")
     print(f"Skills  : {n_skills} loaded ({', '.join(s[0] for s in _SKILL_INDEX[:5])}...)")
-    uvicorn.run(app, host=HOST, port=PORT, log_level="warning")
+    from lib.bind_host import bind_host
+    _host = bind_host(HOST)   # LITECODE_BIND_HOST (桌面版 127.0.0.1) > config server.host > 0.0.0.0
+    print(f"Listen  : {_host}:{PORT}")
+    uvicorn.run(app, host=_host, port=PORT, log_level="warning")

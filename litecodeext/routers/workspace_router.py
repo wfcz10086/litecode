@@ -70,6 +70,34 @@ def _safe_headers(fp: Path, headers=None) -> dict:
     return h
 
 
+# [large-file 2026-10-21] 文本预览只读文件头 512KB: 原 /api/workspace/preview 对 .log/.csv 整个
+# read_text, 1GB 日志会整份进内存 (还要解码成 str ≈ 2~4 倍)。下载/媒体走 FileResponse
+# (Starlette 原生流式 + Range/206 + If-Range), 不经这里。
+_TEXT_PREVIEW_BYTES = 512 * 1024
+
+
+def _read_text_head(fp: Path, limit: int = _TEXT_PREVIEW_BYTES) -> tuple[str, bool]:
+    size = fp.stat().st_size
+    with open(fp, "rb") as f:
+        raw = f.read(limit)
+    text = raw.decode("utf-8", errors="replace")
+    if size > limit:
+        # 末尾可能截在多字节字符中间, 去掉替换符残片
+        text = text.rstrip("\ufffd")
+        return (text + f"\n\n... [仅预览前 {limit // 1024}KB, 文件共 {size / 1048576:.1f}MB, "
+                f"完整内容请下载] ..."), True
+    return text, False
+
+
+async def _soffice_convert(soffice: str, fp: Path):
+    """LibreOffice 转换最长 60s, 放线程池跑, 别卡住整个事件循环 (其他用户请求/SSE 会一起停)。"""
+    import asyncio
+    return await asyncio.to_thread(
+        _subprocess.run,
+        [soffice, "--headless", "--convert-to", "pdf", "--outdir", str(_OFFICE_PDF_CACHE), str(fp)],
+        capture_output=True, timeout=60)
+
+
 def _is_secret_path(p: Path) -> bool:
     """[sec 2026-10-19] 工作区里的 .secrets/ (历史密钥目录) 一律不经 Web 暴露。"""
     return any(part == ".secrets" for part in p.parts)
@@ -171,14 +199,13 @@ async def api_preview_abs(request: Request, path: str = ""):
         raise HTTPException(403, "forbidden: path outside whitelist")
     ext = fp.suffix.lower()
     sz = fp.stat().st_size
-    if sz > 10 * 1024 * 1024:
+    if sz > 10 * 1024 * 1024 and ext not in _PREVIEW_TEXT_EXTS:   # 文本只读头 512KB, 多大都能预览
         return {"type": "too_large", "name": fp.name, "size": sz, "ext": ext}
     if ext in _PREVIEW_TEXT_EXTS:
         try:
-            content = fp.read_text(errors="replace")
-            if len(content) > 500_000:
-                content = content[:500_000] + "\n\n... [truncated] ..."
-            return {"type": "text", "ext": ext, "content": content, "name": fp.name, "size": sz}
+            content, cut = _read_text_head(fp)
+            return {"type": "text", "ext": ext, "content": content, "name": fp.name, "size": sz,
+                    "truncated": cut}
         except Exception as ex:
             return {"type": "error", "message": str(ex), "name": fp.name}
     if ext in _PREVIEW_IMG_EXTS:
@@ -223,10 +250,9 @@ async def api_workspace_preview(request: Request, path: str = ""):
                             headers={"Content-Disposition": _cd("inline", fp.name)})
     if ext in _PREVIEW_TEXT_EXTS:
         try:
-            content = fp.read_text(errors="replace")
-            if len(content) > 500_000:
-                content = content[:500_000] + "\n\n... [truncated, file too large] ..."
-            return {"type": "text", "content": content, "name": fp.name, "size": fp.stat().st_size}
+            content, cut = _read_text_head(fp)
+            return {"type": "text", "content": content, "name": fp.name, "size": fp.stat().st_size,
+                    "truncated": cut}
         except Exception as ex:
             return {"type": "error", "message": str(ex), "name": fp.name}
     return {"type": "unsupported", "name": fp.name, "ext": ext}
@@ -254,11 +280,7 @@ async def api_preview_office_abs(request: Request, path: str = ""):
     cache_pdf = _OFFICE_PDF_CACHE / f"{_fkey}_{fp.stem}.pdf"
     if not cache_pdf.exists() or cache_pdf.stat().st_mtime < fp.stat().st_mtime:
         soffice = _shutil.which("soffice") or _shutil.which("libreoffice") or "soffice"
-        proc = _subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf",
-             "--outdir", str(_OFFICE_PDF_CACHE), str(fp)],
-            capture_output=True, timeout=60,
-        )
+        proc = await _soffice_convert(soffice, fp)
         produced = _OFFICE_PDF_CACHE / f"{fp.stem}.pdf"
         if proc.returncode != 0 or not produced.exists():
             raise HTTPException(500, f"office→pdf 转换失败: {proc.stderr.decode(errors='replace')[:200]}")
@@ -289,11 +311,7 @@ async def api_workspace_preview_office(request: Request, path: str = ""):
     cache_pdf = _OFFICE_PDF_CACHE / f"{_fkey}_{fp.stem}.pdf"
     if not cache_pdf.exists() or cache_pdf.stat().st_mtime < fp.stat().st_mtime:
         soffice = _shutil.which("soffice") or _shutil.which("libreoffice") or "soffice"
-        proc = _subprocess.run(
-            [soffice, "--headless", "--convert-to", "pdf",
-             "--outdir", str(_OFFICE_PDF_CACHE), str(fp)],
-            capture_output=True, timeout=60,
-        )
+        proc = await _soffice_convert(soffice, fp)
         produced = _OFFICE_PDF_CACHE / f"{fp.stem}.pdf"
         if proc.returncode != 0 or not produced.exists():
             raise HTTPException(500, f"office→pdf 转换失败: {proc.stderr.decode(errors='replace')[:200]}")

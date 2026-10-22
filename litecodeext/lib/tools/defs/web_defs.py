@@ -32,11 +32,33 @@ WEB_DEFS = [
                     "query":  {"type": "string"},
                     "effort": {"type": "string", "enum": ["low", "mid", "high"]},
                     "region": {"type": "string", "enum": ["domestic", "international"],
-                               "description": "Search region: domestic(DuckDuckGo/Bing CN) or international(DuckDuckGo/Google/Bing EN)"}
+                               "description": "Search region: domestic(DuckDuckGo/Bing CN) or international(DuckDuckGo/Google/Bing EN)"},
+                    "category": {"type": "string", "enum": ["general", "it", "packages", "repos", "q&a", "science"],
+                                 "description": "Default general. Developer search: it (GitHub/StackOverflow/MDN/Docker Hub/Arch Wiki), "
+                                                "packages (npm/crates/pkg.go.dev/Docker Hub...), repos (GitHub/GitLab), q&a (StackOverflow family), science (papers)"}
                 },
                 "required": ["query"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "stock_quote",
+            "description": (
+                "实时行情 (A 股/港股/美股的个股、指数、ETF)。问股价、大盘、今天行情、涨跌时用它拿准确数字, "
+                "别用 web_search 搜行情 (搜索结果常是旧闻或别的日期)。不传 symbols = A 股大盘概览 "
+                "(主要指数 + 涨跌家数 + 成交额 + 行业涨跌榜 + 港美主要指数)。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbols": {"type": "array", "items": {"type": "string"},
+                                "description": "名称或代码, 如 贵州茅台 / 600519 / 腾讯 / 00700 / NVDA / 恒指 / 半导体ETF"},
+                    "overview": {"type": "boolean", "description": "传了 symbols 时是否同时附大盘概览"},
+                },
+            },
+        },
     },
     {
         "type": "function",
@@ -116,7 +138,7 @@ WEB_DEFS = [
                 "读文件尾部 N 行 (类似 tail -n). 用于看后台进程/日志/异步任务输出."
                 "典型: 用户'看下 nginx/server.log 的最近输出' → tail_log(path='/var/log/nginx/access.log', lines=30). "
                 "或: execute_shell(background=true) 起服务后, list_bg 拿到 log 路径, tail_log(path=<log>) 看启动是否成功. "
-                "避免一次性 read_file 整个超大日志."
+                "避免一次性 read_file 整个超大日志. 返回带 共 N 行 / 显示区间 / 往前翻的 read_file 参数, 单次输出 ≤30000 字符."
             ),
             "parameters": {
                 "type": "object",

@@ -102,7 +102,8 @@ class RunRegistry:
                 raise
             except Exception as e:  # producer 自己该兜底; 这里防漏网
                 import json
-                await run._push(f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n")
+                from lib.friendly_errors import classify   # [trace] 附友好错误字段, 老格式 error 字符串不变
+                await run._push(f"data: {json.dumps({'error': str(e), 'friendly': classify(e)}, ensure_ascii=False)}\n\n")
             finally:
                 await run._finish()
 

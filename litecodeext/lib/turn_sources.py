@@ -10,13 +10,14 @@ import re
 from . import turn_context as tc
 from .config import CFG, WORKSPACE, HAS_MEMORY_INDEX, memory_index_get
 from .prompt import _detect_auto_delegation, matched_skills_block, PROMPT_FILE
+from .skill_turn import FORCED_LABEL
 from .agent import failure_loop as _failure_loop
 from .agent import subagent_registry as _sa_registry
 
 try:
-    from memory import recall as _recall          # 容器 / 服务进程: core 在 sys.path
-except ImportError:                                 # 宿主机测试
-    from core.memory import recall as _recall
+    from memory import recall as _recall, profile as _profile    # 容器 / 服务进程: core 在 sys.path
+except ImportError:                                                # 宿主机测试
+    from core.memory import recall as _recall, profile as _profile
 try:
     import project_sessions as _proj
     from projects import ProjectStore as _ProjectStore
@@ -43,6 +44,10 @@ def skills(inp: tc.TurnInput) -> str:
         return ""
     seen = tc.seen_in(inp.history)
     head, *chunks = _SKILL_MARK.split(block)
+    if block.startswith(FORCED_LABEL):   # 用户强制指定: 前文给过全文的只提醒一句, 不重复整篇
+        chunks = [c if c[:c.find("]") + 1] not in seen else c[:c.find("]") + 1] + " (全文已在本会话前文给出)\n\n"
+                  for c in chunks]
+        return head + "".join(chunks)
     fresh = [c for c in chunks if c[:c.find("]") + 1] not in seen]
     return head + "".join(fresh) if fresh else ""
 
@@ -50,7 +55,22 @@ def skills(inp: tc.TurnInput) -> str:
 def memory_index(inp: tc.TurnInput) -> str:
     if not HAS_MEMORY_INDEX:
         return ""
-    return memory_index_get(WORKSPACE).search_as_context(inp.user_message, limit=3, max_chars=1500) or ""
+    # profile 类条目由 user_profile 来源给 (且是最新值), 这里不重复
+    return memory_index_get(WORKSPACE).search_as_context(
+        inp.user_message, limit=3, max_chars=1500, exclude_categories=("profile",)) or ""
+
+
+def _mem_cfg() -> dict:
+    return CFG.get("memory") or {}
+
+
+def user_profile(inp: tc.TurnInput) -> str:
+    """全局用户档案 (core/memory/profile.py): 常驻块内容变了才重给, 超预算的按相关度挑。"""
+    if not _mem_cfg().get("user_profile", True):
+        return ""
+    return _profile.turn_block(WORKSPACE, inp.session_id, inp.user_message, seen=tc.seen_in(inp.history),
+                               max_chars=int(_mem_cfg().get("profile_max_chars", 1200)),
+                               k=int(_mem_cfg().get("profile_recall_k", 3)))
 
 
 def memory_recall(inp: tc.TurnInput) -> str:
@@ -103,6 +123,7 @@ def prepare(user_message: str, session_id: str, raw_history: list) -> tuple[str,
 
 tc.register("project", project, order=5)
 tc.register("delegation", delegation, order=10)
+tc.register("user_profile", user_profile, order=20)
 tc.register("skills", skills, order=30)
 tc.register("memory_index", memory_index, order=40)
 tc.register("memory_recall", memory_recall, order=50)

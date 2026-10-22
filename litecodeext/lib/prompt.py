@@ -52,6 +52,15 @@ def _probe_env() -> str:
     if ss:
         lines.append(f"- 端口检测: `lsof -i:<port> || netstat -tlnp 2>/dev/null | grep <port>`")
 
+    # 桌面版 (Windows WSL 子系统): 告诉模型它就在用户的 Windows 电脑上 (启动时探测一次, 之后固定)
+    try:
+        from .desktop_env import prompt_block
+        desk = prompt_block()
+        if desk:
+            lines.append("\n" + desk)
+    except Exception as e:
+        log.warning(f"  [prompt] 桌面版环境探测失败: {e}")
+
     return "\n".join(lines)
 
 
@@ -91,7 +100,16 @@ def _render_datetime(tpl: str) -> str:
     system prompt 及模板排在其后的 tools 定义 (~5 万字) 是 KV 前缀缓存的主体,
     任何按分钟变化的内容都会让它整段失效、每轮重新 prefill; 精确时刻由模型调工具取。"""
     from datetime import datetime as _dt
-    return tpl.replace("{{DATETIME}}", _dt.now().strftime("%Y-%m-%d (%A)") + " (精确时刻请用工具查询)")
+    tpl = tpl.replace("{{DATETIME}}", _dt.now().strftime("%Y-%m-%d (%A)") + " (精确时刻请用工具查询)")
+    if "{{MODEL}}" in tpl:
+        # 模型名只在切模型时变 (那时缓存本来就要重建); 不注入的话模型会拿 SOUL.md 里的历史部署名自称 (2026-10-21)
+        try:
+            from lib.config import turn_model_id
+            m = turn_model_id() or "未知"
+        except Exception:
+            m = "未知"
+        tpl = tpl.replace("{{MODEL}}", m)
+    return tpl
 
 
 def _load_external_prompt(session_context: str = "") -> str | None:
@@ -293,6 +311,17 @@ def _base_system_prompt() -> str:
         )
     return "".join(parts)
 
+def _global_profile_dir(session_id: str):
+    try:
+        try:
+            from memory.profile import profile_dir
+        except ImportError:
+            from core.memory.profile import profile_dir
+        return profile_dir(WORKSPACE, session_id)
+    except Exception:
+        return None
+
+
 def _load_session_context(session_id: str) -> str:
     """
     构建 session 上下文：从 session workspace 加载 SOUL + USER + TOOLS + memory。
@@ -315,10 +344,15 @@ def _load_session_context(session_id: str) -> str:
         try: return (_SESSION_TEMPLATE_PRIORITY.index(name), name)
         except ValueError: return (len(_SESSION_TEMPLATE_PRIORITY), name)
 
+    # USER.md 是全局用户档案 (core/memory/profile.py): 存在就优先于会话副本/模板, 新会话自动带上
+    _global_user_dir = _global_profile_dir(session_id)
     for fname in sorted(_all_mds, key=_sort_key):
         content = ""
         source_path = None
-        for d in [sess_dir, TEMPLATE_DIR, BASE / "workspace_template"]:
+        _dirs = [sess_dir, TEMPLATE_DIR, BASE / "workspace_template"]
+        if fname == "USER.md" and _global_user_dir is not None:
+            _dirs.insert(0, _global_user_dir)
+        for d in _dirs:
             p = d / fname
             if p.exists():
                 content = p.read_text(errors="replace").strip()
@@ -349,22 +383,21 @@ def _load_session_context(session_id: str) -> str:
 
     # 追加文件管理提示：告诉模型如何更新这些上下文文件
     if loaded_paths:
+        # [2026-10-21] 按目录归并列路径 (原来每个文件一行全路径, 7 行几乎同一目录), 规则合成一句
+        by_dir: dict = {}
+        for fname, fpath in loaded_paths.items():
+            by_dir.setdefault(str(Path(fpath).parent), []).append(fname)
         hint_lines = [
             "\n## 上下文文件管理",
-            "以下文件构成你的持久记忆，使用 `update_profile` 工具来读取和更新（不要用 read_file/write_file）：",
+            "以上文件是你的持久记忆，只用 `update_profile` 读取和更新（不要 read_file/write_file）：",
         ]
-        for fname, fpath in loaded_paths.items():
-            hint_lines.append(f"  - {fname}: `{fpath}`")
+        for d, names in by_dir.items():
+            hint_lines.append(f"  - `{d}/`: {', '.join(names)}")
         hint_lines.append(
-            "当用户提到新的个人信息、偏好、工作环境时，主动用 update_profile 更新 USER.md。"
+            "用户提到新的个人信息/偏好/工作环境 → 更新 USER.md（它与 save_memory scope='user' 都是全局共享的，其余文件只属于本会话）；"
+            "新服务/路径/环境变量 → 更新 TOOLS.md"
+            + ("；重要决策/架构选择/解决方案 → save_memory 存 MEMORY.md。" if HAS_MEMORY else "。")
         )
-        hint_lines.append(
-            "当 session 中创建了新服务/路径/环境变量时，用 update_profile 更新 TOOLS.md。"
-        )
-        if HAS_MEMORY:
-            hint_lines.append(
-                "重要的项目决策、架构选择、解决方案用 save_memory 工具保存到 MEMORY.md。"
-            )
         parts.append("\n".join(hint_lines))
 
     return "\n\n---\n\n".join(parts) if parts else ""
@@ -381,11 +414,16 @@ def _session_context_for(session_id: str, history_anchor: str | None) -> str:
 
 
 def matched_skills_block(user_message: str, external: bool = True) -> str:
-    """按用户消息自动匹配的技能 (随消息变化)。"""
-    matched = auto_load_skills(user_message)
-    if not matched:
-        return ""
-    label = "## 已自动加载的匹配 Skills（完整内容）\n" if external else "## 已自动加载的匹配 Skills\n"
+    """按用户消息自动匹配的技能 (随消息变化); 用户本轮强制指定了技能时只给那几个的全文 (lib/skill_turn.py)。"""
+    from .skills import SUMMARY_MARK, turn_skills_block
+    from .skill_turn import FORCED_LABEL
+    matched = turn_skills_block(user_message)
+    if not matched or matched.startswith(FORCED_LABEL):
+        return matched
+    if SUMMARY_MARK in matched:   # 有长技能只注入了开头几节, 不能标"完整"
+        label = "## 已自动加载的匹配 Skills（长技能仅含开头部分, 全文用 load_skill 加载）\n"
+    else:
+        label = "## 已自动加载的匹配 Skills（完整内容）\n" if external else "## 已自动加载的匹配 Skills\n"
     return label + matched
 
 

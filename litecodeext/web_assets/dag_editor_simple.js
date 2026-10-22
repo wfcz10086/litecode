@@ -54,6 +54,18 @@
         { id: 'assemble', agent_type: 'writer', task: '合成 Markdown 图文笔记.', depends_on: ['outline', 'cover'] },
       ],
     },
+    /* 文档工坊 — 与 skills/doc-studio/dag_doc_studio.json 同步 (tests/test_doc_studio.py 校验) */
+    doc_studio: {
+      steps: [
+        {"id": "outline", "agent_type": "researcher", "task": "围绕 $TOPIC 做一份 10 页幻灯片大纲 (先 web_search 核实事实与数据, 标注年份)。每页: 标题(一句话观点) + 2~4 要点 + 配图需求 (照片拍什么/英文搜索词, 或图表数据)。写到 /tmp/litecode_workspace/doc_studio/outline.md, 输出该路径。"},
+        {"id": "html", "agent_type": "coder", "task": "按 doc-studio 技能 (load_skill doc-studio) 把 ${step:outline:output} 的大纲写成 /tmp/litecode_workspace/doc_studio/deck.html: 每页 <section class=\"slide\"> (1280×720), <link rel=\"stylesheet\" href=\"base.css\">, 统一 --ds-* tokens, 图片一律用 data-need/data-kind/data-query 占位, 末页放 <div class=\"credits\" data-credits></div>。只输出 HTML 路径。", "depends_on": ["outline"]},
+        {"id": "images", "agent_type": "shell", "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/images.py /tmp/litecode_workspace/doc_studio/deck.html  输出最后的 JSON 汇总。", "depends_on": ["html"]},
+        {"id": "pdf", "agent_type": "shell", "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/render.py /tmp/litecode_workspace/doc_studio/deck.html --pdf /tmp/litecode_workspace/doc_studio/deck.pdf --long /tmp/litecode_workspace/doc_studio/deck_long.jpg  输出 JSON。", "depends_on": ["images"]},
+        {"id": "pptx", "agent_type": "shell", "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/html2pptx.py /tmp/litecode_workspace/doc_studio/deck.html -o /tmp/litecode_workspace/doc_studio/deck.pptx  输出 JSON。", "depends_on": ["images"]},
+        {"id": "qa", "agent_type": "shell", "task": "执行: python3 /opt/litecode/skills/doc-studio/scripts/qa.py /tmp/litecode_workspace/doc_studio/deck.html --shots /tmp/litecode_workspace/doc_studio/qa_shots -o /tmp/litecode_workspace/doc_studio/qa.json  输出 counts 和 error 级问题。", "depends_on": ["images"]},
+        {"id": "report", "agent_type": "writer", "task": "汇总交付: 列出 PDF / PPTX / 长图路径, 配图来源 (${step:images:output}), 质检结论 (${step:qa:output}); 有 error 就写明哪页什么问题、建议怎么改。", "depends_on": ["pdf", "pptx", "qa"]},
+      ],
+    },
   };
 
   /* 运行条件 when — 可视化条件行. 生成 v2 字符串, 顶层数组 = AND (见 core/_when_eval.py). */
@@ -563,9 +575,9 @@
       <div class="des-fld"><label>id</label><input id="dr-id" value="${esc(step.id || '')}"></div>
       <div class="des-fld"><label>agent_type</label><select id="dr-at">${agentOpts}</select></div>
       <div class="des-fld" ${isTool ? '' : 'style="display:none"'} id="dr-tn-row">
-        <label>tool_name</label><input id="dr-tn" value="${esc(step.tool_name || '')}"></div>
+        <label>tool_name</label><input id="dr-tn" list="dr-tn-list" value="${esc(step.tool_name || '')}" placeholder="选择或输入工具名"><datalist id="dr-tn-list"></datalist></div>
       <div class="des-fld" ${isDag ? '' : 'style="display:none"'} id="dr-dag-row">
-        <label>子 DAG 名 (dag_name)</label><input id="dr-dag" value="${esc(step.dag_name || '')}" placeholder="要运行的已保存 DAG 名"></div>
+        <label>子 DAG 名 (dag_name)</label><input id="dr-dag" list="dr-dag-list" value="${esc(step.dag_name || '')}" placeholder="要运行的已保存 DAG 名"><datalist id="dr-dag-list"></datalist></div>
       <div class="des-fld"><label>task / 描述</label><textarea id="dr-task">${esc(step.task || '')}</textarea></div>
       <div class="des-fld"><label>label (可选显示名)</label><input id="dr-label" value="${esc(step.label || '')}"></div>
       <div class="des-fld">
@@ -577,6 +589,7 @@
         💡 引上游步骤输出用 <code>$step.&lt;id&gt;.output</code>. 依赖从画布连线得到, 不用手填.<br>
         ⚡ 条件里"前步"只能选画布里已有的其它步骤; 多行之间是"且"的关系.
       </div>`;
+    _fillDrLists(body);
     body.querySelector('#dr-at').addEventListener('change', e => {
       const isT = e.target.value === 'tool';
       body.querySelector('#dr-tn-row').style.display = isT ? '' : 'none';
@@ -658,6 +671,22 @@
         alert('AI 生成失败: ' + (d.error || '未知'));
       }
     } catch (e) { alert('AI 错误: ' + e.message); }
+  }
+
+  // tool_name / dag_name 原来是纯文本框, 要背工具名; 改成可选可输的下拉候选 (datalist)
+  let _drToolsCache = null;
+  async function _fillDrLists(body) {
+    try {
+      if (!_drToolsCache) _drToolsCache = (await (await fetch('/api/dags/tool_names')).json()).tools || [];
+      const tl = body.querySelector('#dr-tn-list');
+      if (tl) tl.innerHTML = _drToolsCache.map(t => `<option value="${esc(t.name)}">${esc(t.desc || '')}</option>`).join('');
+      const d = await (await fetch('/api/dags')).json();
+      const dl = body.querySelector('#dr-dag-list');
+      if (dl) dl.innerHTML = (d.dags || d.items || []).map(x => {
+        const n = typeof x === 'string' ? x : (x.name || '');
+        return n ? `<option value="${esc(n)}"></option>` : '';
+      }).join('');
+    } catch (e) { /* 拿不到候选不影响手动输入 */ }
   }
 
   window.mountDAGEditor = render;

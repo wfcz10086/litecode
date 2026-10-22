@@ -292,6 +292,9 @@ def test_cleanup_stale(env):
 def test_workspace_is_repo_root(env, monkeypatch):
     repo = env["repo"]
     monkeypatch.setattr(wt, "WORKSPACE_OVERRIDE", repo)
+    # 子代理登记表的落盘 (telemetry/: 前台子代理过程记录也落) 放仓库外, 本用例只看工作树目录是否污染仓库
+    from lib.agent import subagent_registry as _reg
+    monkeypatch.setattr(_reg, "WORKSPACE_OVERRIDE", repo.parent / "_reg_ws")
     env["scripts"]["r1"] = [("write_file", {"filepath": str(repo / "a.py"), "content": "x = 'r'\n"}),
                             ("execute_shell", {"command": f"cat {repo}/a.py"})]
     env["scripts"]["r2"] = [("write_file", {"filepath": "b.py", "content": "y = 'r'\n"})]

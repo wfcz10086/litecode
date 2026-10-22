@@ -162,6 +162,10 @@ class TurnContext:
     disabled_tools: frozenset = frozenset()   # 本次请求禁用的工具 (lib/tool_filter.py), 评测断网用
     failure: Optional[dict] = None   # 本轮失败出口打标 {kind, stuck_at, detail} (lib/agent/failure_loop.py)
     readback: Any = None             # [READBACK] 收尾前回读闸状态 (lib/agent/readback_gate.py), 首次观测时创建
+    tool_groups: tuple = ()   # 无会话时本轮激活的低频工具组 (lib/tool_groups.py); 有会话时存会话级
+    tool_groups_scanned: int = 0           # lib/tool_groups.tools_for 已扫描到的 messages 下标
+    forced_skills: tuple = ()   # 用户本轮强制使用的技能 (chat body `skills`), 全文注入且跳过关键词匹配
+    turn_skills: set = field(default_factory=set)   # 本轮实际用到的技能 (自动匹配/load_skill/强制), lib/skill_turn.py
 
 
 @dataclass

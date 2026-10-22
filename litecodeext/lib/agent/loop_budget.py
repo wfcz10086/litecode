@@ -16,6 +16,7 @@ from lib.config import est_tokens
 from lib.config import log
 from lib.config import mem_get as _mem_get
 from lib.tools.defs import TOOL_DEFS
+from lib import tool_groups as _tg   # 实际发送的工具列表 (按会话按需暴露)
 _AGT = CFG.get("agent", {})
 
 
@@ -78,7 +79,7 @@ def _loop_context_window(ctx, usage, iteration, sys_prompt) -> int:
     # 预算看不见这块固定开销, 于是永远判定"还够", 最后由 vLLM 返回 400。
     # 现按 (窗口*pct - 固定开销) 作为历史可用额度。
     try:
-        _fixed_overhead = est_tokens(sys_prompt) + est_tokens(json.dumps(TOOL_DEFS, ensure_ascii=False))
+        _fixed_overhead = est_tokens(sys_prompt) + est_tokens(json.dumps(_tg.tools_for(ctx, TOOL_DEFS), ensure_ascii=False))
     except Exception:
         _fixed_overhead = 0
     # [2026-10-12] 上面的估算对工具 schema 高估约 3 倍, 改用上游 usage 学到的实测值 (lib/overhead_calib.py)

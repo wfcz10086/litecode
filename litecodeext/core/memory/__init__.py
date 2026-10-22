@@ -17,6 +17,8 @@
   session.py    — get_manager / build_memory_context / maybe_compact 注册表
   user_facts.py — extract_user_info + auto_update_*_md + register_dynamic_skill
   auto.py       — smart_auto_memory + rule_based_memory_update + rule_capture_user_facts
+  facts.py      — 一句话 → 用户档案事实 (key, value), 冲突更新用
+  profile.py    — 全局用户档案 (跨会话): facts.json + USER.md, 见 docs/MEMORY.md
 """
 from .consts import (
     CHARS_PER_TOKEN,
@@ -47,6 +49,7 @@ from .auto import (
     rule_capture_user_facts,
     smart_auto_memory,
 )
+from .profile import ProfileStore, profile_id_for
 
 __all__ = [
     "MemoryManager",
@@ -70,4 +73,6 @@ __all__ = [
     "MSG_SOFT_COUNT",
     "MSG_HARD_COUNT",
     "COMPACTION_PROMPT",
+    "ProfileStore",
+    "profile_id_for",
 ]

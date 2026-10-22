@@ -17,6 +17,7 @@ REMOTE_DEFS = [
                     "alias":    {"type": "string", "description": "已存主机别名 (ssh_save_host), 填了可省 host/port/user/密码/密钥/跳板"},
                     "jump":     {"type": "string", "description": "跳板主机别名: 目标只在跳板内网可达时用 (等价 ssh -J)"},
                     "cmd":      {"type": "string", "description": "auto 填远端 shell 命令；powershell 填原始 PowerShell（多句用换行或分号）；wsl 填原始 Bash，按脚本最后退出码返回，安装脚本自行设置 set -e"},
+                    "sudo":     {"type": "boolean", "default": False, "description": "Linux 主机以 root 执行: 用主机库已存的密码经标准输入交给 sudo, 不要自己在命令里写 echo 密码 | sudo -S"},
                     "shell":    {"type": "string", "enum": ["auto", "powershell", "wsl"], "default": "auto", "description": "auto 用远端默认 shell；powershell 编码 Windows 脚本并启用 Stop；wsl 在 Windows 已安装的 WSL 发行版内执行 Bash，stdout/stderr 分流并保留原生退出码"},
                     "wsl_distro": {"type": "string", "description": "shell=wsl 必填，明确目标发行版，如 Ubuntu；不会安装或更改默认发行版"},
                     "wsl_user": {"type": "string", "description": "shell=wsl 可选的 Linux 用户，如 root；省略则使用该发行版的默认用户"},
@@ -98,7 +99,7 @@ REMOTE_DEFS = [
         "type": "function",
         "function": {
             "name": "ssh_write_file",
-            "description": "SSH 写文件到远程主机 (基于 paramiko SFTP). 把 content 写入远程 path. 适合改远程 HTML/Python/配置文件, 比 ssh_exec heredoc 更可靠. 写完可配合 ssh_exec 重启服务验证.",
+            "description": "SSH 写文件到远程主机 (基于 paramiko SFTP). 把 content 写入远程 path; 或给 local_path 把本机文件 (大文件/二进制/压缩包, 流式分块, 不进上下文) 传到远程 path. 先写临时文件, 两端 sha256 一致才原子替换目标 (不会留下半截文件); local_path 传输中断后原样重试会从远端 <path>.lcpart 断点续传. 适合改远程 HTML/Python/配置文件, 比 ssh_exec heredoc 更可靠. 写完可配合 ssh_exec 重启服务验证.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -110,10 +111,12 @@ REMOTE_DEFS = [
                     "alias": {"type": "string", "description": "已存主机别名 (ssh_save_host), 填了可省 host/port/user/密码/密钥/跳板"},
                     "jump": {"type": "string", "description": "跳板主机别名 (目标只在跳板内网可达时用, 等价 ssh -J)"},
                     "path":     {"type": "string", "description": "远程文件绝对路径, 如 /home/gua/templates/index.html"},
-                    "content":  {"type": "string", "description": "要写入的文件完整内容"},
+                    "content":  {"type": "string", "description": "要写入的文件完整内容 (与 local_path 二选一)"},
+                    "local_path": {"type": "string", "description": "本机文件路径: 上传该文件到远程 path (大文件/二进制用这个, 别把内容塞进 content)"},
+                    "resume":   {"type": "boolean", "description": "local_path 上传时远端已有 <path>.lcpart 且前缀 sha256 一致则续传, 默认 true", "default": True},
                     "backup":   {"type": "boolean", "description": "写入前先备份原文件 (path.bak), 默认 true", "default": True},
                 },
-                "required": ["path", "content"],
+                "required": ["path"],
             },
         },
     },
@@ -121,7 +124,7 @@ REMOTE_DEFS = [
         "type": "function",
         "function": {
             "name": "ssh_sync_files",
-            "description": "SSH 批量写多个文件到远程主机 (SFTP, 一次连接). 适合同时改 app.py + index.html + 配置等多个远程文件. files 是 {远程绝对路径: 文件内容} 字典. 比多次 ssh_write_file 更高效.",
+            "description": "SSH 批量写多个文件到远程主机 (SFTP, 一次连接). 适合同时改 app.py + index.html + 配置等多个远程文件. files 是 {远程绝对路径: 文件内容} 字典; 值也可写 {\"local_path\": \"本机路径\"} 上传本机文件. 每个文件 sha256 校验后原子替换, 失败的文件保持原样. 比多次 ssh_write_file 更高效.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -132,7 +135,7 @@ REMOTE_DEFS = [
                     "key_file": {"type": "string", "description": "私钥路径 (给了优先用密钥, 可不填 password)"},
                     "alias": {"type": "string", "description": "已存主机别名 (ssh_save_host), 填了可省 host/port/user/密码/密钥/跳板"},
                     "jump": {"type": "string", "description": "跳板主机别名 (目标只在跳板内网可达时用, 等价 ssh -J)"},
-                    "files":    {"type": "object", "description": "远程路径 → 文件内容 的字典, 如 {\"/home/gua/app.py\": \"...\", \"/home/gua/templates/index.html\": \"...\"}"},
+                    "files":    {"type": "object", "description": "远程路径 → 文件内容 (或 {\"local_path\": 本机文件}) 的字典, 如 {\"/home/gua/app.py\": \"...\", \"/opt/app/dist.tgz\": {\"local_path\": \"/tmp/litecode_workspace/dist.tgz\"}}"},
                     "backup":   {"type": "boolean", "description": "写入前备份原文件 (加 .bak 后缀), 默认 true", "default": True},
                 },
                 "required": ["files"],

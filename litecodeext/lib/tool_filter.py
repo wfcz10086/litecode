@@ -10,6 +10,7 @@ GROUPS = {
     "web": frozenset({
         "web_fetch", "web_search", "browser_act", "browser_login", "browser_read", "browser_search",
         "browser_snapshot", "github_search_issues", "stackoverflow_search", "search_code_error",
+        "github_search", "github_repo", "package_search",
     }),
 }
 

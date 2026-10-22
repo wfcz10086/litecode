@@ -49,6 +49,12 @@ function Undo-LiteCodeSsh($Owner, [string]$Tag, [string]$Backup) {
         if ((Get-WindowsCapability -Online -Name $Owner.capability).State -eq 'Installed') {
             Remove-WindowsCapability -Online -Name $Owner.capability | Out-Null
         }
+    } elseif ($Owner.portable) {
+        # 自带官方安装包装的 sshd: 用它自己的卸载脚本注销服务, 再删安装目录
+        Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+        $uninstaller = Join-Path $Owner.portable 'uninstall-sshd.ps1'
+        if (Test-Path $uninstaller) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstaller | Out-Null }
+        Remove-Item -LiteralPath $Owner.portable -Recurse -Force -ErrorAction SilentlyContinue
     } elseif ($Owner.service) {
         Set-Service -Name sshd -StartupType $Owner.service.start_type
         if ($Owner.service.status -ne 'Running') { Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue }

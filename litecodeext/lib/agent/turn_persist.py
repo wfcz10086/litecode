@@ -1,5 +1,7 @@
 """agent_stream 回合收尾持久化段 (拆分大文件, 从 finally 原样提取)。"""
 from lib import config as _cfg   # 模型热切换后读当前值 (reload_model 更新其模块变量), 不在导入时拷快照
+import contextvars
+import functools
 import threading
 from lib.config import BASE
 from lib.config import HAS_MEMORY
@@ -98,8 +100,9 @@ def _turn_persist(_ctx, _test_state, _pm_state, _batch_state):
 
             _snapshot = list(all_msgs)  # 快照避免竞争
             for _worker in (_bg_compress_worker, _bg_fast_worker, _bg_smart_worker):
+                # [usage-ledger] 带上本轮作用域 (会话 / 轮次), 压缩、记忆提取调模型的账能对到这一轮
                 threading.Thread(
-                    target=_worker, args=(_snapshot,), daemon=True,
+                    target=functools.partial(contextvars.copy_context().run, _worker), args=(_snapshot,), daemon=True,
                 ).start()
         log.info(f"  \033[32m[persist:{_ctx.sid_tag}] saved {len(_ctx.new_msgs)} msgs + memory (bg)\033[0m")
 

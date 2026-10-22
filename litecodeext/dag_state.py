@@ -143,6 +143,7 @@ async def _start_dag_internal(name: str) -> dict:
         tool_name=s.get("tool_name", "") or "",
         tool_args=dict(s.get("tool_args") or {}),
         dag_name=s.get("dag_name", "") or "",  # [#2] 子 DAG 名透传
+        expect=list(s.get("expect", []) or []),  # [P0-3] 步骤断言透传
     ) for s in steps]
 
     job_id = uuid.uuid4().hex[:12]
@@ -161,6 +162,10 @@ async def _start_dag_internal(name: str) -> dict:
         _dag_job_save(job_id)
 
     async def _bg_run():
+        # [usage-ledger] 本任务 (独立 task, 自带 context) 内各步调模型的账记在 dag, 一次 job 算一轮
+        from lib import usage_ledger as _ul
+        _ul.set_scope(source="dag", session_id=f"dag:{name}", turn_id=f"dag-{job_id}")
+
         async def _pause_check(node_id):
             job = _DAG_JOBS.get(job_id)
             if not job or node_id not in job["breakpoints"]:

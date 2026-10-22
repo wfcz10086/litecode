@@ -83,3 +83,7 @@ _archive/
 wechat_creds/
 wecom_state/
 litecode_state/skill_flags.json
+
+# [2026-10-22] 内置知识库: 向量模型 (scripts/kb_export_onnx.sh 生成, ~452MB) 与上传的原始文件都在 workspace/kb/ (上面 /workspace/ 已忽略, 这里写明)
+workspace/kb/
+demo_readme/

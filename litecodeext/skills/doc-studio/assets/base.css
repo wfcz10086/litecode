@@ -1,0 +1,85 @@
+/* doc-studio 基础样式: design tokens + 幻灯片 (1280×720) + A4 文档页 + 打印规则。
+ * 用法: <link rel="stylesheet" href="base.css"> (images.py / render.py 会把它复制到 HTML 同目录),
+ * 换主题只改 :root 里的 --ds-* 变量 (theme-factory 的配色/字体照抄进来)。
+ * 导出 PPTX 时以计算样式为准: 装饰用真实元素, 别用 ::before/::after 画色块 (伪元素不进 PPTX)。 */
+:root {
+  --ds-bg: #FBFBF9;          /* 页面底色 (暖白) */
+  --ds-surface: #FFFFFF;     /* 卡片 */
+  --ds-surface-2: #F5F4F0;   /* 次级面板 */
+  --ds-border: #ECEBE5;
+  --ds-text: #1A1A1A;
+  --ds-text-2: #5F5F5F;
+  --ds-text-3: #8A8A8A;
+  --ds-primary: #1F2A44;     /* 标题 / 深色块 */
+  --ds-accent: #4F7EF7;      /* 强调色 */
+  --ds-accent-2: #16A34A;
+  --ds-radius: 14px;
+  --ds-radius-lg: 22px;
+  --ds-font: "Inter", "Noto Sans SC", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --ds-font-head: var(--ds-font);
+  --ds-font-serif: "Noto Serif SC", "Noto Serif CJK SC", "Songti SC", "SimSun", serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; }
+body { background: #E9E8E3; font-family: var(--ds-font); color: var(--ds-text);
+       -webkit-font-smoothing: antialiased; }
+img { display: block; max-width: 100%; }
+
+/* ── 幻灯片: 每页一个 section.slide, 固定 1280×720 ─────────────── */
+:where(section.slide) {   /* :where 权重为 0: 页面里 .cover / .end 等类能直接覆盖底色和内边距 */
+  position: relative; width: 1280px; height: 720px; overflow: hidden;
+  margin: 0 auto 24px; background: var(--ds-bg); padding: 64px 80px;
+  display: flex; flex-direction: column;
+}
+.slide .eyebrow { font-size: 16px; font-weight: 600; letter-spacing: 2px; color: var(--ds-accent);
+                  text-transform: uppercase; margin: 0 0 12px; }
+.slide h1 { font-family: var(--ds-font-head); font-size: 64px; line-height: 1.12; font-weight: 800;
+            letter-spacing: -1px; margin: 0; color: var(--ds-primary); }
+.slide h2 { font-family: var(--ds-font-head); font-size: 40px; line-height: 1.2; font-weight: 700;
+            margin: 0 0 24px; color: var(--ds-primary); }
+.slide h3 { font-size: 24px; line-height: 1.3; font-weight: 700; margin: 0 0 8px; color: var(--ds-text); }
+.slide p, .slide li { font-size: 20px; line-height: 1.6; color: var(--ds-text-2); margin: 0 0 10px; }
+.slide .lead { font-size: 24px; line-height: 1.55; color: var(--ds-text-2); }
+.slide .footer { position: absolute; left: 80px; right: 80px; bottom: 28px; display: flex;
+                 justify-content: space-between; font-size: 13px; color: var(--ds-text-3); }
+
+/* ── A4 文档页: 每页一个 section.page (210×297mm) ─────────────── */
+:where(section.page) {
+  position: relative; width: 210mm; height: 297mm; overflow: hidden; margin: 0 auto 24px;
+  background: #fff; padding: 22mm 20mm 20mm; font-size: 11pt; line-height: 1.7;
+}
+.page h1 { font-family: var(--ds-font-head); font-size: 28pt; line-height: 1.2; margin: 0 0 6mm;
+           color: var(--ds-primary); font-weight: 800; }
+.page h2 { font-size: 16pt; margin: 7mm 0 3mm; color: var(--ds-primary); font-weight: 700; }
+.page h3 { font-size: 12.5pt; margin: 5mm 0 2mm; color: var(--ds-text); font-weight: 700; }
+.page p, .page li { margin: 0 0 3mm; color: var(--ds-text); }
+.page figure { margin: 4mm 0; }
+.page figcaption { font-size: 9pt; color: var(--ds-text-3); margin-top: 1.5mm; }
+.page table { width: 100%; border-collapse: collapse; font-size: 10pt; margin: 3mm 0; }
+.page th { background: var(--ds-primary); color: #fff; text-align: left; padding: 2mm 3mm; }
+.page td { border-bottom: 1px solid var(--ds-border); padding: 2mm 3mm; }
+.page .page-footer { position: absolute; left: 20mm; right: 20mm; bottom: 9mm; font-size: 8.5pt;
+                     color: var(--ds-text-3); display: flex; justify-content: space-between; }
+
+/* ── 常用组件 ─────────────────────────────── */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 32px; }
+.grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; }
+.card { background: var(--ds-surface); border: 1px solid var(--ds-border); border-radius: var(--ds-radius);
+        padding: 24px; }
+.kpi .num { font-size: 48px; font-weight: 800; color: var(--ds-accent); line-height: 1.1; }
+.kpi .label { font-size: 16px; color: var(--ds-text-2); }
+.photo { position: relative; overflow: hidden; border-radius: var(--ds-radius); background: var(--ds-surface-2); }
+.photo > img { width: 100%; height: 100%; object-fit: cover; }
+.credit { font-size: 11px; color: var(--ds-text-3); }
+.credits { font-size: 12px; line-height: 1.6; color: var(--ds-text-3); }
+.credits ol { margin: 0; padding-left: 18px; }
+.credits li { font-size: 12px; line-height: 1.5; margin: 0 0 2px; color: var(--ds-text-3); }
+.ds-icon { width: 32px; height: 32px; color: var(--ds-accent); flex: none; }
+
+/* ── 打印 / PDF: 一页一张, 去掉屏幕上的间距与灰底 ───────────── */
+@media print {
+  body { background: none; }
+  section.slide, section.page { margin: 0; page-break-after: always; break-after: page; box-shadow: none; }
+  section.slide:last-of-type, section.page:last-of-type { page-break-after: auto; break-after: auto; }
+}

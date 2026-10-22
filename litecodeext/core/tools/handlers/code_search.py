@@ -61,9 +61,18 @@ async def h_search_code(sid: str, args: dict) -> tuple[str, Any]:
                  '.exe','.bin','.so','.dylib','.whl'}
     SKIP_DIRS = {'__pycache__','node_modules','.git','.venv','venv',
                  'dist','build','.mypy_cache','.pytest_cache'}
-    results = []
-    try:
-        for f in root.rglob("*"):
+    # [large-file 2026-10-21] 原来每个文件 read_text().splitlines() 整份进内存且在事件循环里同步跑,
+    # 目录里有 1GB 日志就整份吃进来并卡住全站。改为: 线程池里逐行流式扫, 总耗时 20s 封顶并说明。
+    import time as _time
+    budget = 20.0
+
+    def _scan():
+        results, timed_out, t0 = [], False, _time.monotonic()
+        files = [root] if root.is_file() else root.rglob("*")
+        for f in files:
+            if _time.monotonic() - t0 > budget:
+                timed_out = True
+                break
             if not f.is_file():
                 continue
             if any(part in SKIP_DIRS for part in f.parts):
@@ -73,22 +82,33 @@ async def h_search_code(sid: str, args: dict) -> tuple[str, Any]:
             if ext and f.suffix != ext:
                 continue
             try:
-                for i, line in enumerate(f.read_text(errors='ignore').splitlines(), 1):
-                    if pat.search(line):
-                        try:    rel = str(f.relative_to(root))
-                        except: rel = str(f)
-                        results.append(f"{rel}:{i}: {line.strip()[:120]}")
-                        if len(results) >= max_r:
+                with open(f, "r", errors="ignore") as fh:
+                    for i, line in enumerate(fh, 1):
+                        if pat.search(line):
+                            try:    rel = str(f.relative_to(root)) if f != root else f.name
+                            except: rel = str(f)
+                            results.append(f"{rel}:{i}: {line.strip()[:120]}")
+                            if len(results) >= max_r:
+                                break
+                        if not (i & 0xFFFF) and _time.monotonic() - t0 > budget:
+                            timed_out = True
                             break
             except Exception:
                 continue
-            if len(results) >= max_r:
+            if len(results) >= max_r or timed_out:
                 break
+        return results, timed_out
+
+    import asyncio as _asyncio
+    try:
+        results, timed_out = await _asyncio.to_thread(_scan)
     except Exception as e:
         return f"ERROR: {e}", None
+    note = (f"\n[扫描超过 {int(budget)}s 提前停止, 结果可能不全; 大文件/大目录请缩小 path 或用 "
+            f"execute_shell 跑 rg/grep -n]") if timed_out else ""
     if not results:
-        return f"No matches for '{query}' in {root}", None
-    return "\n".join(results) + f"\n\n({len(results)} matches)", None
+        return f"No matches for '{query}' in {root}" + note, None
+    return "\n".join(results) + f"\n\n({len(results)} matches)" + note, None
 
 
 @register("find_symbol")

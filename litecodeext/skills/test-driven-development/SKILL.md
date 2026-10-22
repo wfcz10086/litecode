@@ -1,6 +1,7 @@
 ---
 name: test-driven-development
 description: 在实现任何功能或修复 bug 时使用，在编写实现代码之前
+aliases: ["tdd", "单元测试", "测试驱动", "red green"]
 ---
 
 # 测试驱动开发（TDD）
@@ -43,6 +44,17 @@ description: 在实现任何功能或修复 bug 时使用，在编写实现代�
 - 删除就是删除
 
 从测试出发，重新实现。句号。
+
+## LiteCode 落地速查
+
+- **跑测试**用 `execute_shell`, 每次都看退出码和统计行:
+  - Python: `python3 -m pytest -q tests/test_x.py::test_case -x` (红灯阶段只跑这一个); `-k 关键词` 选一组; `--lf` 重跑上次失败的。没装就 `pip install pytest`。工程化细节见 python-dev。
+  - Node: `npx vitest run path` / `npm test -- path`; Go: `go test ./pkg/... -run TestName`。
+- **红灯必须真的跑出失败**, 并且失败原因是"功能缺失", 不是 import 错误或拼写错误。
+- **修 bug**: 先写复现该 bug 的测试 → 看它失败 → 修 → 看它通过。
+- **前端交互**: 单元测试覆盖不到事件绑定和页面状态, 行为测试写成 Playwright 脚本 (见 webapp-testing), 同样先红后绿。
+- **交付前跑全量测试** (不只是新写的那几个), 汇报引用最后一行原文; 前台命令最多 900 秒, 全量很慢时用 `background=true` 跑再 `tail_log` 看结果。
+- 外部依赖 (网络、时间、随机、模型调用) 用 monkeypatch / fake 固定, 测试不能依赖真实外网才能过。
 
 ## 红-绿-重构
 

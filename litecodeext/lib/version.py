@@ -3,9 +3,9 @@
 /health、/api/health、网页顶栏、启动日志、命令行横幅都从这里读。
 发版只改这里, 并在 README 的「版本更新」里补一段。
 """
-VERSION = "v1.10.16.91"
-CODENAME = "把门"
-CODENAME_EN = "Gatekeeper"
+VERSION = "v2.0.6"
+CODENAME = "上桌"
+CODENAME_EN = "Desktop"
 
 
 def label(lang: str = "zh") -> str:

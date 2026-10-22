@@ -12,6 +12,7 @@ linux 服务器 运维 进程 端口 磁盘 内存 cpu gpu nvidia systemd 防火
 crontab ssh sshd 日志 log top htop df free ps kill 监控 monitor 性能 performance
 docker 容器 网络 network 用户 权限 chmod chown mount umount swap load uptime
 lsof netstat nmap 带宽 bandwidth io 负载 temperature 温度 fan 风扇 ipmi
+aliases: ["服务器", "运维", "进程", "磁盘", "内存", "cpu", "gpu监控", "nvidia-smi", "systemd", "systemctl", "ipmi", "温度", "负载", "uptime"]
 ---
 
 # Linux Admin Skill

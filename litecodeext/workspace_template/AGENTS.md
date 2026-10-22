@@ -1,16 +1,8 @@
 # AGENTS.md — Session 工作规范
 
-## Session 启动
-
-1. 读取 `SOUL.md` — 行为哲学
-2. 读取 `USER.md` — 用户信息
-3. 读取 `TOOLS.md` — 本 session 环境配置
-4. 读取 `MEMORY.md` — 历史记忆（如果存在）
-
 ## 记忆管理
 
-- **MEMORY.md**：压缩后的长期记忆，系统自动管理
-- **memory/YYYY-MM-DD.md**：每日原始日志
+- **MEMORY.md**：压缩后的长期记忆，系统自动管理；**memory/YYYY-MM-DD.md**：每日原始日志
 - 重要信息必须写入文件，不要依赖"记住"
 
 ## 安全红线

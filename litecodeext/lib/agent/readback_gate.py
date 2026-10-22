@@ -31,7 +31,7 @@ def is_file_change(action, args) -> bool:
         return True
     if action == "hotkey":
         return str(args.get("keys", "")).lower() in FILE_HOTKEYS
-    if action == "click_text":
+    if action in ("click_text", "click_element"):   # click_element 按控件名点 "保存" 等同 click_text
         return bool(_FILE_CLICK_TEXT.search(str(args.get("text", ""))))
     return False
 
@@ -46,12 +46,49 @@ INJECT_TEXT = (
 )
 
 
+# [P0-2 2026-10-21] 待验状态绑定 (电脑, 目标文件, 那次修改), 不再只按电脑别名记:
+# 原先同机任何成功的 inspect_file/list_dir/run_powershell (哪怕读的是另一个文件、Get-Date) 都会清掉待验。
+#   - 目标文件: 桌面动作返回里带动作后的 windows 列表, 取前台窗口标题里的文件名 (如 "销售表.xlsx - WPS Office");
+#     取不到文件名时目标记为 None (未知), 只能放宽到"同机读到了某个文件内容"。
+#   - 改动类别: content (保存/粘贴/剪切) 只能被读到文件内容的动作清除; fs (删除/重命名/拖拽) 允许 list_dir 确认。
+#   - 那次修改: 按调用顺序处理, 回读只清除它之前登记的改动; 之后同一文件再改会重新登记, 旧回读不算。
+_FS_HOTKEYS = frozenset({"delete", "f2"})
+_FS_CLICK_TEXT = re.compile(r"删除|重命名|(?i:delete|rename)")
+_FILE_NAME = re.compile(r"([^\\/:*?\"<>|\r\n]+?\.(?:xlsx|xlsm|xls|csv|et|docx|doc|wps|pptx|ppt|dps|txt|md|json|"
+                        r"xml|ini|log|pdf|html?|py|js|ps1|bat|cfg|yaml|yml))(?=$|[\s\]\)\-—|*])", re.I)
+# run_powershell 只有真正读文件的脚本才算回读 (Get-Date / Get-Process 之类不算)
+_PS_READ = re.compile(r"Get-Content|\bgc\b|\bcat\b|\btype\b|Import-Csv|Import-Excel|Get-FileHash|Select-String|"
+                      r"\[(?:System\.)?IO\.File\]|ReadAll", re.I)
+_PS_LIST = re.compile(r"Get-Item|Get-ChildItem|\bdir\b|\bls\b|\bgci\b|Test-Path", re.I)   # 只够确认删除/重命名
+
+
+def change_kind(action, args) -> str:
+    if action in FILE_DESKTOP_ACTIONS:
+        return "fs"
+    if action == "hotkey":
+        return "fs" if str(args.get("keys", "")).lower() in _FS_HOTKEYS else "content"
+    if action in ("click_text", "click_element") and _FS_CLICK_TEXT.search(str(args.get("text", ""))):
+        return "fs"
+    return "content"
+
+
+def norm_name(path) -> str:
+    """规范化为小写文件名 (去引号/空白, 统一分隔符); 远端环境变量展开不了, 比较以文件名为准。"""
+    text = str(path or "").strip().strip("'\"").replace("/", "\\").rstrip("\\")
+    return text.rsplit("\\", 1)[-1].strip().lower()
+
+
 @dataclass
 class ReadbackState:
     used_desktop: bool = False
-    pending_change: bool = False   # 有改动类动作且其后尚无成功的回读
-    pending_aliases: set = field(default_factory=set)  # 各电脑分别确认, 不能用另一台的文件充数
+    pending_change: bool = False   # 有改动类动作且其后尚无匹配的成功回读
+    pending: dict = field(default_factory=dict)   # (alias, 目标文件名或 None) → 改动类别 content/fs
+    focus_file: dict = field(default_factory=dict)  # alias → 最近一次桌面返回里前台窗口的文件名
     injected: bool = False
+
+    @property
+    def pending_aliases(self) -> set:   # 兼容旧字段: 各电脑分别确认
+        return {alias for alias, _ in self.pending}
 
 
 def enabled() -> bool:
@@ -106,6 +143,56 @@ def _alias(ctx, args, content) -> str:
     return alias.strip().lower()
 
 
+def _result_obj(content):
+    text = _unwrap(content) if isinstance(content, str) else ''
+    body = text.lstrip()
+    if body.startswith('ERROR: '):
+        body = body[7:].split(' ', 1)[-1].lstrip()
+    if body.startswith('{'):
+        try:
+            result, _ = json.JSONDecoder().raw_decode(body)
+            return result if isinstance(result, dict) else {}
+        except ValueError:
+            pass
+    return {}
+
+
+def _foreground_file(content):
+    """桌面动作返回 → 前台窗口标题里的文件名 (小写); 没有 windows 信息返回 False, 有但无文件名返回 None。"""
+    windows = _result_obj(content).get('windows')
+    if not isinstance(windows, list):
+        return False
+    for w in windows:
+        if isinstance(w, dict) and w.get('foreground'):
+            m = _FILE_NAME.search(str(w.get('title') or ''))
+            return norm_name(m.group(1)) if m else None
+    return None
+
+
+def _clears(kind, target, action, args, content) -> bool:
+    """一次成功的 windows_system 读取能否确认 (target, kind) 这项待验改动。"""
+    if action in ("inspect_file", "download"):
+        if target is None:
+            return True
+        result = _result_obj(content)
+        names = {norm_name(args.get("path")), norm_name(result.get("remote_path")), norm_name(result.get("name"))}
+        return target in names
+    if action == "run_powershell":
+        script = str(args.get("script") or "")
+        reads = _PS_READ.search(script) or (kind == "fs" and _PS_LIST.search(script))
+        return bool(reads) and (target is None or target in script.lower().replace("/", "\\"))
+    if action == "list_dir":   # 列目录看不到内容, 只能确认删除/重命名/移动
+        return kind == "fs" and (target is None or target in _unwrap(str(content or "")).lower())
+    return False
+
+
+def pending_targets(ctx) -> list:
+    st = getattr(ctx, "readback", None)
+    if st is None:
+        return []
+    return sorted(f"{alias or '?'}:{target or '(未识别文件名)'}" for alias, target in st.pending)
+
+
 def observe(ctx, tool_call_list, tool_results) -> None:
     """一批工具执行完后按调用顺序更新状态 (同批内"先改后读"也算已回读)。"""
     if not enabled():
@@ -121,17 +208,27 @@ def observe(ctx, tool_call_list, tool_results) -> None:
             args = json.loads(fn.get("arguments") or "{}")
         except (TypeError, ValueError):
             args = {}
-        action = (args if isinstance(args, dict) else {}).get("action")
+        if not isinstance(args, dict):
+            args = {}
+        action = args.get("action")
         content = results.get(tc.get("id"))
         alias = _alias(ctx, args, content)
         if name == "windows_desktop":
             st.used_desktop = True
-            if is_file_change(action, args if isinstance(args, dict) else {}) and _ok(content):
-                st.pending_aliases.add(alias)
-                st.pending_change = True
+            fg = _foreground_file(content)
+            if fg is not False:
+                st.focus_file[alias] = fg
+            if is_file_change(action, args) and _ok(content):
+                target = st.focus_file.get(alias)
+                kind = change_kind(action, args)
+                key = (alias, target)
+                # 同一文件既有 content 又有 fs 改动时按更严的 content 记
+                st.pending[key] = "content" if "content" in (kind, st.pending.get(key)) else "fs"
         elif action in READBACK_ACTIONS and _ok(content):
-            st.pending_aliases.discard(alias)
-            st.pending_change = bool(st.pending_aliases)
+            for key in [k for k, kind in st.pending.items()
+                        if k[0] == alias and _clears(kind, k[1], action, args, content)]:
+                del st.pending[key]
+        st.pending_change = bool(st.pending)
 
 
 def check(ctx):
@@ -142,4 +239,7 @@ def check(ctx):
     if st is None or not st.used_desktop or not st.pending_change or st.injected:
         return None
     st.injected = True
+    named = [t for t in pending_targets(ctx) if not t.endswith("(未识别文件名)")]
+    if named:
+        return INJECT_TEXT + " 待回读的文件 (电脑:文件名): " + ", ".join(named) + "。"
     return INJECT_TEXT

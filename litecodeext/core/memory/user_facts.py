@@ -90,7 +90,7 @@ def auto_update_user_md(
 
     for category, val in updates:
         if category == "name":
-            content = _re.sub(r'(\*\*Name:\*\*\s*)(\S+)', rf'\g<1>{val}', content)
+            content = _re.sub(r'(\*\*Name:\*\*\s*)(\S+)', lambda m, v=val: m.group(1) + v, content)  # 函数替换: val 里的反斜杠不当转义
         elif category == "company":
             if val not in content:
                 content = content.rstrip() + f"\n  - 公司: {val}\n"
@@ -101,7 +101,7 @@ def auto_update_user_md(
                 else:
                     content = content.rstrip() + f"\n\n## 偏好\n- {val}\n"
         elif category == "timezone":
-            content = _re.sub(r'(\*\*Timezone:\*\*\s*)(\S+)', rf'\g<1>{val}', content)
+            content = _re.sub(r'(\*\*Timezone:\*\*\s*)(\S+)', lambda m, v=val: m.group(1) + v, content)
 
     write_path.write_text(content)
     log.info(f"  [auto-learn:{session_id[:8]}] USER.md updated: {[u[1] for u in updates]}")

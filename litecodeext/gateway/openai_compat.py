@@ -29,7 +29,9 @@ async def chat_completions(request: Request):
     # [P46 测试模式] ?__test_empty=1 → 强制走空响应路径验 sse_error 触发
     if request.query_params.get("__test_empty") == "1":
         async def _empty_stream():
-            yield sse_error("LLM 返回空 (可能上游超时/限流), 请重试", retry_hint=True)
+            from lib.friendly_errors import empty_reply as _fe_empty
+            yield sse_error("LLM 返回空 (可能上游超时/限流), 请重试", retry_hint=True,
+                            friendly=_fe_empty("LLM 返回空 (测试模式 __test_empty)"))
             yield sse_usage(0, 0, 1, 0.1, body.get("model", srv.MODEL_ID))
             yield sse_stop(body.get("model", srv.MODEL_ID))
             yield sse_done()
@@ -94,12 +96,19 @@ async def chat_completions(request: Request):
         model = _sm_entry["id"]
     elif _sm_note:
         model = srv.MODEL_ID
+    try:   # [session-thinking 2026-10-21] 会话级思考强度, 只作用本轮
+        _think = _sm.thinking_overlay(session_id) if session_id else None
+    except Exception:
+        _think = None
 
     gen = srv.agent_stream(user_message, session_id, model,
                            user_content=user_content_raw, strategist=strategist,
-                           disabled_tools=_tf.parse(body.get("disabled_tools")))
-    if _sm_entry or _sm_note:
-        gen = with_turn_model(gen, _sm_entry, _sm_note, model)
+                           disabled_tools=_tf.parse(body.get("disabled_tools")),
+                           skills=tuple(str(x) for x in (body.get("skills") or [])
+                                        if isinstance(x, str))[:5] if isinstance(body.get("skills"), list) else (),
+                           usage_source=str(body.get("litecode_source") or "")[:16])
+    if _sm_entry or _sm_note or _think:
+        gen = with_turn_model(gen, _sm_entry, _sm_note, model, thinking=_think)
 
     if stream:
         return StreamingResponse(
@@ -128,18 +137,18 @@ async def chat_completions(request: Request):
         })
 
 
-async def with_turn_model(gen, entry: dict, note: str, model: str):
+async def with_turn_model(gen, entry: dict, note: str, model: str, thinking: dict | None = None):
     """包住 agent_stream: 迭代期间把会话模型挂到当前 context (生成器体在消费方 task 里跑,
     所以 agent_stream 内读到的 _LIVE 都是本会话模型), 结束复位。
     第一帧 (msg_id) 之后补一帧 session_model 状态, 回落默认时再加一行可见提示。"""
     from lib.config import reset_turn_model, set_turn_model
     from lib.sse import sse_content, sse_status
-    tok = set_turn_model(entry or None)
+    tok = set_turn_model(entry or None, thinking)
     try:
         first = True
         async for chunk in gen:
             yield chunk
-            if first:
+            if first and (entry or note):
                 first = False
                 yield sse_status("session_model", {"id": model, "per_session": bool(entry),
                                                    "fallback": bool(note), "note": note}, model)

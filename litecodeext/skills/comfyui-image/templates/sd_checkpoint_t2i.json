@@ -1,0 +1,129 @@
+{
+ "_litecode_template": {
+  "name": "sd_checkpoint_t2i",
+  "kind": "image",
+  "desc": "通用 Checkpoint 文生图 (SD1.5/SDXL 等单文件模型, 自动换成服务器上有的 checkpoint)",
+  "requires_nodes": [
+   "CheckpointLoaderSimple"
+  ],
+  "params": {
+   "prompt": [
+    "pos.text"
+   ],
+   "negative": [
+    "neg.text"
+   ],
+   "seed": [
+    "ks.seed"
+   ],
+   "steps": [
+    "ks.steps"
+   ],
+   "cfg": [
+    "ks.cfg"
+   ],
+   "width": [
+    "latent.width"
+   ],
+   "height": [
+    "latent.height"
+   ],
+   "sampler": [
+    "ks.sampler_name"
+   ],
+   "scheduler": [
+    "ks.scheduler"
+   ]
+  },
+  "notes": "SD1.5 用 512×512, SDXL 用 1024×1024; 模型不对时用 --set ckpt.ckpt_name=xxx 指定",
+  "model_any": [
+   "ckpt.ckpt_name"
+  ]
+ },
+ "prompt": {
+  "ckpt": {
+   "class_type": "CheckpointLoaderSimple",
+   "inputs": {
+    "ckpt_name": "sd_xl_base_1.0.safetensors"
+   }
+  },
+  "pos": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "clip": [
+     "ckpt",
+     1
+    ],
+    "text": "a cute orange cat, photo"
+   }
+  },
+  "neg": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "clip": [
+     "ckpt",
+     1
+    ],
+    "text": "blurry, low quality"
+   }
+  },
+  "latent": {
+   "class_type": "EmptyLatentImage",
+   "inputs": {
+    "width": 1024,
+    "height": 1024,
+    "batch_size": 1
+   }
+  },
+  "ks": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "ckpt",
+     0
+    ],
+    "positive": [
+     "pos",
+     0
+    ],
+    "negative": [
+     "neg",
+     0
+    ],
+    "latent_image": [
+     "latent",
+     0
+    ],
+    "seed": 42,
+    "steps": 25,
+    "cfg": 6.0,
+    "sampler_name": "dpmpp_2m",
+    "scheduler": "karras",
+    "denoise": 1.0
+   }
+  },
+  "dec": {
+   "class_type": "VAEDecode",
+   "inputs": {
+    "samples": [
+     "ks",
+     0
+    ],
+    "vae": [
+     "ckpt",
+     2
+    ]
+   }
+  },
+  "save": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "dec",
+     0
+    ],
+    "filename_prefix": "litecode/sd_t2i"
+   }
+  }
+ }
+}

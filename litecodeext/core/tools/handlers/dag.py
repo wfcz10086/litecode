@@ -199,6 +199,12 @@ async def h_run_dag(sid: str, args: dict) -> tuple[str, Any]:
             step_id=s.get("id", ""),
             timeout=int(s.get("timeout", 300)),
             max_retries=int(s.get("max_retries", 2)),
+            # 与 dag_state 一致透传, 原来这里漏了 → 已保存 DAG 经 dag 工具运行时条件/工具步/子 DAG/断言全部丢失
+            when=list(s.get("when", []) or []),
+            tool_name=s.get("tool_name", "") or "",
+            tool_args=dict(s.get("tool_args") or {}),
+            dag_name=s.get("dag_name", "") or "",
+            expect=list(s.get("expect", []) or []),
         ) for s in steps]
 
         async def _bg_run():

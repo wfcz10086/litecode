@@ -88,12 +88,22 @@
     if (searching) return;
 
     const frag = document.createDocumentFragment();
-    const top = el('div', 'pg-top');
-    const add = el('button', 'pg-new', '＋ 新项目');
-    add.type = 'button';
-    add.addEventListener('click', () => openCard(null));
-    top.appendChild(add);
-    frag.appendChild(top);
+    /* [ui-v2 2026-10-21] 项目区整体可折叠 (默认展开), 空项目不再显示「还没有会话」占一行;
+       项目外的会话按 今天 / 昨天 / 7 天内 / 30 天内 / 更早 分组 (置顶在最前) */
+    const st0 = store.get();
+    const zone = el('div', 'pg-zone' + (st0.__zone ? ' pg-zone-closed' : ''));
+    const zh = el('div', 'pg-zone-hd');
+    zh.append(el('span', 'pg-arr', '▾'), el('span', 'pg-name', '项目'), el('span', 'pg-n', String(projects.length)));
+    zh.appendChild(iconBtn('＋', '新建项目', () => openCard(null)));
+    zh.addEventListener('click', e => {
+      if (e.target.closest('button')) return;
+      const st = store.get();
+      st.__zone = zone.classList.toggle('pg-zone-closed') ? 1 : 0;
+      store.set(st);
+    });
+    const zb = el('div', 'pg-zone-bd');
+    zone.append(zh, zb);
+    frag.appendChild(zone);
 
     const curPid = map[curSid()];
     projects.forEach(p => {
@@ -103,21 +113,42 @@
         iconBtn('⋯', '项目设置: 名称 / 指令 / 工作目录', () => openCard(p)),
       ]);
       sec.dataset.pid = p.project_id;
-      if (p.project_id === curPid) sec.classList.remove('pg-closed');
+      if (!mine.length) sec.classList.add('pg-noitems');
+      if (p.project_id === curPid) { sec.classList.remove('pg-closed'); zone.classList.remove('pg-zone-closed'); }
       mine.forEach(si => body.appendChild(si));
-      if (!mine.length) body.appendChild(el('div', 'pg-empty', '还没有会话, 点 ＋ 新建'));
-      frag.appendChild(sec);
+      zb.appendChild(sec);
     });
     const rest = items.filter(si => !byId(map[si.dataset.sid]));
-    if (projects.length) {
-      const { sec, body } = section('会话', 'rest', rest.length, []);
-      rest.forEach(si => body.appendChild(si));
-      frag.appendChild(sec);
-    } else {
-      rest.forEach(si => frag.appendChild(si));
-    }
+    appendDated(frag, rest);
     listEl.textContent = '';
     listEl.appendChild(frag);
+  }
+
+  function dayBucket(ts) {
+    if (!ts) return '更早';
+    const now = new Date();
+    const d0 = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+    if (ts >= d0) return '今天';
+    if (ts >= d0 - 86400) return '昨天';
+    if (ts >= d0 - 6 * 86400) return '7 天内';
+    if (ts >= d0 - 29 * 86400) return '30 天内';
+    return '更早';
+  }
+
+  function appendDated(frag, list) {
+    const sortKey = document.getElementById('sess-sort')?.value || 'recent';
+    if (sortKey !== 'recent') { list.forEach(si => frag.appendChild(si)); return; }
+    let pinned = new Set();
+    try { pinned = new Set(JSON.parse(localStorage.getItem('lc_pinned_sessions') || '[]')); } catch (_) {}
+    const all = (typeof sess !== 'undefined' && Array.isArray(sess)) ? sess : [];
+    const byIdS = new Map(all.map(s => [s.id, s]));
+    let last = null;
+    list.forEach(si => {
+      const s = byIdS.get(si.dataset.sid) || {};
+      const b = pinned.has(si.dataset.sid) ? '已置顶' : dayBucket(s.last_used || s.created);
+      if (b !== last) { frag.appendChild(el('div', 'sl-date', b)); last = b; }
+      frag.appendChild(si);
+    });
   }
 
   function updateChip() {

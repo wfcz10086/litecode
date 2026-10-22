@@ -55,3 +55,66 @@ async def api_edit_l1(sid: str, request: Request):
     l1.parent.mkdir(parents=True, exist_ok=True)
     l1.write_text(b.get("content", ""))
     return {"ok": True}
+
+
+# ── 记忆面板: 全局用户档案 / 会话条目 / 跨会话索引 (转发到 gateway/memory.py) ──
+from urllib.parse import quote as _q  # noqa: E402
+
+
+def _qs(request: Request, *keys: str) -> str:
+    pairs = [(k, request.query_params.get(k)) for k in keys if request.query_params.get(k)]
+    return ("?" + "&".join(f"{k}={_q(str(v))}" for k, v in pairs)) if pairs else ""
+
+
+async def _fwd(path: str, method: str = "GET", **kw):
+    if S.aproxy is None:
+        return {"ok": False, "error": "server unavailable"}
+    return await S.aproxy(path, method, **kw) or {"ok": False, "error": "server unavailable"}
+
+
+@router.get("/api/profile")
+async def api_profile(request: Request):
+    require_auth(request)
+    return await _fwd("/v1/profile" + _qs(request, "sid"))
+
+
+@router.post("/api/profile/facts")
+async def api_profile_add(request: Request):
+    require_auth(request)
+    return await _fwd("/v1/profile/facts" + _qs(request, "sid"), "POST", json=await request.json())
+
+
+@router.patch("/api/profile/facts/{fid}")
+async def api_profile_edit(fid: str, request: Request):
+    require_auth(request)
+    return await _fwd(f"/v1/profile/facts/{_q(fid)}" + _qs(request, "sid"), "PATCH", json=await request.json())
+
+
+@router.delete("/api/profile/facts/{fid}")
+async def api_profile_delete(fid: str, request: Request):
+    require_auth(request)
+    return await _fwd(f"/v1/profile/facts/{_q(fid)}" + _qs(request, "sid"), "DELETE")
+
+
+@router.put("/api/profile/user_md")
+async def api_profile_user_md(request: Request):
+    require_auth(request)
+    return await _fwd("/v1/profile/user_md" + _qs(request, "sid"), "PUT", json=await request.json())
+
+
+@router.delete("/api/memory/{sid}/entry")
+async def api_mem_entry_delete(sid: str, request: Request):
+    require_auth(request)
+    return await _fwd(f"/v1/memory/{_q(sid)}/entry", "DELETE", json=await request.json())
+
+
+@router.get("/api/memory_index")
+async def api_memory_index(request: Request):
+    require_auth(request)
+    return await _fwd("/v1/memory_index" + _qs(request, "q", "category", "limit"))
+
+
+@router.delete("/api/memory_index/{rid}")
+async def api_memory_index_delete(rid: int, request: Request):
+    require_auth(request)
+    return await _fwd(f"/v1/memory_index/{rid}", "DELETE")

@@ -95,29 +95,45 @@ async def h_self_reflect(sid: str, args: dict) -> tuple[str, Any]:
 
 @register("create_skill")
 async def h_create_skill(sid: str, args: dict) -> tuple[str, Any]:
-    skill_name = args.get("name", "").strip()
-    description = args.get("description", "").strip()
-    content = args.get("content") or "".strip()
-    activate = bool(args.get("activate", False))
+    """[2026-10-22] 草稿写到 WORKSPACE/skills/_drafts/ (lib/skill_registry.py, 升级不丢), 用户在网页
+    技能面板审核启用。config.json skills.auto_create: draft (默认) / off (不让模型建技能) /
+    activate (直接启用, 仍需安全扫描通过, 不通过退回草稿)。activate=true (用户明确要求) 同样要过扫描。"""
+    from lib import skill_registry as reg
+    from lib.config import CFG
+    skill_name = str(args.get("name", "") or "").strip()
+    description = " ".join(str(args.get("description", "") or "").split())
+    content = str(args.get("content") or "").strip()
+    mode = str(((CFG.get("skills") or {}).get("auto_create")) or "draft").strip().lower()
+    activate = bool(args.get("activate", False)) or mode == "activate"
+    if mode == "off":
+        return "ERROR: 用户已关闭模型自动创建技能 (config.json skills.auto_create=off), 请告诉用户可在技能面板手动新建", None
     if not skill_name or not content:
         return "ERROR: name and content are required", None
     if not re.match(r'^[a-z0-9][a-z0-9_-]*$', skill_name):
         return "ERROR: skill_name 只能包含小写字母/数字/连字符/下划线, 且以字母或数字开头", None
-    target_parent = SKILLS_DIR if activate else (SKILLS_DIR / "drafts")
-    target_parent.mkdir(parents=True, exist_ok=True)
-    skill_dir = target_parent / skill_name
-    if skill_dir.exists() and not args.get("overwrite", False):
-        return (f"ERROR: skill '{skill_name}' already exists at {skill_dir}. "
+    if (SKILLS_DIR / skill_name / "SKILL.md").is_file():
+        return f"ERROR: '{skill_name}' 是内置技能名, 换一个名字", None
+    exists = reg.draft_path(skill_name) or (reg.home() / skill_name / "SKILL.md").is_file()
+    if exists and not args.get("overwrite", False):
+        return (f"ERROR: skill '{skill_name}' already exists. "
                 f"Use overwrite=true to replace, or pick a different name."), None
-    skill_dir.mkdir(parents=True, exist_ok=True)
-    skill_md = skill_dir / "SKILL.md"
-    skill_md.write_text(f"---\nname: {skill_name}\ndescription: {description}\n---\n\n{content}")
+    desc_line = description.replace('"', "'")
+    text = f"---\nname: {skill_name}\ndescription: \"{desc_line}\"\n---\n\n{content}\n"
     if activate:
-        _build_skill_index()
-        return (f"Skill '{skill_name}' 已激活 -> {skill_md}\n"
-                f"(skill index 已热更新, 当前共 {len(_SKILL_INDEX)} 个)"), None
-    else:
-        return (f"Skill draft 已创建 -> {skill_md}\n"
-                f"⚠️ 草稿状态，不会被自动加载。用户审核后执行:\n"
-                f"  mv {skill_dir} {SKILLS_DIR}/{skill_name}\n"
-                f"并重启服务或调 /skills/rebuild-index 激活。"), None
+        from lib import skill_install
+        try:
+            out = skill_install.install(skill_install.stage_skill_md(text, skill_name, source="created"))
+        except skill_install.InstallError as e:
+            out = {"installed": [], "skipped": [{"name": skill_name, "reason": str(e)}]}
+        if out.get("installed"):
+            _build_skill_index()
+            return (f"Skill '{skill_name}' 已启用 (安全扫描通过), 当前共 {len(_SKILL_INDEX)} 个技能。"
+                    f"用户可在网页「🧩 技能」面板查看/停用。"), None
+        why = "; ".join(s.get("reason", "") for s in out.get("skipped") or []) or "安全扫描有需要人工确认的项"
+        d = reg.write_draft(skill_name, text)
+        return (f"Skill '{skill_name}' 未能直接启用 ({why}), 已存为草稿 -> {d / 'SKILL.md'}\n"
+                f"请告诉用户: 到网页「🧩 技能」面板的草稿区审核后启用。"), None
+    d = reg.write_draft(skill_name, text)
+    return (f"Skill draft 已创建 -> {d / 'SKILL.md'}\n"
+            f"⚠️ 草稿状态，不会被自动加载。请告诉用户: 到网页「🧩 技能」面板的草稿区审核 (可编辑/试运行), "
+            f"确认后点「启用」。"), None

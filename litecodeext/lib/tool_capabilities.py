@@ -11,9 +11,10 @@ from __future__ import annotations
 
 _READ_ONLY = (
     "read_file", "get_tree", "find_files", "search_code", "find_symbol", "locate_symbol",
-    "web_fetch", "web_search", "github_search_issues", "stackoverflow_search", "search_code_error",
+    "web_fetch", "web_search", "stock_quote", "kb_search", "github_search_issues", "stackoverflow_search", "search_code_error",
     "tail_log", "list_skills", "git_status", "git_diff", "git_log",
     "list_bg", "list_timers", "snapshot_list", "task_list", "ssh_list_hosts",
+    "github_search", "github_repo", "package_search",
 )
 
 # spawn_agent / update_map 由主循环特殊处理, 不走 execute_tool;
@@ -21,6 +22,8 @@ _READ_ONLY = (
 _NOT_FOR_DAG = (
     "spawn_agent", "update_map", "task_done", "agent_control",
     "create_dag", "update_dag", "delete_dag", "patch_dag_node", "run_dag",
+    "enable_tools",   # 只对主循环的会话工具列表有意义
+    "manage_models",  # 改真实模型配置, 只在对话里按用户明确要求调用
 )
 
 CAPABILITIES: dict[str, dict] = {}

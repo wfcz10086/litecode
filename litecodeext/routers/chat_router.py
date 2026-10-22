@@ -17,9 +17,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from lib.chat_runs import REGISTRY
+from lib import tool_trace as _tt
+from lib.friendly_errors import classify as _fe_classify
 
 router = APIRouter()
+# [ui-audit 2026-10-21] 单条消息字数上限: 原来不限, 粘几 MB 日志会整段塞进模型上下文直接爆窗口
+MAX_MESSAGE_CHARS = 120_000
 ORDER = 140  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
 
 SSE_HIGH_VOLUME_WARN = 5000    # [v1.9 P38-b] chunks 超阈值发警告 telemetry
@@ -56,6 +61,9 @@ def _collect(collected: dict, line: str):
             det = d.get("detail", "")
             if det:
                 collected["tools"].append(det)
+    ts = delta.get("turn_skills")   # 本轮用到的技能 → 助手消息 meta.skills (刷新后可见)
+    if isinstance(ts, list):
+        collected.setdefault("meta", {})["skills"] = [str(x) for x in ts][:20]
     dv = delta.get("diff_view")
     if isinstance(dv, dict) and isinstance(dv.get("diff"), str) and dv["diff"]:
         collected["diffs"].append({"filepath": dv.get("filepath", ""), "diff": dv["diff"]})
@@ -64,6 +72,15 @@ def _collect(collected: dict, line: str):
         steps = collected.setdefault('desktop_steps', [])
         if not any(s.get('id') == step['id'] for s in steps):
             steps.append(step)
+    # [trace 2026-10-22] 工具结果 / 进度 / 自动重试说明 / 整轮错误 → trace_steps / turn_error 落库, 刷新后重绘
+    _tt.collect_delta(collected, delta)
+
+
+def _error_frame(collected: dict, raw: str, status: int | None = None) -> str:
+    """顶层 error 帧 (老格式 {"error": "..."} 不变) + 可选 friendly 字段; 同时记进 collected 落库。"""
+    fe = _fe_classify(raw, status=status)
+    collected["turn_error"] = fe
+    return f"data: {json.dumps({'error': raw, 'friendly': fe}, ensure_ascii=False)}\n\n"
 
 
 def _emit_stats(sid: str, t0: float, chunks: int, aborted: str):
@@ -78,6 +95,16 @@ def _emit_stats(sid: str, t0: float, chunks: int, aborted: str):
         pass
 
 
+def _caption_of(line: str) -> str:
+    """SSE task_exec 帧 → 录屏字幕 (当前步骤)。"""
+    try:
+        d = json.loads(line[6:] if line.startswith("data: ") else line)
+        te = (d.get("choices") or [{}])[0].get("delta", {}).get("task_exec") or {}
+        return "▶ " + str(te.get("detail") or "")[:80]
+    except Exception:
+        return ""
+
+
 def _producer(sid: str, url: str, payload: dict):
     """读上游 server 的 SSE, 逐帧产出; 结束时落库 assistant 消息。与浏览器连接无关。"""
     w = _wui()
@@ -85,27 +112,52 @@ def _producer(sid: str, url: str, payload: dict):
     async def gen():
         collected = {"text": "", "reasoning": "", "tools": [], "diffs": [], "usage": None, "desktop_steps": []}
         t0, chunks, aborted = time.time(), 0, ""
+        # [record 2026-10-21] 会话开了录屏: 本轮录 LiteCode 这个对话窗口, 结束出 mp4
+        from lib import screen_record as _rec
+        recording = False
+        try:
+            if _rec.is_on(w.load_session(sid)):
+                await _rec.begin(sid)
+                recording = True
+        except Exception as _re:
+            print(f"[record:{sid}] 启动失败: {_re}")
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(600, connect=10)) as client:
                 async with client.stream("POST", url, headers=w.HEADERS, json=payload) as resp:
                     if resp.status_code != 200:
-                        yield f'data: {{"error":"HTTP {resp.status_code}"}}\n\n'
+                        _body = ""
+                        try:
+                            _body = (await resp.aread()).decode("utf-8", "replace")[:500]
+                        except Exception:
+                            pass
+                        yield _error_frame(collected, f"HTTP {resp.status_code} {_body}".strip(), resp.status_code)
                         return
                     async for line in resp.aiter_lines():
                         if not line:
                             continue
                         if chunks >= SSE_HARD_LIMIT:
                             aborted = f"hard_limit_{SSE_HARD_LIMIT}"
-                            yield f'data: {{"error":"SSE chunk limit {SSE_HARD_LIMIT} reached, aborted"}}\n\n'
+                            yield _error_frame(collected, f"SSE chunk limit {SSE_HARD_LIMIT} reached, aborted")
                             break
                         chunks += 1
                         _collect(collected, line)
+                        if recording and '"task_exec"' in line and '"executing"' in line:
+                            _rec.caption(sid, _caption_of(line))
                         yield line + "\n\n"
         except Exception as e:
             aborted = aborted or "upstream_error"
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+            yield _error_frame(collected, f"{type(e).__name__}: {e}")
         finally:
             _emit_stats(sid, t0, chunks, aborted)
+            if recording:
+                try:
+                    mp4 = await _rec.end(sid)
+                    if mp4:
+                        note = f"\n\n🎬 本轮录屏：{mp4}"
+                        collected["text"] += note
+                        yield f"data: {json.dumps({'choices': [{'delta': {'content': note}}]}, ensure_ascii=False)}\n\n"
+                except Exception as _re:
+                    print(f"[record:{sid}] 收尾失败: {_re}")
             try:
                 await asyncio.get_event_loop().run_in_executor(None, w._save_assistant_msg, sid, dict(collected))
             except Exception:
@@ -131,10 +183,12 @@ async def api_chat(sid: str, request: Request):
     require_auth(request)
     from lib.rate_limit import rate_check   # [P0-#4] chat 节流: 30 次 / 60s / IP
     rate_check(request, "chat", 30, 60)
-    body = await request.json()
-    message = body.get("message", "").strip()
+    body = await json_object(request)
+    message = str(body.get("message") or "").strip()
     if not message:
         raise HTTPException(400, "empty")
+    if len(message) > MAX_MESSAGE_CHARS:
+        raise HTTPException(413, f"消息过长 ({len(message)} 字), 上限 {MAX_MESSAGE_CHARS} 字; 大段内容请存成文件用 📎 上传")
     # 上一轮已发出 [DONE] 只剩收尾 (agent_stream 在 [DONE] 之后才落库历史) 时, 等它结束再开新一轮:
     # 客户端读到 [DONE] 立刻发下一条会撞上这个窗口, 直接 409 不合理; 抢跑又会读不到上一轮历史。
     # 仍在生成中的轮次照旧 409, 同会话串行不变。
@@ -185,6 +239,18 @@ async def start_model_command_turn(sid: str, message: str):
     return run
 
 
+def _forced_skills(raw) -> list:
+    if not isinstance(raw, list):
+        return []
+    from lib.skill_registry import valid_name
+    out = []
+    for x in raw:
+        s = x.strip() if isinstance(x, str) else ""
+        if valid_name(s) and s not in out:
+            out.append(s)
+    return out[:5]
+
+
 def start_chat_turn(sid: str, message: str, body=None):
     """Web 与定时任务共用入口；同步检查并登记轮次，保持同会话串行。"""
     body = body or {}
@@ -196,7 +262,10 @@ def start_chat_turn(sid: str, message: str, body=None):
     w = _wui()
     session = w.load_session(sid)
     ts = time.time()
-    session["messages"].append({"role": "user", "content": message, "ts": ts})
+    umsg = {"role": "user", "content": message, "ts": ts}
+    if _forced_skills(body.get("skills")):
+        umsg["skills"] = _forced_skills(body.get("skills"))
+    session["messages"].append(umsg)
     session["last_used"] = ts
     if len(session["messages"]) == 1:
         session["name"] = message[:40] + ("…" if len(message) > 40 else "")
@@ -207,7 +276,8 @@ def start_chat_turn(sid: str, message: str, body=None):
         print(f"[api_chat:{sid}] 多模态直传 {len(mm_imgs)} 张图")
     # [V7.e] 前端 chip 参数: 模型 / 思考强度 / DeepSearch (老 UI 不传 → 走全局 MODEL 兼容)
     payload = {"model": body.get("model") or w.MODEL, "stream": True,
-               "messages": [{"role": "user", "content": content}], "user": sid}
+               "messages": [{"role": "user", "content": content}], "user": sid,
+               "litecode_source": body.get("_usage_source") or "web"}   # [usage-ledger] 账本来源
     effort = (body.get("thinking_effort") or "").strip().lower()
     if effort == "off":   # 显式关闭推理: 各后端格式不同, 一并注入
         payload["enable_thinking"] = False
@@ -218,12 +288,47 @@ def start_chat_turn(sid: str, message: str, body=None):
         payload["deep_search"] = True
     if body.get("strategist_mode") or body.get("scenario_mode"):
         payload["strategist_mode"] = True
+    forced = _forced_skills(body.get("skills"))
+    if forced:   # 用户用 `/` 选择器指定的技能: 本轮全文注入, 不做关键词匹配 (lib/skill_turn.py)
+        payload["skills"] = forced
     url = f"{w.SERVER_URL}/v1/chat/completions"
     if "__TRIGGER_EMPTY_RESPONSE__" in message:   # [P46 测试模式] 走 server 空响应路径
         url += "?__test_empty=1"
     run = REGISTRY.start(sid, _producer(sid, url, payload))
     run.user_ts = ts
     return run
+
+
+@router.post("/api/chat/{sid}/steer")
+async def api_chat_steer(sid: str, request: Request):
+    """[steer 2026-10-21] 回合进行中插话: 不停止任务, 消息在下一步接进上下文。
+    urgent=true 为"立即插话": 放弃正在执行的工具, 马上按插话调整。
+    没有进行中的回合 (或已在收尾) 返回 queued=False, 前端改按普通消息发送。"""
+    require_auth(request)
+    from lib.owner import require_owner
+    w = _wui()
+    session = w.load_session(sid)
+    require_owner(session, request)
+    body = await json_object(request)
+    message = str(body.get("message") or "").strip()
+    if not message:
+        raise HTTPException(400, "empty")
+    if len(message) > MAX_MESSAGE_CHARS:
+        raise HTTPException(413, f"插话过长 ({len(message)} 字), 上限 {MAX_MESSAGE_CHARS} 字")
+    run = REGISTRY.get(sid)
+    if not run or run.done or run.finishing:
+        print(f"[steer:{sid}] 没有进行中的回合, 转普通消息: {message[:40]}")
+        return {"ok": True, "queued": False}
+    d = await w._aproxy(f"/v1/sessions/{sid}/steer", "POST",
+                        json={"text": message, "urgent": bool(body.get("urgent"))})
+    if not d or not d.get("queued"):
+        print(f"[steer:{sid}] server 未排队 ({d}), 转普通消息: {message[:40]}")
+        return {"ok": True, "queued": False}
+    session = w.load_session(sid)       # 重新读, 别覆盖轮次里刚写入的内容
+    session["messages"].append({"role": "user", "content": message, "ts": time.time(),
+                                "steer": True, "urgent": bool(body.get("urgent"))})
+    w.save_session(session)
+    return {"ok": True, "queued": True, "urgent": bool(d.get("urgent"))}
 
 
 @router.get("/api/chat/{sid}/run")

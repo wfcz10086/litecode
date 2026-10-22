@@ -2,6 +2,7 @@
 name: pdf
 description: Use this skill whenever the user wants to do anything with PDF files. This includes reading or extracting text/tables from PDFs, combining or merging multiple PDFs into one, splitting PDFs apart, rotating pages, adding watermarks, creating new PDFs, filling PDF forms, encrypting/decrypting PDFs, extracting images, and OCR on scanned PDFs to make them searchable. If the user mentions a .pdf file or asks to produce one, use this skill.
 license: Proprietary. LICENSE.txt has complete terms
+aliases: ["pdf", ".pdf", "pdf文件"]
 ---
 
 # PDF Processing Guide
@@ -9,6 +10,15 @@ license: Proprietary. LICENSE.txt has complete terms
 ## Overview
 
 This guide covers essential PDF processing operations using Python libraries and command-line tools. For advanced features, JavaScript libraries, and detailed examples, see REFERENCE.md. If you need to fill out a PDF form, read FORMS.md and follow its instructions.
+
+## LiteCode 适配 (先读)
+
+- REFERENCE.md / FORMS.md / scripts/ 在本 skill 目录下 (容器内 `/opt/litecode/skills/pdf/`), 用 `read_file` 读, 脚本用 `execute_shell` 跑。
+- 本 skill 侧重**写/改** PDF (合并、拆分、水印、加密、表单、生成)。只是读内容 → `load_skill('pdf-reading')`; 扫描件/图片页转文字 → `load_skill('pdf-ocr-pipeline')`。
+- **OCR 不用 tesseract** (环境里通常没装): 把页面栅格化成 PNG, 再用 `vision_ocr(paths=[...])` 分批识别, 每批 ≤8 张, 文字密集页每批 2~3 张并设 `max_tokens=8192`。
+- 看某页长什么样 (图表、版式、签章): 同样栅格化后 `vision_ocr(path=..., mode="describe")`。
+- 已装: pypdf / pdfplumber / pypdfium2 / PyMuPDF(fitz) / poppler-utils (pdftotext, pdftoppm, pdfinfo)。缺库就 `pip install`。
+- 生成中文 PDF: 优先 HTML → PDF (weasyprint 或 chromium 打印), reportlab 需注册中文字体 (见下文 CJK 段)。
 
 ## Quick Start
 
@@ -256,22 +266,18 @@ pdftk input.pdf rotate 1east output rotated.pdf
 
 ### Extract Text from Scanned PDFs
 ```python
-# Requires: pip install pytesseract pdf2image
-import pytesseract
-from pdf2image import convert_from_path
-
-# Convert PDF to images
-images = convert_from_path('scanned.pdf')
-
-# OCR each page
-text = ""
-for i, image in enumerate(images):
-    text += f"Page {i+1}:\n"
-    text += pytesseract.image_to_string(image)
-    text += "\n\n"
-
-print(text)
+# 1) 栅格化 (pypdfium2, 无需 poppler)
+import pypdfium2 as pdfium
+doc = pdfium.PdfDocument("scanned.pdf")
+for i in range(len(doc)):
+    doc[i].render(scale=200 / 72).to_pil().save(f"/tmp/litecode_workspace/scan_{i+1:03d}.png")
 ```
+```
+# 2) 分批识别 (每批 ≤8 张; 正文密集页每批 2~3 张)
+vision_ocr(paths=["/tmp/litecode_workspace/scan_001.png", "/tmp/litecode_workspace/scan_002.png"],
+           prompt="依次是第 1、2 页, 逐字识别, 每页以 <<<PAGE N>>> 开头输出 Markdown", max_tokens=8192)
+```
+页数多、需要合并成一个 Markdown 时按 pdf-ocr-pipeline 的完整流程走 (先判断文字层, 只 OCR 没有文字层的页)。
 
 ### Add Watermark
 ```python
@@ -327,7 +333,7 @@ with open("encrypted.pdf", "wb") as output:
 | Extract tables | pdfplumber | `page.extract_tables()` |
 | Create PDFs | reportlab | Canvas or Platypus |
 | Command line merge | qpdf | `qpdf --empty --pages ...` |
-| OCR scanned PDFs | pytesseract | Convert to image first |
+| OCR scanned PDFs | vision_ocr | Rasterize pages, then `vision_ocr(paths=[...])` (≤8 per call) |
 | Fill PDF forms | pdf-lib or pypdf (see FORMS.md) | See FORMS.md |
 
 ## Next Steps

@@ -21,43 +21,40 @@ license: Proprietary. LICENSE.txt has complete terms
 1. **看扩展名** — 这是你的分发键
 2. **先 stat 再读** — 大文件需要采样不是全读
    ```bash
-   stat -c '%s bytes, %y' /tmp/openclaw_workspace/report.pdf
-   file /tmp/openclaw_workspace/report.pdf
+   stat -c '%s bytes, %y' /tmp/litecode_workspace/report.pdf
+   file /tmp/litecode_workspace/report.pdf
    ```
 3. **只读回答问题需要的量** — 用户问"CSV 有多少行"，`wc -l` 就够了
 4. **有专用技能就交给它** — 下面的表告诉你什么时候交
 
-## extract-text 工具
+## 文本抽取工具 (先探测再用)
 
-对 docx/odt/epub/xlsx/pptx/rtf/ipynb，第一步用 `extract-text <file>`：
-- docx/odt/epub → markdown（标题/加粗/列表/链接/表格）
-- xlsx → tab 分隔行 + `## Sheet:` 标题
-- pptx → `## Slide N` 标题下的文本
-- ipynb → 代码 cell 用 fenced block
-- rtf → 纯文本
-
-如果 `extract-text` 报错，docx 用 `pandoc <file> -t plain` 兜底，xlsx/pptx 用 Python 库（openpyxl / python-pptx）。
+`extract-text`、`pandoc`、`markitdown` 在 LiteCode 环境里**通常没装**, 先 `command -v extract-text pandoc markitdown` 看一眼:
+- 有 `extract-text` → docx/odt/epub/xlsx/pptx/rtf/ipynb 一条命令转文本。
+- 都没有 → 用 Python 库 (python-docx / python-pptx / pypdf 已装; openpyxl、odfpy 缺就 `pip install`), 或 `pip install markitdown` 后 `markitdown file.docx`。
+- 旧格式 .doc/.ppt/.xls → `soffice --headless --convert-to docx/pptx/xlsx file` (LibreOffice 已装)。
+- ipynb 就是 JSON: `jq -r '.cells[] | .source | join("")' nb.ipynb | head -200`。
 
 ## 文件类型分发表
 
 | 扩展名 | 第一步 | 专用技能 |
 |--------|--------|---------|
 | `.pdf` | 内容清查（见 PDF 节） | `load_skill('pdf-reading')` |
-| `.docx` | `extract-text` | `load_skill('docx')` |
+| `.docx` | python-docx 抽段落 | `load_skill('docx')` |
 | `.doc` (旧) | 先转 `.docx` | `load_skill('docx')` |
-| `.xlsx` | `extract-text` | `load_skill('xlsx')` |
-| `.xlsm` | `extract-text --format xlsx` | `load_skill('xlsx')` |
+| `.xlsx` | openpyxl `read_only=True` 预览 | `load_skill('xlsx')` |
+| `.xlsm` | 同 xlsx | `load_skill('xlsx')` |
 | `.xls` (旧) | `pd.read_excel(engine="xlrd")` | `load_skill('xlsx')` |
 | `.ods` | `pd.read_excel(engine="odf")` | `load_skill('xlsx')` |
-| `.pptx` | `extract-text` | `load_skill('pptx')` |
+| `.pptx` | python-pptx 抽每页文本 | `load_skill('pptx')` |
 | `.ppt` (旧) | 先转 `.pptx` | `load_skill('pptx')` |
 | `.csv` `.tsv` | `pandas` + `nrows` | — |
 | `.json` `.jsonl` | `jq` 探结构 | — |
-| `.jpg` `.png` `.gif` `.webp` | 直接描述（vision input） | — |
+| `.jpg` `.png` `.gif` `.webp` `.bmp` | `vision_ocr(path)`; 多张对比用 `paths` (≤8) | `load_skill('image-ocr')` |
 | `.zip` `.tar` `.tar.gz` | 只列目录，不解压 | — |
 | `.gz` (单文件) | `zcat | head` | — |
-| `.epub` `.odt` | `extract-text` | — |
-| `.rtf` `.ipynb` | `extract-text` | — |
+| `.epub` `.odt` | markitdown / `soffice --convert-to` | — |
+| `.rtf` `.ipynb` | `soffice --convert-to txt` / `jq` | — |
 | `.py` `.js` `.go` 等代码 | `wc -c` → 按大小选读 | — |
 | `.txt` `.md` `.log` | `wc -c` → `head`/`tail`/`cat` | — |
 | 未知 | `file` + `xxd | head -5` | — |
@@ -70,14 +67,14 @@ license: Proprietary. LICENSE.txt has complete terms
 
 快速第一步：
 ```bash
-pdfinfo /tmp/openclaw_workspace/report.pdf
-pdftotext -f 1 -l 1 /tmp/openclaw_workspace/report.pdf - | head -20
+pdfinfo /tmp/litecode_workspace/report.pdf
+pdftotext -f 1 -l 1 /tmp/litecode_workspace/report.pdf - | head -20
 ```
 
 Python 方式：
 ```python
 from pypdf import PdfReader
-r = PdfReader("/tmp/openclaw_workspace/report.pdf")
+r = PdfReader("/tmp/litecode_workspace/report.pdf")
 print(f"{len(r.pages)} pages")
 print(r.pages[0].extract_text()[:2000])
 ```
@@ -91,8 +88,11 @@ print(r.pages[0].extract_text()[:2000])
 
 ## DOCX / DOC
 
-```bash
-extract-text /tmp/openclaw_workspace/memo.docx | head -200
+```python
+from docx import Document
+d = Document("/tmp/litecode_workspace/memo.docx")
+print("\n".join(p.text for p in d.paragraphs)[:5000])
+print("tables:", len(d.tables))
 ```
 
 编辑/创建/跟踪修改 → `load_skill('docx')`。
@@ -102,15 +102,10 @@ extract-text /tmp/openclaw_workspace/memo.docx | head -200
 
 ## XLSX / XLS
 
-快速查看：
-```bash
-extract-text /tmp/openclaw_workspace/data.xlsx | head -100
-```
-
 Python 结构化预览：
 ```python
 from openpyxl import load_workbook
-wb = load_workbook("/tmp/openclaw_workspace/data.xlsx", read_only=True)
+wb = load_workbook("/tmp/litecode_workspace/data.xlsx", read_only=True)
 print("Sheets:", wb.sheetnames)
 ws = wb.active
 for row in ws.iter_rows(max_row=5, values_only=True):
@@ -131,7 +126,7 @@ for row in ws.iter_rows(max_row=5, values_only=True):
 **不要**裸 `cat` — 引号内大单元格会炸掉 `head -5`。
 ```python
 import pandas as pd
-df = pd.read_csv("/tmp/openclaw_workspace/data.csv", nrows=5)
+df = pd.read_csv("/tmp/litecode_workspace/data.csv", nrows=5)
 print(df)
 print(df.dtypes)
 ```
@@ -157,15 +152,13 @@ wc -l data.jsonl
 
 ## 图片
 
-微信发来的图片已在 context（vision input），不需要磁盘读取。
-程序化处理时：
-```python
-from PIL import Image
-img = Image.open("photo.jpg")
-print(img.size, img.mode, img.format)
-```
+微信 / Web 上传的图片是以**文件路径**给你的 (如 `图片路径: /tmp/.../wx_xxx.jpg`), 不会自动进上下文。看图、抄字一律用 `vision_ocr`:
+- 单张: `vision_ocr(path=...)` (默认 auto; 文档类 `mode="ocr"`, 照片 `mode="describe"`)
+- 多张对比 / 一组截图: `vision_ocr(paths=[...])`, 一次最多 8 张
+- 主模型不能看图时工具会自动转给视觉备用模型, 不用切模型。
+- 详细打法 (表格图转 Excel、找不同、看不清怎么办) → `load_skill('image-ocr')`
 
-OCR：`pytesseract.image_to_string(img)`
+只要尺寸/格式等元数据时用 PIL: `Image.open(p).size`。不要用 pytesseract (通常没装)。
 
 ---
 
@@ -216,7 +209,7 @@ gcc -o prog main.c && ./prog
 
 用户通常关心末尾：
 ```bash
-tail -200 /tmp/openclaw_workspace/app.log
+tail -200 /tmp/litecode_workspace/app.log
 ```
 
 搜索特定错误：

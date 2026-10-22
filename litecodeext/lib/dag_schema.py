@@ -53,6 +53,8 @@ DAG_JSON_SCHEMA = {
                     "critical": {"type": "boolean"},
                     "retry_strategy": {"type": "string"},
                     "breakpoint": {"type": "boolean"},
+                    # [P0-3] 步骤级断言: "关键字" 必含 / "!关键字" 不含 / "re:正则" 必匹配
+                    "expect": {"type": "array", "items": {"type": "string"}},
                     # [v2 2026-05] 多条件判断 — DSL 见 core/_when_eval.py
                     "when": {
                         "description": (
@@ -113,6 +115,9 @@ def validate_dag_json(d) -> Tuple[bool, List[str]]:
                 errors.append(f"step[{i}] breakpoint must be bool")
             # [v2 2026-05] when 接受 str / dict / list (含嵌套), 见 core/_when_eval.py
             # 严格 schema 留给求值器自己 try/except, 这里只挡明显错的类型
+            exp = s.get("expect")
+            if exp is not None and not (isinstance(exp, list) and all(isinstance(x, str) for x in exp)):
+                errors.append(f"step[{i}] expect 必须是字符串数组")
             w = s.get("when")
             if w is not None and not isinstance(w, (str, dict, list)):
                 errors.append(f"step[{i}] when 必须是 str/dict/list, got {type(w).__name__}")
@@ -147,6 +152,8 @@ def dag_to_dict(plan) -> Dict:
                     "when": list(getattr(s, "when", []) or []),
                     "tool_name": getattr(s, "tool_name", ""),
                     "tool_args": dict(getattr(s, "tool_args", {}) or {}),
+                    "dag_name": getattr(s, "dag_name", "") or "",
+                    "expect": list(getattr(s, "expect", []) or []),
                 }
                 for s in plan.steps
             ]
@@ -178,6 +185,7 @@ def dag_from_dict(d: Dict):
             tool_name=s.get("tool_name", ""),
             tool_args=dict(s.get("tool_args") or {}),
             dag_name=s.get("dag_name", ""),
+            expect=list(s.get("expect", []) or []),
         ))
     return DAGPlan(
         steps=steps,

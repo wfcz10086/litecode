@@ -96,6 +96,25 @@ async def _handle_text_reply(_ctx, _batch_state, _st, full_text, _full_reasoning
                 _st.action = "continue"
                 return  # 不 break, 多给一轮回读机会
 
+            # ── [SYSTEM-CONTINUE] 远程操控回合里以"让我…/下一步…/Let me…"收尾却没调工具 → 续跑 (每回合 ≤2 次);
+            #    [SYSTEM-CHECKLIST] GUI 任务收尾时用户原话要求的关闭/保存/读回没有执行痕迹 → 提醒补做 (每回合 ≤1 次)
+            from lib.agent import remote_continue as _remote_continue
+            _continue_inject = _remote_continue.check(_ctx, full_text)
+            if _continue_inject:
+                log.info(f"  \033[35m[CONTINUE]\033[0m [{_ctx.sid_tag}] 远程操控回合收尾拦截: "
+                         f"{_continue_inject[:18]} (iter={_iteration})")
+                _ctx.tracer.iteration_end("ITER_OK", "remote continue injected")
+                _asst_rc = {"role": "assistant", "content": full_text}
+                if _full_reasoning and _full_reasoning.strip():
+                    _asst_rc["reasoning_content"] = _full_reasoning
+                _ctx.new_msgs.append(_asst_rc)
+                _ctx.messages.append(_asst_rc)
+                _ctx.messages.append({"role": "user", "content": _continue_inject})
+                _ctx.new_msgs.append({"role": "user", "content": _continue_inject})
+                _consecutive_empty = 0
+                _st.action = "continue"
+                return
+
             # ── [EXEC-GATE] 收尾闸: 本轮此刻无 tool_call、模型即将给出最终回复。
             # 若本回合已经有过 ≥N 轮工具调用、却从未调用过写类工具 → 说明规划/验证
             # 都做了唯独没动手改, 注入一次"最后机会"提示, 不 break, 再走一轮;
@@ -149,6 +168,10 @@ async def _handle_text_reply(_ctx, _batch_state, _st, full_text, _full_reasoning
         _had_reasoning = bool(_full_reasoning and _full_reasoning.strip())
         if _had_reasoning:
             _last_reasoning_salvage = _full_reasoning  # 触顶放弃时用它兜底, 保证正文非空
+            if len(_full_reasoning) >= 4000:
+                # 想了一大段自己收尾却没出正文/工具 (没触发截断): 下一轮同样关思考直接动手 (见 llm_call)
+                # 实测 GLM 物理 SVG: 连续两次 1.2 万字空想 (2026-10-21)
+                _ctx.no_think_next = True
         log.warning(f"  \033[33m[empty-reply] iteration={_iteration} "
                     f"consecutive={_consecutive_empty}/{_empty_reply_max} "
                     f"reasoning_only={_had_reasoning}({len(_full_reasoning)}c)\033[0m")

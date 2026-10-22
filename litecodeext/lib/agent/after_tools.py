@@ -634,6 +634,14 @@ def _after_tool_batch(_ctx, _guard_stats, _iteration, _iter_write_success, _misc
     _plan_gate_task_created_now = any(
         _tc6["function"]["name"] == "task_create" for _tc6 in tool_call_list
     )
+    if not _plan_gate_task_created_now and not _batch_state.plan_gate_injected:
+        # [2026-10-22 实测] 上一轮已拆好任务、这一轮是追加要求 ("然后配好声音") 时, 第 5 轮被催拆解,
+        # 模型为了交差又建了 3 个记账任务、多跑 8 次工具。同会话 30 分钟内拆过就视为已规划。
+        try:   # 任务存储是分派用的那份模块 (core/ 在 sys.path 上, 名字是 tools.handlers.*)
+            from tools.handlers.task_ops import recently_planned as _recently_planned
+            _plan_gate_task_created_now = _recently_planned(getattr(_ctx, "session_id", None) or "")
+        except Exception:
+            pass
     if _batch_state.plan_gate_tick(
         _plan_gate_task_created_now, threshold=int(_AGT.get("plan_gate_tool_iters", 5))
     ):

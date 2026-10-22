@@ -77,6 +77,7 @@ class AgentSpec:
     tool_name: str = ""
     tool_args: dict = field(default_factory=dict)
     dag_name: str = ""  # [#2 2026-09-05] 子 DAG 步: 要运行的子 DAG 名
+    expect: List[str] = field(default_factory=list)  # [P0-3] 步骤级断言, 透传到 StepSpec.expect
 
 
 @dataclass
@@ -282,6 +283,7 @@ class MultiAgentOrchestrator:
                 tool_name=getattr(spec, "tool_name", "") or "",
                 tool_args=dict(getattr(spec, "tool_args", {}) or {}),
                 dag_name=getattr(spec, "dag_name", "") or "",
+                expect=list(getattr(spec, "expect", []) or []),
             ))
 
         plan = DAGPlan(steps=dag_steps, auto_critic=auto_critic)

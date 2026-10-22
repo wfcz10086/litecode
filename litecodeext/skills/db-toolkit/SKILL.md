@@ -13,6 +13,7 @@ description: >
 建表 查询 索引 备份 迁移 orm sqlalchemy select insert update delete
 join 事务 transaction index 性能 优化 连接池 schema migration
 csv导入 数据导出 dump restore
+aliases: ["数据库", "database", "sqlite", "postgresql", "mysql", "redis", "建表", "sql查询", "sqlalchemy", "索引", "数据迁移"]
 ---
 
 # Database Toolkit Skill

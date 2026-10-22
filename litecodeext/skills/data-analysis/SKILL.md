@@ -14,6 +14,7 @@ description: >
 直方图 折线图 散点图 热力图 柱状图 饼图 箱线图
 csv json excel sql 数据清洗 缺失值 异常值 pivot 透视表 报表
 dataframe series groupby merge join concat filter sort
+aliases: ["pandas", "matplotlib", "可视化", "图表", "统计", "直方图", "折线图", "散点图", "热力图", "数据清洗", "dataframe"]
 ---
 
 # Data Analysis Skill

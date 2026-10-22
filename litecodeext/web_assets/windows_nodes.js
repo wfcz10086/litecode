@@ -95,7 +95,7 @@
     dialog.append(form, command, copy, message, el('h4', '已登记节点'), list);
     dialog.append(el('small', '完全卸载会删除本节点代理、启动任务、独立运行环境、本机凭据及本节点 SSH 公钥；系统 SSH 服务、其它密钥、已有软件、历史对话和任务截图保留。仅撤销授权不会删除本机文件。'));
     const states = {awaiting_join: '等待执行命令', expired: '接入码已过期', installing: '安装中', online: '在线', offline: '离线', error: '安装或连接失败', revoked: '已撤销', uninstall_pending: '等待电脑接收卸载', uninstalling: '正在卸载，等待清理回执', uninstall_failed: '卸载未完成', uninstalled: '已完全卸载'};
-    const stages = {enrolled: '已发现电脑', ssh: '准备 SSH Server 与开机启动', python: '准备独立 Python 环境', packages: '安装桌面组件', agent: '启动桌面代理'};
+    const stages = {enrolled: '已发现电脑', ssh: '准备 SSH Server 与开机启动', ssh_skipped: 'SSH 没装上（已跳过，继续安装）', python: '准备独立 Python 环境', packages: '安装桌面组件', agent: '启动桌面代理'};
     const taskStates = {queued: '等待电脑领取', running: '电脑正在执行', returned: '动作已返回，业务结果请看截图验收', failed: '动作失败', cancelled: '已取消派发，已执行的动作无法撤回', unconfirmed: '未确认是否完成，请先检查桌面，勿重复发送'};
     const actions = {screenshot: '截图检查', initialize: '初始化', windows: '查看窗口', click: '点击', double_click: '双击', right_click: '右键', hover: '悬停', click_text: '点击文字', scroll: '滚动', drag: '拖动', hotkey: '快捷键', type_text: '输入文字', type_secret: '输入已保存凭据', open_url: '打开网页', wechat_login: '微信登录', wechat_status: '检查微信', ocr: '识别文字', clipboard: '读取剪贴板', focus_window: '切换窗口', close_window: '关闭窗口'};
     const busy = new Set();

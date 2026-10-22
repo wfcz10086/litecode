@@ -11,12 +11,18 @@ AGENT_DEFS = [
                 "(e.g. Go code → load_skill('go'), stock analysis → load_skill('research-analyst'), "
                 "React UI → load_skill('frontend-design'), PDF → load_skill('pdf')). "
                 "You decide which skill fits — do NOT wait for keywords. "
-                "Use list_skills() first if unsure what's available."
+                "Use list_skills() first if unsure what's available. "
+                "Reads the SKILL.md source in full; very long skills come back section by section "
+                "(## headings) with a table of contents and the exact `section` value to continue."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string", "description": "Skill name as shown in the skills list"},
+                    "section": {"type": "string", "description": (
+                        "Optional. Only for long skills: section number (1-based) or heading text to "
+                        "start reading from, as given in the previous load_skill result's contents/续读 line. "
+                        "Omit to start from the beginning.")},
                 },
                 "required": ["name"]
             }
@@ -35,45 +41,28 @@ AGENT_DEFS = [
         "function": {
             "name": "spawn_agent",
             "description": (
-                "Spawn a focused subagent to handle a specific subtask in parallel or sequentially. "
-                "Use when a task has clearly separable parts: e.g. 'research' + 'code' + 'verify'. "
-                "The subagent runs its own tool loop and returns results. "
-                "agent_type options:\n"
-                "  explorer   – understands codebase structure (get_tree, find_files, search_code, read_file)\n"
-                "  researcher – searches web and fetches data (web_fetch, web_search)\n"
-                "  coder      – writes and runs code in any language (write_file, patch_file, execute_shell)\n"
-                "  analyst    – fetches data + analyzes + runs code (web_fetch, execute_shell, write_file)\n"
-                "  tester     – runs tests and verifies results (execute_shell, read_file)\n"
-                "  shell      – pure shell/bash tasks (execute_shell only)\n"
-                "  writer     – long-form writing: novels, reports, articles (write_file, read_file)\n"
-                "  operator   – 远程操作员: 操作一台已接入的 Windows 电脑 (windows_desktop / windows_system, "
-                "截图→动作→截图确认, 改过文件用 inspect_file 回读); 不能改服务器文件、不能 execute_shell\n"
-                "远程操作员 (operator) 用法: 必须用 alias 字段指定要操作的电脑 (单个任务用顶层 alias, "
-                "parallel_tasks/pipeline_tasks/dag_tasks 每项写自己的 alias)。一台电脑同一时刻只能一个操作员 "
-                "(只有一套鼠标键盘): 同时运行的两个 operator 指定同一 alias 会被拒绝派发, 同一台电脑上的多件事请合并成"
-                "一个任务或用 pipeline_tasks/depends_on 串行; 某台电脑正被操作员占用时, 你自己对它的 windows_desktop/"
-                "windows_system 调用会立即报错, 等子代理结束再操作。多台电脑并行示例: spawn_agent(parallel_tasks=["
-                "{\"agent_type\":\"operator\",\"alias\":\"vm-a\",\"task\":\"在桌面新建 报告.txt 写入'A 完成'并保存\"}, "
-                "{\"agent_type\":\"operator\",\"alias\":\"vm-b\",\"task\":\"用 WPS 打开 D:/sales.xlsx, 在 D5 填 =SUM(D2:D4) 保存\"}])。"
-                "operator 属写类: 改过文件且之后回读过 (或只做界面操作且最后有截图/OCR 确认) 才标 [已验证]。\n"
-                "Multiple spawn_agent calls can run the SAME task in different ways; pick the best result.\n"
-                "并行改代码自动隔离: 本次派发有 ≥2 个写类子代理 (coder/analyst/tester/shell/writer) 并行或按 DAG 并发, "
-                "且 workdir 是 git 仓库时, 每个写类子代理在独立 git 工作树 (分支 lc-agent/<id>) 里干活, 互不覆盖; "
-                "结束后自动提交并 merge --no-ff 回主工作区, 冲突时先自动解冲突 (工作树内反向合并+校验, 默认开), "
-                "解不了才保留分支与工作树并列出冲突文件与失败原因, "
-                "交你用 agent_worktree 处理。主工作区有未提交改动时不自动合并。\n"
-                "交付证据: 框架从子代理自己的工具调用里机器采集证据 (测试/构建/运行命令的退出码与通过失败数、"
-                "写入文件及是否回读、搜索/读取取证、工作树提交与合并状态), 结果开头标 [已验证] 或 [未验证: 原因], "
-                "末尾附「证据」小节; 多个子代理时列出每个子代理的判定。"
-                "[未验证] 的子代理结论 (尤其是数字、'测试通过'、'已修复'之类) 只能当线索: "
-                "汇报给用户前必须自己核实 (跑测试 / read_file 回读 / 重新计算), 或明确告诉用户该结论未经验证。\n"
-                "后台子代理 (background=true): 只支持单个 task 或 parallel_tasks, 立即返回每个子代理的 id (sa-xxxxxx)、"
-                "角色和任务摘要, 子代理在后台跑 (工作树隔离/证据/操作员独占照旧; 写类子代理在 git 仓库里一律用独立工作树, "
-                "因为你自己也在同时改文件), 你不用干等。典型用法: spawn_agent(background=true, ...) 派出去 → 你继续做别的 → "
-                "发现要补充/纠正时 agent_control(action=\"send\", id, message) 追加指令 (子代理下一轮迭代前收到) → "
-                "需要结果时 agent_control(action=\"wait\", id) 收结果 (格式与阻塞模式相同, 带 [已验证]/[未验证] 标记)。"
-                "每个会话同时运行的后台子代理默认最多 4 个 (超过拒绝派发); 回合结束时还没跑完的不会被杀, 下一轮再用 agent_control 取。"
-                "不需要中途干预、马上就要结果的任务, 照旧用阻塞方式 (不带 background)。"
+                "派子代理 (独立上下文 + 自己的工具循环) 处理可分离的子任务, 如 调研 + 编码 + 验证。agent_type:\n"
+                "  explorer 读代码/定位结构 | researcher 搜网页取数据 | coder 写代码并运行 (任意语言) | "
+                "analyst 取数+分析+跑代码 | tester 跑测试验证 | shell 纯 shell | writer 长文 (小说/报告) | "
+                "operator 远程操作员: 操作一台已接入的 Windows 电脑 (windows_desktop/windows_system, 截图→动作→截图确认, "
+                "改过文件用 inspect_file 回读); 不能改服务器文件、不能 execute_shell。\n"
+                "operator 必须用 alias 指定电脑 (单任务用顶层 alias, parallel/pipeline/dag 每项写自己的 alias)。"
+                "一台电脑同一时刻只能一个操作员: 两个并发 operator 指定同一 alias 会被拒绝, 同一台电脑上的多件事合并成一个任务或用 "
+                "pipeline_tasks/depends_on 串行; 电脑被操作员占用时你自己对它的 windows_desktop/windows_system 调用会立即报错, "
+                "等子代理结束再操作。多台并行: parallel_tasks=[{agent_type:'operator',alias:'vm-a',task:'...'},"
+                "{agent_type:'operator',alias:'vm-b',task:'...'}]。operator 改过文件且回读过 (或只做界面操作且最后有截图/OCR 确认) 才标 [已验证]。\n"
+                "可以派多个子代理用不同方式做同一任务, 取最好的结果。\n"
+                "并行改代码自动隔离: 本次有 ≥2 个写类子代理 (coder/analyst/tester/shell/writer) 并发且 workdir 是 git 仓库时, "
+                "每个在独立工作树 (分支 lc-agent/<id>) 干活, 结束后自动提交并 merge --no-ff 回主工作区, 冲突先自动解 (默认开), "
+                "解不了保留分支与工作树并列出冲突文件与原因, 交你用 agent_worktree 处理; 主工作区有未提交改动时不自动合并。\n"
+                "交付证据: 框架从子代理的工具调用里机器采集证据 (测试/构建退出码与通过失败数、写入文件及是否回读、取证、工作树提交合并状态), "
+                "结果开头标 [已验证] 或 [未验证: 原因], 末尾附「证据」小节, 多个子代理逐个判定。"
+                "[未验证] 的结论 (尤其数字、'测试通过'、'已修复') 只能当线索: 汇报前必须自己核实 (跑测试/read_file 回读/重算), "
+                "或明确告诉用户未经验证。\n"
+                "background=true: 只支持单个 task 或 parallel_tasks, 立即返回子代理 id (sa-xxxxxx), 子代理后台跑 (隔离/证据/操作员独占照旧; "
+                "写类子代理在 git 仓库里一律用独立工作树), 你继续做别的; 要补充/纠正用 agent_control(action='send', id, message), "
+                "要结果用 agent_control(action='wait', id)。每会话后台子代理默认最多 4 个; 回合结束时没跑完的不会被杀, 下一轮再取。"
+                "马上就要结果、不需要中途干预的任务照旧阻塞调用。"
             ),
             "parameters": {
                 "type": "object",
@@ -143,17 +132,10 @@ AGENT_DEFS = [
                     "batch_items": {
                         "type": "array",
                         "description": (
-                            "批量同类任务列表 (2026-05 新增). 跟 parallel_tasks 不同, "
-                            "batch_items 共享同一个 base task / agent_type / context, "
-                            "每个 item 只换 item_id + 该 item 的具体内容. "
-                            "默认**串行**执行 (避免子代理同时改 state.json/同一文件), "
-                            "每个 item 都是一个全新 spawn (max_iter 独立, history 隔离). "
-                            "典型场景: 写 N 章小说 (1 item = 1 章) / 批量修 N 个 bug / 批量爬 N 个 URL / "
-                            "批量生成 N 个模块代码. 比 parallel_tasks 更适合大规模重复性任务. "
-                            "用法: spawn_agent(task='你是 writer 写仙侠小说, 大纲见 outline.md', "
-                            "agent_type='writer', context='共享设定见 state.json', "
-                            "batch_items=[{'item_id':'ch01','task':'写第 1 章: 主角入门'}, "
-                            "{'item_id':'ch02','task':'写第 2 章: 试炼'}, ...])"
+                            "批量同类任务: 共享 base task/agent_type/context, 每项只换 item_id + 具体内容; 默认串行 "
+                            "(避免同时改同一文件), 每项都是全新子代理 (迭代独立, 历史隔离)。适合写 N 章小说 / 修 N 个 bug / "
+                            "爬 N 个 URL。例: spawn_agent(task='写仙侠小说, 大纲见 outline.md', agent_type='writer', "
+                            "batch_items=[{'item_id':'ch01','task':'写第 1 章'}, {'item_id':'ch02','task':'写第 2 章'}])"
                         ),
                         "items": {
                             "type": "object",
@@ -224,9 +206,11 @@ AGENT_DEFS = [
         "function": {
             "name": "update_profile",
             "description": (
-                "Update session context files (USER.md / TOOLS.md / SOUL.md). "
+                "Update context files. USER.md is the GLOBAL user profile shared by all sessions "
+                "(new sessions load it automatically); TOOLS.md / SOUL.md / others are per-session copies. "
                 "Use this when you learn NEW user information (name, preferences, work, habits) "
                 "or when new tools/services/paths are created in the session. "
+                "For single facts that may change later (favorite X, reply language), prefer save_memory scope='user'. "
                 "DO NOT call read_file on USER.md/TOOLS.md — use this tool to read AND update them.\n"
                 "action='read'  → returns current content of the file\n"
                 "action='merge' → intelligently merge new_content into existing file (append/update sections)\n"
@@ -251,23 +235,32 @@ AGENT_DEFS = [
         "function": {
             "name": "save_memory",
             "description": (
-                "Explicitly save important information to session memory. "
-                "Use when the user provides key info worth remembering across sessions: "
-                "project decisions, architecture choices, resolved bugs, user corrections. "
-                "section: which memory section (e.g. 'Key References', 'Completed Work'). "
-                "topic: optional, saves to a separate L2 file for that topic. "
-                "key: optional short name for a single-valued fact (e.g. 'deploy port'); "
-                "saving the same key again replaces the old value instead of adding a duplicate."
+                "Save / list / forget memories. Two scopes: "
+                "scope='user' → GLOBAL user profile shared by ALL sessions (user preferences, identity, habits, "
+                "'记住…' requests); scope='session' → this session's MEMORY.md only (project decisions, "
+                "architecture, resolved bugs, paths). scope omitted = auto (preference/identity facts go global). "
+                "The tool result states which scope was written — tell the user exactly that; never claim "
+                "long-term storage for a session-only write. "
+                "key: short fact name (e.g. '喜欢的水果', '回复语言', 'deploy port'); saving the same key again "
+                "REPLACES the old value (use it when the user changes a preference). "
+                "action='list' shows saved memories; action='forget' deletes by key or content "
+                "(when the user asks you to forget something). "
+                "section: memory section for session scope (e.g. 'Key References', 'Completed Work'). "
+                "topic: optional, saves to a separate L2 file for that topic."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "section": {"type": "string", "description": "Memory section heading"},
-                    "content": {"type": "string", "description": "What to remember"},
+                    "content": {"type": "string", "description": "What to remember (for forget: what to forget)"},
                     "topic":   {"type": "string", "description": "Optional topic file name for L2 memory"},
                     "key":     {"type": "string", "description": "Optional fact name; same key overwrites the old value"},
+                    "scope":   {"type": "string", "enum": ["auto", "user", "session"],
+                                "description": "user=global profile for all sessions; session=this session only"},
+                    "action":  {"type": "string", "enum": ["save", "list", "forget"],
+                                "description": "save (default) / list saved memories / forget one"},
                 },
-                "required": ["section", "content"]
+                "required": []
             }
         }
     },
@@ -307,10 +300,9 @@ AGENT_DEFS = [
         "function": {
             "name": "create_skill",
             "description": (
-                "创建新的 skill (SKILL.md)。默认写到 skills/drafts/ 作为草稿, 需用户审核后手工移到 skills/ 激活。"
-                "这是安全设计: 避免模型自己创建的低质量 skill 污染核心库。"
-                "只有当用户明确说'直接激活'或'立即可用'时, 才设置 activate=true 直接写到 skills/。"
-                "适用场景: 用户多次解决同一类问题后要求'把这个流程保存为 skill 下次用'。"
+                "创建新的 skill (SKILL.md)。默认存为草稿 (不会自动加载), 用户在网页「技能」面板审核后启用; "
+                "避免低质量 skill 污染技能库。只有用户明确说'直接启用'时才设 activate=true (仍要过安全扫描)。"
+                "适用: 用户说'以后都这样/记住这个流程/保存为技能', 或同类多步任务第二次做成功。"
             ),
             "parameters": {
                 "type": "object",
@@ -318,7 +310,7 @@ AGENT_DEFS = [
                     "name":        {"type": "string", "description": "Skill 目录名, 只能含小写字母/数字/连字符/下划线, 如 'stock-monitor'"},
                     "description": {"type": "string", "description": "一行描述, 用于触发判断"},
                     "content":     {"type": "string", "description": "完整 SKILL.md markdown 内容"},
-                    "activate":    {"type": "boolean", "description": "True=直接激活到 skills/（需用户明确要求）; False/默认=写到 skills/drafts/ 草稿"},
+                    "activate":    {"type": "boolean", "description": "True=直接启用（需用户明确要求, 仍需安全扫描）; False/默认=存草稿"},
                     "overwrite":   {"type": "boolean", "description": "True=覆盖已存在的同名 skill"}
                 },
                 "required": ["name", "content"]

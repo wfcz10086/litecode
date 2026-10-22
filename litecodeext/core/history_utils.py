@@ -410,6 +410,9 @@ def _fmt_args(name: str, args: dict) -> str:
         return args.get("url", "")[:100]
     if name in ("web_search",):
         return args.get("query", "")[:100]
+    if name == "kb_search":   # 前端 kb_panel.js 按这个格式还原检索参数, 给回答里的 [n] 做悬停出处
+        return (str(args.get("query", ""))[:100] + (f" [库:{args['kb']}]" if args.get("kb") else "")
+                + (f" [top_k:{args['top_k']}]" if args.get("top_k") else ""))
     if name in ("find_files",):
         return f"{args.get('pattern','')} in {args.get('path','.')}"
     if name in ("search_code",):

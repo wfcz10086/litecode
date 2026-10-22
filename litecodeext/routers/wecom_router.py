@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, UploadFile, File, Form
 from fastapi.responses import JSONResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 
 router = APIRouter()
 ORDER = 80  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
@@ -42,7 +43,7 @@ async def wc_status(request: Request):
 async def wc_update_config(request: Request):
     require_auth(request)
     mgr = _need_wc()
-    body = await request.json()
+    body = await json_object(request)
     return mgr.update_config(body or {})
 
 
@@ -51,7 +52,7 @@ async def wc_update_config(request: Request):
 async def wc_add_bot(request: Request):
     require_auth(request)
     mgr = _need_wc()
-    body = await request.json() or {}
+    body = await json_object(request)
     bot_id = (body.get("bot_id") or "").strip()
     secret = (body.get("secret") or "").strip()
     if not bot_id or not secret:
@@ -91,7 +92,7 @@ async def wc_send(bot_id: str, request: Request):
     """
     require_auth(request)
     mgr = _need_wc()
-    body = await request.json() or {}
+    body = await json_object(request)
     to = (body.get("to") or "").strip()
     if not to:
         return JSONResponse({"error": "missing to (userid)"}, status_code=400)

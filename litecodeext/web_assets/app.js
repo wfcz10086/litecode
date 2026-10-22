@@ -373,7 +373,7 @@ async function bgTail(pid){
   try{
     const d=await(await fetch('/api/bgprocs/'+encodeURIComponent(pid)+'/tail?lines=100').catch(()=>null));
     if(d && d.ok){const j=await d.json();box.textContent=(j.log||j.tail||'(空)');}
-    else box.textContent='(tail 端点尚未实现, 见 execute_shell tail_log)';
+    else{let m='HTTP '+(d?d.status:'?');try{const j=await d.json();m=j.detail||m;}catch(e){}box.textContent='(拉取日志失败: '+m+')';}
   }catch(ex){box.textContent='Error: '+ex;}
 }
 // ── Workspace 文件浏览器 ────────────────────────────────────
@@ -613,16 +613,16 @@ function startSbfStatusLoop(){
 
 /* [theme 2026-05-22] 主题切换 — 5 个预设, localStorage 持久化, 启动时自动应用 */
 const THEMES = [
-  {id:'',        name:'🌑 经典暗黑',  desc:'深邃黑底 + 橙色高亮 (默认)'},
+  {id:'kimi',    name:'🍊 暖白',      desc:'#FBFBF9 + Inter + 22px 圆角 (默认)'},
+  {id:'',        name:'🌑 经典暗黑',  desc:'深邃黑底 + 橙色高亮'},
   {id:'pptx',    name:'💼 企业风',    desc:'PPT Studio 暖白 + 企业蓝 #4F7EF7 + 黑主色'},
-  {id:'kimi',    name:'🍊 Kimi 暖白', desc:'#FBFBF9 + Inter + 22px 圆角, 参考 kimi.com'},
   {id:'light',   name:'🍎 苹果白',   desc:'纯白 + 苹果蓝/绿, 高对比度'},
   {id:'sky',    name:'☁️ 天空蓝',   desc:'浅蓝底 + 橙色高亮, 像晴天'},
   {id:'aurora',  name:'🌌 极光',     desc:'深紫 + 荧光绿紫, 渐变感'},
   {id:'minimal', name:'📖 极简米白', desc:'暖米底 + 砖红, 阅读感'},
 ];
 function applyTheme(id){
-  const cur = localStorage.getItem('theme') || '';
+  const _st = localStorage.getItem('theme'); const cur = _st===null ? 'kimi' : _st;
   if(id) document.documentElement.dataset.theme = id;
   else delete document.documentElement.dataset.theme;
   try{localStorage.setItem('theme', id||'');}catch(e){}
@@ -639,9 +639,11 @@ function toggleThemeMenu(ev){
   ev && ev.stopPropagation();
   const existing=document.getElementById('theme-menu');
   if(existing){existing.remove();return;}
-  const btn=document.getElementById('theme-btn');
+  /* [ui-audit 2026-10-21] 窄屏主题按钮收进「⋯」菜单 (display:none), 定位改用「⋯」按钮 */
+  let btn=document.getElementById('theme-btn');
+  if(!btn||!btn.getClientRects().length)btn=document.getElementById('hdr-more')||btn;
   const rect=btn.getBoundingClientRect();
-  const cur=localStorage.getItem('theme')||'';
+  const _st=localStorage.getItem('theme');const cur=_st===null?'kimi':_st;
   const m=document.createElement('div');
   m.id='theme-menu';
   m.style.cssText=`position:fixed;top:${rect.bottom+4}px;right:${innerWidth-rect.right}px;
@@ -668,7 +670,8 @@ function toggleThemeMenu(ev){
   setTimeout(()=>document.addEventListener('click',function h(){m.remove();document.removeEventListener('click',h);},{once:true}),50);
 }
 // 启动时应用上次保存的主题 (首次不 reload)
-(function(){try{const t=localStorage.getItem('theme');if(t){window.__themeApplyingInitial=true;applyTheme(t);window.__themeApplyingInitial=false;}}catch(e){}})();
+/* [ui-v2 2026-10-21] 默认暖白主题 (kimi): 从没选过主题 (null) 的用户用暖白; 主动选过「经典暗黑」的存的是 '' 保持暗色 */
+(function(){try{let t=localStorage.getItem('theme');if(t===null)t='kimi';if(t){window.__themeApplyingInitial=true;applyTheme(t);window.__themeApplyingInitial=false;}}catch(e){}})();
 
 checkAuth();
 

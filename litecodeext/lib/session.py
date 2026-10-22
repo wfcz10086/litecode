@@ -232,6 +232,52 @@ def delete_session(sid: str):
 def set_interrupt(sid: str):
     with _interrupt_lock: _interrupt_flags.add(sid)
     _stop_background_agents(sid)
+    _stop_background_procs(sid)
+
+
+# ── 运行中插话 (steer) ────────────────────────────────────────
+# [steer 2026-10-21] 用户在回合进行中补充/纠正, 不停止任务: 消息进队列, agent 循环在
+# 两步之间 (本批工具结果回来、下一次调用模型之前) 取出, 作为一条用户消息接进上下文。
+# urgent=True ("立即插话"): 放弃正在执行的工具、跳过本批剩余工具, 马上带着插话继续, 不结束回合。
+_steer_lock = threading.Lock()
+_steer_queues: dict = {}      # sid -> [text, ...]
+_steer_urgent: set = set()
+
+
+def push_steer(sid: str, text: str, urgent: bool = False):
+    with _steer_lock:
+        _steer_queues.setdefault(sid, []).append(text)
+        if urgent:
+            _steer_urgent.add(sid)
+
+
+def take_steers(sid: str) -> list:
+    """取出并清空该会话待处理的插话 (连同 urgent 标记)。"""
+    with _steer_lock:
+        _steer_urgent.discard(sid)
+        return _steer_queues.pop(sid, [])
+
+
+def has_steers(sid: str) -> bool:
+    with _steer_lock:
+        return bool(_steer_queues.get(sid))
+
+
+def steer_urgent(sid: str) -> bool:
+    with _steer_lock:
+        return sid in _steer_urgent
+
+
+def _stop_background_procs(sid: str):
+    """[stop 2026-10-21] 用户点停止 = 该会话用 background=true 起的本机进程也停;
+    明确要求保留的 (keep_alive=true, 如长期服务) 不动。远程机上 nohup 起的进程管不到。"""
+    try:
+        import asyncio
+        from tools.bg import cleanup_session_bg
+        loop = asyncio.get_running_loop()
+    except Exception:
+        return
+    loop.create_task(cleanup_session_bg(sid))
 
 
 def _stop_background_agents(sid: str):

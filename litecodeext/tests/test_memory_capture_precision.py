@@ -39,3 +39,17 @@ def test_index_dedupes_same_category_content(tmp_path):
     assert a == b and c != a
     assert idx._get_conn().execute("SELECT count(*) FROM memories").fetchone()[0] == 2
     assert len(idx.search("做一半就停", limit=5)) >= 1
+
+
+def test_method_fix_captured_as_whole_sentence(tmp_path):
+    """2026-10-21: 中途提醒换下载源是问句/祈使句, 原规则抓不到, 下个任务又走国外源。"""
+    from types import SimpleNamespace
+    from core.memory.auto import _RE_METHOD_FIX, rule_capture_user_facts
+    for s in ("能不能使用国内的模型下载源", "用清华源加速一下", "改用 modelscope 的镜像下载", "以后一律走 hf-mirror 镜像"):
+        assert _RE_METHOD_FIX.search(s), s
+    for s in ("能不能用 python 写个脚本", "用中文回复", "帮我下载这个文件", "这个仓库的源码在哪", "使用 docker 部署"):
+        assert not _RE_METHOD_FIX.search(s), s
+    saved = []
+    mgr = SimpleNamespace(save=lambda sec, text: saved.append((sec, text)), root=None, session_id="t")
+    rule_capture_user_facts(mgr, [{"role": "user", "content": "继续部署。pip 走阿里云镜像，下载放后台"}])
+    assert ("User Preferences", "做法纠正: pip 走阿里云镜像，下载放后台") in saved

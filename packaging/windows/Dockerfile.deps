@@ -1,0 +1,27 @@
+# LiteCode 依赖层: 复用 litecode:v12-r1 的系统库/浏览器/Python 包, 清掉私有代码和状态, 加 WSL 启动配置。
+# 不含 /opt/litecode (代码层每次发布单独打, rootfs.py 导出时也会剔除)。
+FROM litecode:v12-r1
+RUN rm -rf /opt/litecode /root/.ssh /root/.litecode /root/.wechatbot /root/.npm /root/.pip /root/.bash_history \
+           /root/go/pkg /tmp/* /var/tmp/* \
+ && mkdir -p /root/.ssh /root/.litecode/web_sessions /root/.litecode/wechat_media /root/.wechatbot \
+ && chmod 700 /root/.ssh
+# 底层镜像缺 openpyxl (Excel) 和 edge-tts (配音); 跑分里桌面版靠现场 pip 补, 会改动用户子系统 (2026-10-21)
+RUN pip3 install --break-system-packages openpyxl edge-tts && python3 -c "import openpyxl, edge_tts"
+# [2026-10-22] 本地纯 CPU 语音合成 (默认引擎): sherpa-onnx 运行库进系统包; 模型文件 (Kokoro + 知识库向量模型, 约 860MB)
+# 不进系统包 —— 会让安装包超过 NSIS 单包 2GB 上限。模型单独发布为模型包, 托盘后台下载解到 /var/lib/litecode/models
+# (升级保留区, packaging/windows/models.go), 这里只建软链 /opt/litecode-models → 它 (tts_local / kb embed 按这个路径找)。
+RUN pip3 install --break-system-packages sherpa-onnx==1.13.8 soundfile && python3 -c "import sherpa_onnx, soundfile" \
+ && mkdir -p /var/lib/litecode/models && rm -rf /opt/litecode-models && ln -s /var/lib/litecode/models /opt/litecode-models
+# 内置知识库 (plugins/kb, 2026-10-22): PostgreSQL 16 + pgvector 用 Ubuntu 24.04 官方源; 不建发行版默认集群,
+# 数据目录由 litecode-kb-pg 首次启动时在 /var/lib/litecode/kb_pg 初始化 (setup.go dataSpecs 升级保留)。
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-16 postgresql-16-pgvector \
+ && (pg_dropcluster 16 main 2>/dev/null || true) && rm -rf /var/lib/apt/lists/* /var/lib/postgresql/16/main /etc/postgresql/16/main \
+ && /usr/lib/postgresql/16/bin/postgres --version && ls /usr/share/postgresql/16/extension/vector.control
+COPY wsl.conf /etc/wsl.conf
+COPY litecode.env /etc/litecode.env
+COPY litecode-wsl-start litecode-apply-update litecode-rollback litecode-kb-pg playwright_link_browsers.py /usr/local/bin/
+ARG ROOTFS_VERSION
+RUN chmod +x /usr/local/bin/litecode-wsl-start /usr/local/bin/litecode-apply-update /usr/local/bin/litecode-rollback /usr/local/bin/litecode-kb-pg \
+ && set -a && . /etc/litecode.env && set +a && python3 /usr/local/bin/playwright_link_browsers.py \
+ && ls -la /root/.cache/ms-playwright/ \
+ && echo "$ROOTFS_VERSION" > /etc/litecode-rootfs-version

@@ -12,6 +12,7 @@ description: >
 docker 容器 镜像 compose dockerfile container image volume network
 registry harbor pull push build run exec logs inspect
 docker-compose swarm 端口映射 挂载 mount bind
+aliases: ["docker", "容器", "镜像", "dockerfile", "docker-compose", "compose", "harbor", "registry"]
 ---
 
 # Docker Ops Skill

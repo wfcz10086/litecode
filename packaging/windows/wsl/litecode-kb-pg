@@ -1,0 +1,63 @@
+#!/bin/bash
+# 桌面版内置知识库数据库 (plugins/kb): PostgreSQL 16 + pgvector, litecode-wsl-start 在启动服务前调用。
+#   数据目录 /var/lib/litecode/kb_pg —— 已登记在升级备份保留清单 (setup.go dataSpecs), 升级/重装不丢;
+#   不放 /root 下: /root 是 700, postgres 用户进不去
+#   只监听 127.0.0.1:15432 (+ /run/postgresql 本机套接字)
+#   首次: initdb → 建非超级用户 litecode_kb / 库 litecode_kb / vector 扩展 → 随机密码写入 config.json 的 kb.dsn
+#   之后每次: 只启动; config 里已有 dsn 时按其中的密码同步一次 (数据目录被清空过也能自愈)
+#   托盘停服务用 wsl --terminate, PG 会被直接杀掉, 下次启动按 WAL 自动恢复 (崩溃安全)
+# 任何失败只打日志并以非 0 退出, 调用方忽略 —— 知识库起不来不影响 LiteCode 其他功能。
+set -uo pipefail
+PGBIN=/usr/lib/postgresql/16/bin
+DATA=${LITECODE_KB_PGDATA:-/var/lib/litecode/kb_pg}
+PORT=${LITECODE_KB_PGPORT:-15432}
+CFG=${LITECODE_CONFIG:-/opt/litecode/config.json}
+SOCK=/run/postgresql
+as_pg() { su postgres -s /bin/sh -c "$1"; }
+
+[ -x "$PGBIN/postgres" ] || { echo "没有安装 PostgreSQL 16, 跳过知识库数据库"; exit 0; }
+mkdir -p "$SOCK" && chown postgres:postgres "$SOCK"
+if [ ! -s "$DATA/PG_VERSION" ]; then
+  echo "首次初始化知识库数据库: $DATA"
+  mkdir -p "$DATA" && chown postgres:postgres "$DATA" && chmod 700 "$DATA"
+  as_pg "$PGBIN/initdb -D '$DATA' -U postgres -E UTF8 --locale=C.UTF-8 --auth-local=peer --auth-host=scram-sha-256" >/dev/null || exit 1
+fi
+chown -R postgres:postgres "$DATA"
+if ! pgrep -u postgres -f "$PGBIN/postgres -D $DATA" >/dev/null; then
+  rm -f "$DATA/postmaster.pid"        # 上次被 wsl --terminate 杀掉留下的锁文件
+  as_pg "$PGBIN/pg_ctl -D '$DATA' -l '$DATA/server.log' -w -t 60 start -o '-c listen_addresses=127.0.0.1 -c port=$PORT -c unix_socket_directories=$SOCK -c shared_buffers=64MB -c max_connections=30'" >/dev/null || {
+    echo "知识库数据库启动失败, 见 $DATA/server.log"; tail -5 "$DATA/server.log"; exit 1; }
+fi
+
+python3 - "$CFG" "$PORT" "$SOCK" <<'PY'
+import json, secrets, subprocess, sys
+from urllib.parse import urlparse
+cfg_path, port, sock = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(cfg_path, encoding="utf-8") as f:
+    cfg = json.load(f)
+kb = cfg.get("kb") or {}
+if kb.get("enabled") is False:
+    print("config.json kb.enabled=false, 只启动数据库不改配置"); sys.exit(0)
+pw = urlparse(kb.get("dsn") or "").password or secrets.token_hex(16)
+sql = """
+SELECT format('CREATE ROLE litecode_kb LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD %L', :'pw')
+ WHERE NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'litecode_kb') \\gexec
+SELECT format('ALTER ROLE litecode_kb PASSWORD %L', :'pw') \\gexec
+SELECT 'CREATE DATABASE litecode_kb OWNER litecode_kb'
+ WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'litecode_kb') \\gexec
+\\c litecode_kb
+CREATE EXTENSION IF NOT EXISTS vector;
+"""
+r = subprocess.run(["su", "postgres", "-s", "/bin/sh", "-c",
+                    f"psql -q -X -v ON_ERROR_STOP=1 -h {sock} -p {port} -d postgres -v pw={pw}"],
+                   input=sql, text=True, capture_output=True)
+if r.returncode:
+    print("建知识库用户/库失败:", r.stderr.strip()[-500:]); sys.exit(1)
+dsn = f"postgresql://litecode_kb:{pw}@127.0.0.1:{port}/litecode_kb"
+if kb.get("dsn") != dsn or kb.get("enabled") is not True:
+    cfg["kb"] = {**kb, "enabled": True, "dsn": dsn}
+    with open(cfg_path, "r+", encoding="utf-8") as f:      # 原地改写
+        f.seek(0); f.write(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n"); f.truncate()
+    print("已写入 config.json kb.dsn")
+print("知识库数据库就绪 127.0.0.1:" + port)
+PY

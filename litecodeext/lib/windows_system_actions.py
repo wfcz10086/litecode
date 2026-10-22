@@ -330,3 +330,71 @@ def perform(action, folder, args):
     if action == 'run_powershell':
         return run_powershell(args)
     raise ValueError('不支持的系统动作')
+
+
+# ── 截图失败时的会话诊断 (2026-10-22 真机: 截图报 "Windows graphics function failed", 模型看到进程表里有
+# LogonUI 就断定"屏幕锁了" —— 那其实是另一个会话的登录界面; 真因多半是远程桌面窗口被最小化) ──
+_CONN_STATE = {0: '活动', 1: '已连接', 2: '正在连接', 3: '影子', 4: '已断开', 5: '空闲', 6: '监听', 7: '重置', 8: '关闭', 9: '初始化'}
+
+
+def desktop_session_state():
+    """本进程所在 Windows 会话: {session, connect, protocol(0 控制台/2 远程桌面), flags(0 锁定/1 未锁/-1 未知)}。"""
+    import ctypes
+    from ctypes import wintypes
+    k32, wts = ctypes.windll.kernel32, ctypes.windll.wtsapi32
+    sid = wintypes.DWORD()
+    if not k32.ProcessIdToSessionId(k32.GetCurrentProcessId(), ctypes.byref(sid)):
+        return {}
+
+    def query(info_class):
+        buf, size = ctypes.c_void_p(), wintypes.DWORD()
+        if not wts.WTSQuerySessionInformationW(None, sid.value, info_class, ctypes.byref(buf), ctypes.byref(size)):
+            return b''
+        try:
+            return ctypes.string_at(buf, size.value)
+        finally:
+            wts.WTSFreeMemory(buf)
+    out = {'session': sid.value}
+    raw = query(8)    # WTSConnectState
+    if len(raw) >= 4:
+        out['connect'] = int.from_bytes(raw[:4], 'little')
+    raw = query(16)   # WTSClientProtocolType
+    if len(raw) >= 2:
+        out['protocol'] = int.from_bytes(raw[:2], 'little')
+    raw = query(25)   # WTSSessionInfoEx: Level(4) + SessionId(4) + SessionState(4) + SessionFlags(4)
+    if len(raw) >= 16:
+        out['flags'] = int.from_bytes(raw[12:16], 'little', signed=True)
+    return out
+
+
+def capture_failure_hint(state=None):
+    """截图/画面类失败时附给模型的人话诊断。"""
+    try:
+        st = desktop_session_state() if state is None else state
+    except Exception:
+        st = {}
+    if not st:
+        return ''
+    conn, proto, flags = st.get('connect'), st.get('protocol'), st.get('flags')
+    if conn == 4:
+        cause = (f'本会话已断开 (远程桌面被关掉或断线), 画面不会绘制; 请用户重新连接远程桌面, 或用 windows_system '
+                 f'run_powershell 执行 tscon {st["session"]} /dest:console 把会话接回控制台后再操作')
+    elif flags == 0 and proto == 2:   # 2026-10-22 真机: 远程桌面锁屏, tscon 接回控制台即解锁, 不需要密码
+        cause = (f'本会话是锁屏的远程桌面; 用 windows_system run_powershell 执行 tscon {st["session"]} /dest:console '
+                 f'把会话接回控制台即可解锁 (会断开对方的远程桌面窗口), 然后重试')
+    elif flags == 0:
+        cause = '本会话处于锁屏状态, 请用户解锁后再操作'
+    elif proto == 2:
+        cause = ('本会话是远程桌面、已连接且未锁定 —— 多半是远程桌面窗口被最小化 (最小化时 Windows 停止绘制, 截图全部失败); '
+                 '请用户把远程桌面窗口还原, 或断开后 tscon 接回控制台')
+    else:
+        cause = '控制台会话未锁定, 可能是显示器休眠、UAC 安全桌面弹窗或显卡驱动问题; 稍等几秒重试一次'
+    return (f"\n[会话诊断] 会话 {st.get('session')} · {'远程桌面' if proto == 2 else '控制台' if proto == 0 else '协议未知'} · "
+            f"{_CONN_STATE.get(conn, '状态未知')} · {'锁定' if flags == 0 else '未锁定' if flags == 1 else '锁定状态未知'}。"
+            f"判断: {cause}。注意: 进程列表里有 LogonUI 不代表本会话锁屏 (常是别的会话的登录界面), 不要据此下结论。")
+
+
+def is_capture_failure(message):
+    m = str(message or '').lower()
+    return ('graphics function failed' in m or 'gdi32' in m or 'screenshoterror' in m
+            or 'getdibits' in m or 'bitblt' in m)

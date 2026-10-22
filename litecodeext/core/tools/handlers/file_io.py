@@ -14,9 +14,47 @@ from typing import Any
 from . import register
 
 
+# [large-file 2026-10-21] read_file 改为按行分段 (lib/large_file 稀疏行索引), 内存与文件大小无关:
+# - 原来 >5MB 直接 ERROR, 连 lines='1:200' 都读不了 (提示语自相矛盾); 每次 read_bytes 整读判二进制;
+# - 原来输出 20000 字符处静默截断, 模型不知道读到哪行、还剩多少;
+# 现在任何大小都可分段读, 每次输出都写明 共 N 行 / 本次 a-b / 还剩 R 行 / 下一段的 lines 参数。
+_RF_DEFAULT_LINES = 200      # 不给 lines 且文件较长时先给前 200 行
+_RF_MAX_LINES = 500          # 单次最多返回行数
+_RF_MAX_CHARS = 20000        # 单次输出字符预算 (约 5k token)
+_RF_LINE_CAP = 2000          # 单行最多显示字节, 超长行截断并标注原长
+_RF_DATA_EXTS = {".csv", ".tsv", ".jsonl", ".ndjson", ".parquet"}
+_RF_LOG_EXTS = {".log", ".out", ".err"}
+_RF_OFFICE_HINT = {
+    ".xlsx": "Excel 别读进上下文: 用 execute_shell 跑 python (pandas.read_excel(nrows=20) 看结构 → 脚本里聚合/筛选, 只打印结果)",
+    ".xls": "Excel 别读进上下文: 用 execute_shell 跑 python (pandas.read_excel(nrows=20) 看结构 → 脚本里聚合/筛选, 只打印结果)",
+    ".pdf": "PDF 用 pdf / pdf-reading 技能 (pdftotext 分页抽文本), 别直接 read_file",
+    ".docx": "Word 用 docx 技能 (python-docx / pandoc 转文本后再分段读)",
+    ".pptx": "PPT 用 pptx 技能 (python-pptx 抽文本)",
+}
+
+
+def _rf_parse_range(lines_arg: str, total: int) -> tuple[int, int] | str:
+    """'a:b' / 'a-b' / 'a:' / ':b' / '-N:' (最后 N 行) → (start, end) 1 起闭区间; 非法返回错误串。"""
+    s = str(lines_arg).strip()
+    try:
+        if s.startswith("-") and s.endswith(":") and s[1:-1].isdigit():
+            n = int(s[1:-1])
+            return max(1, total - n + 1), total
+        sep = ":" if ":" in s else "-"
+        parts = s.split(sep)
+        start = int(parts[0]) if parts[0].strip() else 1
+        end = int(parts[1]) if len(parts) > 1 and parts[1].strip() not in ("", "-1") else total
+    except ValueError:
+        return f"ERROR: lines 参数格式不对: {lines_arg!r}; 用 '起:止' 如 '1:200', 末尾 N 行用 '-100:'"
+    if start < 0:                       # '-50:-1' 之类: 按倒数处理
+        start = max(1, total + start + 1)
+    return max(1, start), min(end, total)
+
+
 @register("read_file")
 async def h_read_file(sid: str, args: dict) -> tuple[str, Any]:
     import tool_dispatch as td
+    from lib import large_file as lf
     p = Path(args["filepath"])
     if not p.is_absolute():
         for base in [td.WORKSPACE, td.BASE]:
@@ -26,67 +64,81 @@ async def h_read_file(sid: str, args: dict) -> tuple[str, Any]:
                 break
     if not p.exists():
         return f"ERROR: not found: {args['filepath']}", None
-    try:
-        _fsize = p.stat().st_size
-    except Exception:
-        _fsize = 0
-    if _fsize > td.READ_FILE_MAX_BYTES:
-        _mb = _fsize / (1024 * 1024)
-        return (
-            f"ERROR: file too large ({_mb:.1f} MB > 5 MB). "
-            "Use lines='1:200' for partial read or execute_shell with sed/grep."
-        ), None
-    if p.suffix.lower() in td._READ_FILE_BINARY_EXTS:
-        return (
-            f"ERROR: binary file extension '{p.suffix.lower()}' not supported by read_file. "
-            "Use execute_shell to inspect."
-        ), None
+    if p.is_dir():
+        return f"ERROR: 是目录不是文件: {p} (用 get_tree / find_files 看目录)", None
+    ext = p.suffix.lower()
+    if ext in td._READ_FILE_BINARY_EXTS:
+        hint = _RF_OFFICE_HINT.get(ext, "Use execute_shell (file/xxd/strings 或对应解析库) to inspect.")
+        return f"ERROR: binary file extension '{ext}' not supported by read_file. {hint}", None
     lines_arg = args.get("lines")
+    try:
+        mtime = p.stat().st_mtime
+    except OSError:
+        mtime = None
+    if not lines_arg:
+        cached = td._read_cache.get(str(p))
+        if cached and mtime is not None and cached[0] == mtime:
+            return (f"[unchanged since last read, {cached[1]} lines, {cached[2]} bytes; "
+                    f"要看其它部分用 lines='起:止' 或 '-100:']"), None
+    if await asyncio.to_thread(lf.is_binary, str(p)):
+        return ("ERROR: file appears to be binary (contains NUL bytes). "
+                "Use execute_shell with file/xxd/strings."), None
+    # 首次读大文件要扫一遍建行索引 (1GB ≈ 1s), 放线程池别卡事件循环
+    idx = await asyncio.to_thread(lf.get_index, str(p))
+    total = idx.total_lines
+    if lines_arg:
+        rng = _rf_parse_range(lines_arg, total)
+        if isinstance(rng, str):
+            return rng, None
+        start, end = rng
+        if total and start > total:
+            return (f"[文件共 {total} 行, 请求的起始行 {start} 已超出末尾。"
+                    f"末尾内容用 lines='-50:' 或 tail_log]"), None
+    else:
+        start, end = 1, total
+        if total > _RF_DEFAULT_LINES:
+            end = _RF_DEFAULT_LINES
+    want = max(0, min(end - start + 1, _RF_MAX_LINES))
+    rows = await asyncio.to_thread(lf.read_lines, str(p), start, want, _RF_LINE_CAP, idx)
+    out, used, cut_lines = [], 0, 0
+    for no, text, full in rows:
+        if full > _RF_LINE_CAP:
+            text += f" …[本行共 {full} 字节, 只显示前 {_RF_LINE_CAP}; 要全文用 execute_shell 跑脚本处理]"
+            cut_lines += 1
+        line = f"{no:4d}\t{text}"
+        if out and used + len(line) + 1 > _RF_MAX_CHARS:
+            break
+        out.append(line)
+        used += len(line) + 1
+    shown_end = start + len(out) - 1 if out else start - 1
     if not lines_arg:
         try:
-            mtime = p.stat().st_mtime
-            cached = td._read_cache.get(str(p))
-            if cached and cached[0] == mtime:
-                return f"[unchanged since last read, {cached[1]} lines, {cached[2]} chars]", None
+            td._read_cache_put(str(p), (mtime, total, idx.size))
         except Exception:
             pass
-    try:
-        _chunk = p.read_bytes()[:8192]
-        if 0 in _chunk:
-            return (
-                "ERROR: file appears to be binary (contains NUL bytes). "
-                "Use execute_shell with file/xxd/strings."
-            ), None
-    except Exception:
-        pass
-    raw = p.read_text(errors="replace")
-    try:
-        td._read_cache[str(p)] = (p.stat().st_mtime, len(raw.splitlines()), len(raw))
-    except Exception:
-        pass
-    all_lines = raw.splitlines()
-    total_lines = len(all_lines)
-    if lines_arg:
-        sep = ":" if ":" in lines_arg else "-"
-        parts = lines_arg.split(sep)
-        start = int(parts[0]) - 1 if parts[0] else 0
-        end = int(parts[1]) if len(parts) > 1 and parts[1] not in ("", "-1") else total_lines
-    else:
-        start, end = 0, total_lines
-    MAX_LINES_FULL = 200
-    if not lines_arg and total_lines > MAX_LINES_FULL:
-        header = (
-            f"[FILE TOO LARGE: {total_lines} lines total. Showing lines 1-{MAX_LINES_FULL}. "
-            f"Use lines='start:end' to read specific sections, "
-            f"or use execute_shell with grep/sed to locate relevant lines first.\n"
-            f"---\n"
-        )
-        slice_lines = all_lines[:MAX_LINES_FULL]
-        numbered = "\n".join(f"{i+1:4d}\t{l}" for i, l in enumerate(slice_lines))
-        return header + numbered, None
-    slice_lines = all_lines[start:end]
-    numbered = "\n".join(f"{start+i+1:4d}\t{l}" for i, l in enumerate(slice_lines))
-    return numbered[:20000], None
+    body = "\n".join(out)
+    whole = start == 1 and shown_end >= total
+    if whole and not cut_lines:
+        return body, None                      # 小文件整份读完: 输出与旧版一致
+    remain = max(0, total - shown_end)
+    head = f"[read_file 分段: {p.name} 共 {total} 行 / {lf.human_size(idx.size)}; 本次第 {start}-{shown_end} 行"
+    if remain:
+        head += f"; 后面还剩 {remain} 行未读"
+    head += "]"
+    tips = []
+    if remain:
+        nxt_end = min(total, shown_end + _RF_DEFAULT_LINES)
+        tips.append(f"续读下一段: read_file(filepath='{p}', lines='{shown_end + 1}:{nxt_end}')")
+        if shown_end < end:
+            tips.append(f"(本次因输出上限 {_RF_MAX_CHARS} 字符/{_RF_MAX_LINES} 行停在第 {shown_end} 行)")
+        tips.append("只看末尾: lines='-100:'")
+        if ext in _RF_LOG_EXTS or idx.size > 5 * 1024 * 1024:
+            tips.append("大日志别逐段通读: 先 search_code(query='ERROR|Traceback', path=<目录>) 或 "
+                        "execute_shell 跑 grep -n / awk 统计定位, 再按行号读附近")
+        if ext in _RF_DATA_EXTS:
+            tips.append("数据文件别读进上下文: 用 execute_shell 跑 python/pandas (分块 chunksize) 统计、筛选, 只打印结果")
+    tail = ("\n---\n[" + "; ".join(tips) + "]") if tips else ""
+    return head + "\n" + body + tail, None
 
 
 @register("write_file")
@@ -385,11 +437,22 @@ async def h_apply_blocks(sid: str, args: dict) -> tuple[str, Any]:
     return "\n".join(summary), None
 
 
+_TL_MAX_CHARS = 30000      # tail_log 单次输出预算: 超了丢最旧的行, 保留最新的
+_TL_LINE_CAP = 2000
+
+
 @register("tail_log")
 async def h_tail_log(sid: str, args: dict) -> tuple[str, Any]:
+    """[large-file 2026-10-21] 非 follow 模式走 lib/large_file 行索引: 不再读尾部 5MB 再 readlines,
+    给出 共 N 行 / 显示区间 / 往前翻的 read_file 参数; 单行超 2000 字节截断, 总输出 ≤30000 字符。
+    follow 模式只保留最近 1MB 缓冲, 日志狂刷也不涨内存。"""
+    from lib import large_file as lf
     _tl_path = args.get("path", "").strip()
-    _tl_lines = max(1, min(500, int(args.get("lines", 30))))
-    _tl_follow = max(0, min(30, int(args.get("follow_seconds", 0))))
+    try:
+        _tl_lines = max(1, min(500, int(args.get("lines", 30))))
+        _tl_follow = max(0, min(30, int(args.get("follow_seconds", 0))))
+    except (TypeError, ValueError):
+        return "ERROR: tail_log 的 lines / follow_seconds 必须是整数", None
     if not _tl_path:
         return "ERROR: tail_log 需要 path 参数", None
     _tp = Path(_tl_path)
@@ -397,34 +460,64 @@ async def h_tail_log(sid: str, args: dict) -> tuple[str, Any]:
         return f"ERROR: 文件不存在: {_tl_path}", None
     if not _tp.is_file():
         return f"ERROR: 不是文件: {_tl_path}", None
+
+    def _fit(lines: list[str], cap: bool = True) -> tuple[list[str], int]:
+        """从最新往前装, 装不下的旧行丢掉; 返回 (保留行, 丢掉行数)。cap=False: 行已按字节截过。"""
+        kept, used = [], 0
+        for ln in reversed(lines):
+            if cap and len(ln) > _TL_LINE_CAP:
+                ln = ln[:_TL_LINE_CAP] + f" …[本行共 {len(ln)} 字符, 已截断]"
+            if kept and used + len(ln) + 1 > _TL_MAX_CHARS:
+                break
+            kept.append(ln)
+            used += len(ln) + 1
+        kept.reverse()
+        return kept, len(lines) - len(kept)
+
     try:
         if _tl_follow > 0:
-            loop = asyncio.get_event_loop()  # noqa: F841
             start_pos = max(0, _tp.stat().st_size - 8192)
+            keep = 1024 * 1024
+
             async def _tail_follow():
-                out = []
+                buf = ""
                 with open(_tp, "r", errors="replace") as f:
                     f.seek(start_pos)
                     for _ in range(_tl_follow * 2):
-                        chunk = f.read()
-                        if chunk:
-                            out.append(chunk)
+                        chunk = f.read(keep)
+                        while chunk:
+                            buf = (buf + chunk)[-keep:]
+                            chunk = f.read(keep)
                         await asyncio.sleep(0.5)
-                return "".join(out)
+                return buf
             data = await asyncio.wait_for(_tail_follow(), timeout=_tl_follow + 5)
-            tail_lines = data.splitlines()[-_tl_lines:]
-        else:
-            lines_buf = []
-            with open(_tp, "r", errors="replace") as f:
-                sz = _tp.stat().st_size
-                if sz > 5 * 1024 * 1024:
-                    f.seek(sz - 5 * 1024 * 1024)
-                    f.readline()
-                lines_buf = f.readlines()
-            tail_lines = [l.rstrip("\n") for l in lines_buf[-_tl_lines:]]
-        return (
-            f"[tail -n {_tl_lines} {_tl_path}]\n" +
-            "\n".join(tail_lines)
-        ), None
+            kept, dropped = _fit(data.splitlines()[-_tl_lines:])
+            note = f" (输出上限内丢了较早的 {dropped} 行)" if dropped else ""
+            return f"[tail -f {_tl_follow}s, 最近 {len(kept)} 行 {_tl_path}{note}]\n" + "\n".join(kept), None
+        rows, idx = await asyncio.to_thread(lf.tail_lines, str(_tp), _tl_lines, _TL_LINE_CAP)
+        texts = []
+        for _no, text, full in rows:
+            if full > _TL_LINE_CAP:
+                text += f" …[本行共 {full} 字节, 已截断]"
+            texts.append(text)
+        kept, dropped = _fit(texts, cap=False)
+        if idx is None:                  # 超大文件且没建过索引: 倒读尾部, 不数总行数
+            size = _tp.stat().st_size
+            head = (f"[tail -n {_tl_lines} {_tl_path}] 文件 {lf.human_size(size)} (过大, 未统计总行数), "
+                    f"显示最后 {len(kept)} 行")
+            if dropped:
+                head += f" (超出 {_TL_MAX_CHARS} 字符上限, 丢了较早的 {dropped} 行)"
+            head += "; 定位关键字用 execute_shell grep -n / search_code, 再 read_file(lines='a:b') 读附近"
+            return head + "\n" + "\n".join(kept), None
+        first = rows[-len(kept)][0] if kept else idx.total_lines + 1
+        head = (f"[tail -n {_tl_lines} {_tl_path}] 共 {idx.total_lines} 行 / {lf.human_size(idx.size)}, "
+                f"显示第 {first}-{idx.total_lines} 行")
+        if dropped:
+            head += f" (超出 {_TL_MAX_CHARS} 字符上限, 丢了较早的 {dropped} 行)"
+        if first > 1:
+            prev_start = max(1, first - 200)
+            head += (f"; 往前翻: read_file(filepath='{_tl_path}', lines='{prev_start}:{first - 1}'); "
+                     "找关键字别逐段翻, 用 search_code 或 execute_shell grep -n")
+        return head + "\n" + "\n".join(kept), None
     except Exception as _te:
         return f"ERROR tail_log: {_te}", None

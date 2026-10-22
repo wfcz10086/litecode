@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent
 for _p in (ROOT, ROOT / "core"):
@@ -276,3 +277,68 @@ def test_file_change_classification():
     assert rb.is_file_change("drag", {}) and rb.is_file_change("click_text", {"text": "另存为"})
     assert not rb.is_file_change("hotkey", {"keys": "enter"}) and not rb.is_file_change("type_text", {"text": "x"})
     assert not rb.is_file_change("click_text", {"text": "发送"}) and not rb.is_file_change("click", {})
+
+
+# ── P0-2: 待验状态绑定 电脑 + 目标文件 + 那次修改, 同机其他成功读取不能清除 ──
+
+def _obs(ctx, i, tool, args, content='{"ok":true}'):
+    rb.observe(ctx, [{'id': str(i), 'function': {'name': tool, 'arguments': json.dumps(args, ensure_ascii=False)}}],
+               [{'tool_call_id': str(i), 'content': content}])
+
+
+def _saved(title):
+    """桌面动作的真实返回: 动作后带 windows 列表, 前台窗口标题里有文件名。"""
+    return json.dumps({'ok': True, 'action': 'hotkey', 'windows': [
+        {'handle': 1, 'title': '微信', 'process': 'WeChat.exe', 'foreground': False},
+        {'handle': 2, 'title': title, 'process': 'wps.exe', 'foreground': True}]}, ensure_ascii=False)
+
+
+def _inspect(path, alias='gpu-vm'):
+    return ('windows_system', {'alias': alias, 'action': 'inspect_file', 'path': path})
+
+
+def test_p02_readback_of_other_file_on_same_host_does_not_clear(monkeypatch):
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    _obs(ctx, 0, *DESKTOP_SAVE, content=_saved('销售表.xlsx - WPS Office'))
+    _obs(ctx, 1, *_inspect(r'C:\Users\me\Desktop\旧报表.xlsx'))
+    assert ctx.readback.pending_change, '同机读了另一个文件, 不能当作回读了刚保存的 销售表.xlsx'
+    _obs(ctx, 2, *_inspect(r'%USERPROFILE%/Desktop/销售表.XLSX'))
+    assert not ctx.readback.pending_change and rb.check(ctx) is None
+
+
+def test_p02_unrelated_powershell_or_listdir_does_not_clear_content_save(monkeypatch):
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    _obs(ctx, 0, *DESKTOP_SAVE)   # 取不到文件名的保存
+    _obs(ctx, 1, 'windows_system', {'alias': 'gpu-vm', 'action': 'run_powershell', 'script': 'Get-Date'})
+    _obs(ctx, 2, 'windows_system', {'alias': 'gpu-vm', 'action': 'list_dir', 'path': r'C:\Users\me\Desktop'})
+    assert ctx.readback.pending_change, 'Get-Date / 列目录都没读到文件内容, 不能清除待验'
+    _obs(ctx, 3, 'windows_system', {'alias': 'gpu-vm', 'action': 'run_powershell',
+                                    'script': r'Get-Content C:\Users\me\Desktop\notes.txt'})
+    assert not ctx.readback.pending_change
+
+
+def test_p02_listdir_confirms_rename_delete(monkeypatch):
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    _obs(ctx, 0, 'windows_desktop', {'alias': 'gpu-vm', 'action': 'hotkey', 'keys': 'f2'})
+    _obs(ctx, 1, 'windows_system', {'alias': 'gpu-vm', 'action': 'list_dir', 'path': r'C:\Users\me\Desktop'})
+    assert not ctx.readback.pending_change
+
+
+def test_p02_each_file_and_each_change_needs_own_readback(monkeypatch):
+    _set_gate(monkeypatch, True)
+    ctx = SimpleNamespace()
+    _obs(ctx, 0, *DESKTOP_SAVE, content=_saved('a.xlsx - WPS Office'))
+    _obs(ctx, 1, *DESKTOP_SAVE, content=_saved('b.docx - WPS 文字'))
+    _obs(ctx, 2, *_inspect(r'D:\work\a.xlsx'))
+    assert ctx.readback.pending_change and rb.pending_targets(ctx) == ['gpu-vm:b.docx']
+    _obs(ctx, 3, *_inspect(r'D:\work\b.docx'))
+    assert not ctx.readback.pending_change
+    # 回读之后又改了 a: 之前那次回读不算, 只有改后再读同一文件才清
+    _obs(ctx, 4, *DESKTOP_SAVE, content=_saved('a.xlsx - WPS Office'))
+    _obs(ctx, 5, *_inspect(r'D:\work\b.docx'))
+    assert rb.pending_targets(ctx) == ['gpu-vm:a.xlsx']
+    text = rb.check(ctx)
+    assert text.startswith(rb.PREFIX) and 'a.xlsx' in text

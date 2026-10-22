@@ -18,11 +18,18 @@ from tempfile import TemporaryDirectory
 _WEBUI = Path(__file__).resolve().parent.parent / "web_ui.py"
 
 
+# 合并函数调用的同文件辅助函数/常量一并抽出 (2026-10-21 起重导还要带回每轮 usage / desktop_steps)
+_HELPERS = ("_TURN_META", "_turns", "_merge_cached_turn_meta")
+
+
 def _load_func(name: str):
     tree = ast.parse(_WEBUI.read_text(encoding="utf-8"))
+    body = [n for n in tree.body
+            if (isinstance(n, ast.FunctionDef) and n.name in _HELPERS)
+            or (isinstance(n, ast.Assign) and any(getattr(t, "id", "") in _HELPERS for t in n.targets))]
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == name:
-            mod = ast.Module(body=[node], type_ignores=[])
+            mod = ast.Module(body=body + [node], type_ignores=[])
             ns = {"json": json}
             exec(compile(mod, str(_WEBUI), "exec"), ns)
             return ns[name]

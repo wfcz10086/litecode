@@ -205,6 +205,26 @@ async def asset(node_id: str, asset: str, request: Request):
                              headers={'Cache-Control': 'no-store'})
 
 
+# [2026-10-20] 安装时 Windows 可选功能装不上 OpenSSH (连不上 Windows Update / WSUS) 就下载这里自带的微软官方
+# Win32-OpenSSH 包; 设备端按 bootstrap 里写死的 sha256 校验, 再验 sshd.exe 的微软签名。
+VENDOR = {'openssh.zip': 'OpenSSH-Win64-v10.0.0.0p2.zip'}
+
+
+@router.get('/api/windows/device/{node_id}/vendor/{name}')
+async def vendor(node_id: str, name: str, request: Request):
+    try:
+        await asyncio.to_thread(manager().authenticate, node_id, credential(request))
+    except AuthError:
+        raise auth_failed()
+    except Exception as exc:
+        raise internal_error('vendor', exc)
+    if name not in VENDOR:
+        raise HTTPException(404, '不存在的安装包')
+    from fastapi.responses import FileResponse
+    path = Path(__file__).resolve().parents[1].joinpath('lib', 'windows_vendor', VENDOR[name])
+    return FileResponse(path, media_type='application/octet-stream', headers={'Cache-Control': 'no-store'})
+
+
 def _versions_payload(workspace):
     from lib.windows_nodes import asset_hashes, component_versions
     from lib import windows_node_signing as signing
@@ -263,7 +283,7 @@ async def status(node_id: str, request: Request):
     if state not in ('installing', 'online', 'error', 'uninstall_failed'):
         raise HTTPException(400, '状态无效')
     stage = data.get('stage', '')
-    if stage not in ('', 'ssh', 'python', 'packages', 'agent'):
+    if stage not in ('', 'ssh', 'ssh_skipped', 'python', 'packages', 'agent'):   # ssh_skipped: OpenSSH 没装上但继续安装 (2026-10-20)
         raise HTTPException(400, '安装阶段无效')
     try:
         await asyncio.to_thread(manager().heartbeat, node_id, credential(request), state, data.get('error', ''), stage)

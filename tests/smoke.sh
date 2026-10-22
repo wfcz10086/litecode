@@ -218,24 +218,27 @@ assert not missing, f'签名缺参数: {missing}'
 print('stream signature OK')
 "
 
-# ── 13. tests/ pytest 无新增失败 (2026-08-26 补的验收缺口) ──
-# 背景: M1-M5b 七轮里程碑验收跑的是 test_full.py --offline + 本脚本, **没跑 tests/ 下的
-# pytest 文件**, 导致 test_reasoning_stall_wording 因行号漂移全线失败七轮无人发现。
-# 本检查拿实跑结果跟 tests/pytest_known_failures.txt 比对, **只拦新增失败**
-# (2026-10-17 起基线已清零; 在线类用例由 tests/conftest.py 默认排除, 本检查不连任何服务)。
-run_check "13. tests/ pytest 无新增失败" bash -c "
-BASE='$ROOT/tests/pytest_known_failures.txt'
-[ -f \"\$BASE\" ] || { echo \"基线文件缺失: \$BASE\"; exit 1; }
-ACTUAL=\$(cd '$ROOT' && timeout 300 python3 -m pytest tests/ -q -p no:cacheprovider \
-    --ignore=tests/web --ignore=tests/regression 2>/dev/null \
-    | grep -E '^(FAILED|ERROR) ' | sed -E 's/^(FAILED|ERROR) //; s/ - .*//' | sort)
-KNOWN=\$(grep -v '^#' \"\$BASE\" | grep -v '^\$' | sort)
-NEW=\$(comm -23 <(echo \"\$ACTUAL\") <(echo \"\$KNOWN\"))
-if [ -n \"\$NEW\" ]; then
-    echo '新增失败 (不在基线内):'; echo \"\$NEW\" | sed 's/^/    /'; exit 1
-fi
-echo \"无新增失败 (基线 \$(printf '%s' \"\$KNOWN\" | grep -c .) 条)\"
-exit 0
+# ── 13. tests/ pytest 必须全过 (以 pytest / timeout 的退出码判定) ──
+# 背景: M1-M5b 七轮里程碑验收没跑 tests/ 下的 pytest, 失败七轮无人发现 (2026-08-26 补本项)。
+# [P0-6 2026-10-21] 原实现只 grep 输出里的 FAILED/ERROR 行再和基线比对, 丢了退出码:
+# pytest 超时 (timeout 返回 124)、收集阶段崩溃、内部错误 (rc 2/3/4)、一个用例都没收集到 (rc 5)
+# 时输出里没有 FAILED 行, 全部被当成通过。现在 pytest/timeout 任何非 0 退出码都判失败。
+# (基线 tests/pytest_known_failures.txt 已于 2026-10-17 清零并废弃; 在线类用例由 tests/conftest.py 默认排除。)
+run_check "13. tests/ pytest 全过" bash -c "
+LOG=\$(mktemp)
+cd '$ROOT' && timeout -k 10 \${SMOKE_PYTEST_TIMEOUT:-300} python3 -m pytest tests/ -q -p no:cacheprovider \
+    --ignore=tests/web --ignore=tests/regression > \"\$LOG\" 2>&1
+rc=\$?
+case \$rc in
+    0)   tail -1 \"\$LOG\"; rm -f \"\$LOG\"; exit 0 ;;
+    124|137) echo \"pytest 超时 (\${SMOKE_PYTEST_TIMEOUT:-300}s, rc=\$rc)\" ;;
+    5)   echo 'pytest 没有收集到任何用例 (rc=5)' ;;
+    *)   echo \"pytest 失败 rc=\$rc\" ;;
+esac
+grep -E '^(FAILED|ERROR) ' \"\$LOG\" | head -20 | sed 's/^/    /'
+tail -5 \"\$LOG\" | sed 's/^/    /'
+rm -f \"\$LOG\"
+exit 1
 "
 
 # ── summary ──

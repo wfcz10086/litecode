@@ -7,7 +7,9 @@ from pathlib import Path, PureWindowsPath
 import re
 
 CHUNK = 4 * 1024 * 1024          # 单块原始字节上限，base64 后约 5.3MB，远低于请求体 24MB 上限
-MAX_TRANSFER = 50 * 1024 * 1024  # 单个文件传输上限
+# [2026-10-21] 50MB → 1GB: 用户要求能传 50MB 以上的大文件。两端都改成按块流式读写/算哈希, 内存只占一块。
+# 实测回连通道约 2.3MB/s, 1GB 约 7-8 分钟。
+MAX_TRANSFER = 1024 * 1024 * 1024  # 单个文件传输上限
 DOWNLOAD_SUBDIR = 'LiteCode'     # 落地在 %USERPROFILE%\Downloads\LiteCode\
 
 
@@ -15,12 +17,31 @@ def sha256_hex(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def sha256_file(path, block=1024 * 1024):
+    """流式算文件 sha256, 不把整个文件读进内存。"""
+    digest = hashlib.sha256()
+    with open(path, 'rb') as handle:
+        for piece in iter(lambda: handle.read(block), b''):
+            digest.update(piece)
+    return digest.hexdigest()
+
+
+def read_chunk(path, index):
+    """按块序号从文件读第 index 块原始字节。"""
+    size = Path(path).stat().st_size
+    if not 0 <= index < chunk_count(size):
+        raise ValueError('块序号超出范围')
+    with open(path, 'rb') as handle:
+        handle.seek(index * CHUNK)
+        return handle.read(CHUNK)
+
+
 def chunk_count(size):
     """给定字节数需要的块数；0 字节也算 1 块，保证空文件也能走同一流程。"""
     if size < 0:
         raise ValueError('文件大小非法')
     if size > MAX_TRANSFER:
-        raise ValueError('文件超过 50MB 传输上限')
+        raise ValueError('文件超过 1GB 传输上限')
     return max(1, (size + CHUNK - 1) // CHUNK)
 
 
@@ -42,7 +63,7 @@ def reassemble(chunks, expected_sha256):
         raise ValueError('分块缺失，无法重组') from exc
     data = b''.join(ordered)
     if len(data) > MAX_TRANSFER:
-        raise ValueError('重组后超过 50MB 上限')
+        raise ValueError('重组后超过 1GB 上限')
     if sha256_hex(data) != expected_sha256:
         raise ValueError('整体 sha256 校验失败，传输已损坏')
     return data
@@ -107,6 +128,8 @@ def resolve_upload_source(workspace, candidate):
     """
     uploads = (Path(workspace) / 'uploads').resolve()
     path = Path(candidate)
+    if not path.is_absolute() and path.parts[:1] == ('uploads',):
+        path = Path(*path.parts[1:]) if len(path.parts) > 1 else Path('.')   # 模型常写 "uploads/x.bin" (2026-10-21 E2E)
     target = (path if path.is_absolute() else uploads / path).resolve()
     if target != uploads and uploads not in target.parents:
         raise ValueError('上传源文件必须位于工作区 uploads/ 目录内，禁止上传工作区根目录或其它内部目录的文件')

@@ -165,30 +165,20 @@ def _skill_usage_path() -> Path:
     return SKILLS_DIR / "_usage.json"
 
 def _record_skill_usage(skill_name: str):
-    """记录某 skill 被加载, 用于后续分析哪些 skill 活跃/冷门"""
-    with _skill_usage_lock:
-        try:
-            p = _skill_usage_path()
-            data = {}
-            if p.exists():
-                try:
-                    data = json.loads(p.read_text())
-                except Exception:
-                    data = {}
-            entry = data.setdefault(skill_name, {"loaded": 0, "first_ts": time.time(), "last_ts": 0})
-            entry["loaded"] = entry.get("loaded", 0) + 1
-            entry["last_ts"] = time.time()
-            p.write_text(json.dumps(data, ensure_ascii=False, indent=2))
-        except Exception as e:
-            log.warning(f"  [skill_usage] record failed: {e}")
+    """记录某 skill 被加载 (load_skill)。[2026-10-22] 统计挪到 WORKSPACE/skills_usage.json
+    (lib/skill_registry.py, 升级不丢; pytest 下指到临时目录), 同一轮同一技能只计一次 (lib/skill_turn.py)。"""
+    try:
+        from lib import skill_turn
+        skill_turn.note(skill_name)
+    except Exception as e:
+        log.warning(f"  [skill_usage] record failed: {e}")
 
 def get_skill_usage_summary() -> str:
-    """返回 skill 使用统计摘要, 用于自我反思"""
+    """返回 skill 使用统计摘要, 用于自我反思 (新统计 + 旧 skills/_usage.json, 测试残留已滤)"""
     try:
-        p = _skill_usage_path()
-        if not p.exists():
-            return "(无使用记录)"
-        data = json.loads(p.read_text())
+        from lib import skill_registry
+        data = {k: {"loaded": v["count"], "last_ts": v["last"]}
+                for k, v in skill_registry.usage(SKILLS_DIR, include_test=bool(os.environ.get("PYTEST_CURRENT_TEST"))).items()}
         if not data:
             return "(无使用记录)"
         # 按加载次数排序
@@ -289,7 +279,10 @@ def _save_checkpoint(filepath: Path, content: str):
 def _emit_tool_telemetry(tool_name, args, duration_ms, result_len, sid="", error=""):
     """v1.8 P36-c: 走 core/telemetry.py 统一入口；业务字段保留。"""
     try:
-        args_summary = repr(args)[:80].replace("\n", " ")
+        _shown = args
+        if isinstance(args, dict) and any(k in args for k in ("api_key", "password", "token", "secret")):
+            _shown = {k: ("***" if k in ("api_key", "password", "token", "secret") and v else v) for k, v in args.items()}
+        args_summary = repr(_shown)[:80].replace("\n", " ")   # 遥测别落明文 key (manage_models add 带 api_key)
         fields = {
             "tool_name": tool_name,
             "args_keys": sorted(list(args.keys())) if isinstance(args, dict) else [],
@@ -386,6 +379,14 @@ async def _execute_tool_impl(name: str, args: dict, sid: str = None) -> tuple[st
             cwd = _cp if _cp.is_absolute() else WORKSPACE / _cp
             if not cwd.is_dir():
                 return f"ERROR: execute_shell cwd 不存在或不是目录: {cwd}", None
+        # [sec 2026-10-21] 拒绝规则前后台共用 (原来只在前台 execute_shell_async 里查, background 直接绕过)
+        try:
+            from core.executor_v4 import shell_policy_violation as _policy
+        except ImportError:
+            from executor_v4 import shell_policy_violation as _policy
+        _deny = _policy(cmd, str(cwd or ""))
+        if _deny:
+            return _deny, None
         if background:
             return await _exec_bg(cmd, health_url, sid=sid, keep=keep_alive, cwd=cwd), None
         # [v1.0] 非 background 的硬上限 - 防止误用启动服务挂死主循环

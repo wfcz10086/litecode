@@ -7,6 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 
 router = APIRouter()
@@ -14,6 +15,7 @@ ORDER = 10  # 注册顺序 (routers.discover 按此升序 include, 路径重叠�
 
 
 from lib import version as _version  # noqa: E402
+from routers.upload_router import max_upload_mb  # noqa: E402
 
 
 @router.get("/api/health")
@@ -30,13 +32,15 @@ async def api_health(request: Request):
                 "ctx": S.ctx_window,
                 "backend_url": d.get("backend_url", ""),
                 "backend_type": d.get("backend_type", ""),
-                "max_upload_mb": int(_ui_cfg.get("max_upload_mb", 20)),
+                "max_upload_mb": max_upload_mb(),
                 "multimodal_max_images": int(_ui_cfg.get("multimodal_max_images", 6)),
                 "supports_vision": bool(S.cfg.get("model", {}).get("supports_vision", False)),
                 **_version.info(),
             }
     except Exception:
-        return {"ok": False, "model": S.model, "ctx": S.ctx_window, **_version.info()}
+        # 上游挂了也给上传上限, 否则前端回落到 20MB 默认把大文件挡在浏览器端
+        return {"ok": False, "model": S.model, "ctx": S.ctx_window,
+                "max_upload_mb": max_upload_mb(), **_version.info()}
 
 
 @router.get("/api/questions")
@@ -65,7 +69,7 @@ async def api_map_force_update(request: Request):
     require_auth(request)
     if S.aproxy is None:
         return {"error": "server unavailable"}
-    body = await request.json()
+    body = await json_object(request)
     d = await S.aproxy("/v1/map_force_update", "POST", json=body)
     return d or {"error": "server unavailable"}
 
@@ -77,6 +81,39 @@ async def api_bgprocs(request: Request):
         return {"procs": []}
     d = await S.aproxy("/v1/bgprocs")
     return d or {"procs": []}
+
+
+@router.get("/api/bgprocs/{pid}/tail")
+async def api_bgprocs_tail(pid: str, request: Request, lines: int = 100):
+    """[ui-audit 2026-10-21] 后台面板「日志」按钮一直 404 (前端显示"tail 端点尚未实现")。
+    只读 server 登记过的该 pid 的 log 文件 (路径来自 /v1/bgprocs, 不接受前端传路径), 取末尾 N 行。"""
+    require_auth(request)
+    if not pid.isdigit():
+        raise HTTPException(400, "invalid pid")
+    lines = max(1, min(int(lines or 100), 2000))
+    if S.aproxy is None:
+        raise HTTPException(503, "server unavailable")
+    d = await S.aproxy("/v1/bgprocs")
+    procs = (d or {}).get("procs") or []
+    info = next((p for p in procs if str(p.get("pid")) == pid), None)
+    if not info:
+        raise HTTPException(404, "后台任务不存在或已结束")
+    log = str(info.get("log") or "")
+    if not log:
+        return {"pid": pid, "log": "", "note": "该任务没有登记日志文件"}
+    fp = Path(log)
+    if not fp.is_file():
+        return {"pid": pid, "log": "", "note": f"日志文件不存在: {log}"}
+
+    def _tail() -> str:
+        with fp.open("rb") as f:
+            f.seek(0, 2)
+            size = f.tell()
+            f.seek(max(0, size - 256 * 1024))
+            data = f.read().decode("utf-8", errors="replace")
+        return "\n".join(data.splitlines()[-lines:])
+
+    return {"pid": pid, "log": await asyncio.get_event_loop().run_in_executor(None, _tail), "path": log}
 
 
 @router.delete("/api/bgprocs/{pid}")

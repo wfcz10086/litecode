@@ -4,6 +4,10 @@
   GET  /api/sessions/{sid}/subagents/{id}         单个子代理详情 + 结果 (只读, 不标"已取走")
   POST /api/sessions/{sid}/subagents/{id}/stop    叫停运行中的子代理
   POST /api/sessions/{sid}/subagents/{id}/send    给运行中的子代理发补充指令 {"message": "..."}
+  GET  /api/sessions/{sid}/subagents/{id}/events?after=<seq>   过程记录增量拉取
+  GET  /api/sessions/{sid}/subagents/{id}/diff    子代理工作树改动 (git diff, 限 200KB)
+  POST /api/sessions/{sid}/subagents/{id}/merge   合并到发起时的基分支 (冲突即失败, 不留半合并)
+  POST /api/sessions/{sid}/subagents/{id}/discard 删工作树与分支
 
 子代理登记表在 litecode_server 进程, 本 router 只做 登录鉴权 (require_auth) + 会话归属校验
 (require_owner 语义与 sessions_router 一致; 通过结果按 (用户, sid) 缓存 60s, 会话文件 mtime 变即失效),
@@ -100,3 +104,30 @@ async def api_subagent_send(sid: str, rid: str, request: Request):
     if len(msg) > SEND_MAX * 4:
         raise HTTPException(413, f"补充指令过长 ({len(msg)} 字), 上限 {SEND_MAX} 字")
     return await _upstream(_p(sid, rid, "/send"), "POST", json={"message": msg})
+
+
+# ── [subagent-view 2026-10-22] 过程记录 (增量) + 分支操作 (前端 web_assets/subagent_view.js) ──
+
+@router.get("/api/sessions/{sid}/subagents/{rid}/events")
+async def api_subagent_events(sid: str, rid: str, request: Request, after: int = 0, limit: int = 300):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid, "/events"), params={"after": max(0, int(after)),
+                                                            "limit": max(1, min(int(limit), 300))})
+
+
+@router.get("/api/sessions/{sid}/subagents/{rid}/diff")
+async def api_subagent_diff(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid, "/diff"), timeout=60)
+
+
+@router.post("/api/sessions/{sid}/subagents/{rid}/merge")
+async def api_subagent_merge(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid, "/merge"), "POST", timeout=180)
+
+
+@router.post("/api/sessions/{sid}/subagents/{rid}/discard")
+async def api_subagent_discard(sid: str, rid: str, request: Request):
+    _guard(sid, request)
+    return await _upstream(_p(sid, rid, "/discard"), "POST", timeout=120)

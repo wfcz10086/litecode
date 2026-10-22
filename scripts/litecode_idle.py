@@ -17,7 +17,7 @@ import sys
 import time
 
 STALE = 45 * 60
-TAG = re.compile(r"\[((?:web|wx|wecom|cli|anon|dag|swe|windows)[\w-]*)\]")
+TAG = re.compile(r"\[((?:web|wx|wecom|cli|dag|swe|windows|qb)-[\w-]+|anon)\]")   # 会话名一定带 "-"; 原来把 [web_search] 也当成会话
 START = re.compile(r">>> |iter=\d+/|pre-tool|⚙ |heavy tools")
 END = re.compile(r"\[TURN-END\]|<<< ")
 
@@ -42,6 +42,9 @@ def active() -> dict:
             continue
         if END.search(line):
             last[cur] = (ts, True)
+            # 结束后的无标签工具行属于别的会话, 不再算到它头上
+            # (2026-10-21: web-xxxx 已 TURN-END, 并行会话的 "⚙ " 行被错记给它, 误判在跑 20 分钟)
+            cur = None
         elif START.search(line):
             last[cur] = (ts, False)
     now = time.time()

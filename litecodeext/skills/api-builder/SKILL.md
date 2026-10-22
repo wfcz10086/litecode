@@ -12,6 +12,7 @@ description: >
 api 接口 fastapi flask restful 后端 服务端 endpoint 路由 认证 jwt token
 websocket swagger http 服务 server uvicorn gunicorn cors middleware
 pydantic validation crud database sqlite postgresql 异步 async
+aliases: ["fastapi", "flask", "restful", "api接口", "写接口", "后端服务", "swagger", "endpoint"]
 ---
 
 # API Builder Skill

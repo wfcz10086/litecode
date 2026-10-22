@@ -15,3 +15,11 @@ collect_ignore = [
 import os as _os
 import tempfile as _tempfile
 _os.environ.setdefault("LITECODE_KEY_DIR", _tempfile.mkdtemp(prefix="lc_test_keys_"))
+
+# [skills 2026-10-22] 技能安装目录 / 启停状态 / 使用统计 (lib/skill_registry.py) 默认在 WORKSPACE,
+# 测试一律落到临时目录: 不写真实统计, 也不会把测试装的技能留在用户的已安装列表里。
+_skills_tmp = _tempfile.mkdtemp(prefix="lc_test_skills_")
+_os.environ.setdefault("LITECODE_SKILLS_HOME", _os.path.join(_skills_tmp, "skills"))
+_os.environ.setdefault("LITECODE_SKILLS_STATE", _os.path.join(_skills_tmp, "skills_state.json"))
+# [usage-ledger 2026-10-22] token 账本 (lib/usage_ledger.py) 测试期间写临时库, 不碰工作区的 usage.db
+_os.environ.setdefault("LITECODE_USAGE_DB", _os.path.join(_tempfile.mkdtemp(prefix="lc_test_usage_"), "usage.db"))

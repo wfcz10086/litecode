@@ -546,12 +546,13 @@ async def create_worktree(repo: Path, workdir: Path, agent_type: str, task: str 
             _ensure_excluded(repo)
             head = _git_ok(["rev-parse", "HEAD"], repo)
             _git_ok(["worktree", "add", str(wt), "-b", branch, "HEAD"], repo, timeout=120)
-            return head
-        head = await asyncio.to_thread(_do)
+            return head, _git(["symbolic-ref", "--short", "-q", "HEAD"], repo).stdout.strip()
+        head, base_branch = await asyncio.to_thread(_do)
     ctx = WorktreeCtx(wid=wid, agent_type=agent_type, repo_root=Path(repo), wt_root=wt,
                       workdir=Path(workdir), branch=branch, base_head=head)
     _save_meta({"id": wid, "agent_type": agent_type, "repo": str(repo), "path": str(wt),
-                "workdir": str(workdir), "branch": branch, "base": head, "status": "running",
+                "workdir": str(workdir), "branch": branch, "base": head, "base_branch": base_branch,
+                "status": "running",
                 "task": task[:200], "created": time.time()})
     return ctx
 
@@ -647,8 +648,10 @@ async def finalize_worktree(ctx: WorktreeCtx, task: str = "", merge: bool = True
         meta.update(status="no_changes")
         _save_meta(meta)
         return meta
-    if not merge:
-        meta.update(status="committed", note="子代理超时/中断/异常, 改动已提交但未自动合并, 请先 diff 核对")
+    if not merge or not auto_merge_enabled(ctx.wid):
+        meta.update(status="committed", review=merge, note=(
+            "改动已提交, 等用户在子代理面板看改动后合并或丢弃 (网页会话默认先审后合; agent.worktree_auto_merge=true 可改回自动合并)" if merge
+            else "子代理超时/中断/异常, 改动已提交但未自动合并, 请先 diff 核对"))
         _save_meta(meta)
         return meta
     async with _lock_for(ctx.repo_root):
@@ -659,6 +662,26 @@ async def finalize_worktree(ctx: WorktreeCtx, task: str = "", merge: bool = True
             meta = await _auto_resolve(meta)
     _save_meta(meta)
     return meta
+
+
+def auto_merge_enabled(wid: str = "") -> bool:
+    """子代理结束后是否自动把工作树改动合并回主工作区。
+    config agent.worktree_auto_merge 显式写了就以它为准; 没写时按发起会话定 (2026-10-22 用户定: 先审后合):
+      网页会话 (web-*) 有人在面板前 → 不自动合并, 改动提交保留, 用户看改动后合并或丢弃;
+      DAG / 定时任务 / 微信 / CLI 等无人审阅的场景 → 照旧自动合并 (流水线后续步骤要用到改动)。"""
+    try:
+        from ..config import CFG
+        cfg = (CFG.get("agent") or {}).get("worktree_auto_merge")
+    except Exception:
+        cfg = None
+    if cfg is not None:
+        return bool(cfg)
+    try:
+        from .subagent_registry import _RECORDS
+        sid = next((r.sid for r in list(_RECORDS.values()) if getattr(r, "worktree_id", "") == wid), "") if wid else ""
+    except Exception:
+        sid = ""
+    return not str(sid or "").startswith("web-")
 
 
 async def _auto_resolve(meta: dict) -> dict:
@@ -686,7 +709,9 @@ def format_report(m: dict, short: bool = False) -> str:
             head += f" 冲突文件: {', '.join(m.get('conflicts') or [])}"
             if m.get("auto_resolve_error"):
                 head += f" (自动解决失败: {m['auto_resolve_error'][:200]})"
-        if st not in _DONE_STATUSES and m.get("branch"):
+        if st == "committed" and m.get("review"):
+            head += " (等用户在界面子代理面板审阅后合并/丢弃, 不要自行 agent_worktree merge)"
+        elif st not in _DONE_STATUSES and m.get("branch"):
             head += f" (保留分支 {m['branch']}, 工作树 {m.get('path', '-')}; 用 agent_worktree diff/merge/discard 处理)"
         return head
     parts = [head, f"  分支: {m.get('branch')}  提交: {(m.get('commit') or '-')[:12]}"]

@@ -18,6 +18,8 @@ MEDIA_DEFS = [
                 "type": "object",
                 "properties": {
                     "path":       {"type": "string", "description": "图片绝对路径或相对 workspace 的路径"},
+                    "paths":      {"type": "array", "items": {"type": "string"},
+                                   "description": "多张图一起看 (最多 8 张, 按顺序为第 1~N 张): 对比 / 找不同 / 按顺序看一组截图时用; 给了就忽略 path"},
                     "mode": {
                         "type": "string",
                         "enum": ["auto", "ocr", "describe"],
@@ -30,7 +32,7 @@ MEDIA_DEFS = [
                     "prompt":     {"type": "string", "description": "自定义识别任务. 传了就覆盖 mode, 用于特殊需求 (如'只提取表格第2列')"},
                     "max_tokens": {"type": "integer", "description": "单次最多生成 tokens, 默认 4096. 页密集文档可设 8192."}
                 },
-                "required": ["path"]
+                "required": []
             }
         }
     },

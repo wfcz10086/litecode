@@ -10,6 +10,7 @@ description: >
 btc eth bitcoin ethereum 比特币 以太坊 币安 binance coinbase 加密货币 cryptocurrency
 币价 行情 k线 kline 涨跌 市值 交易量 volume 山寨币 altcoin usdt 合约 现货 spot futures
 defi nft sol bnb doge xrp 狗狗币 莱特币 瑞波 链上 whale 巨鲸 清算 liquidation
+aliases: ["币价", "币安", "binance", "coingecko", "实时价格", "现货", "合约", "usdt", "交易量", "市值", "深度", "盘口", "山寨币", "defi"]
 ---
 
 # Crypto Tracker Skill

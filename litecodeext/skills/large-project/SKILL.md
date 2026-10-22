@@ -1,12 +1,26 @@
 ---
 name: large-project
 description: "处理大型代码库、复杂项目调试与重构。触发词: 大型项目, 代码库, codebase, refactor, 重构, 全局搜索, 批量修改, 大文件, monorepo, debug 复杂问题, 整个项目, 所有文件"
+aliases: ["大型项目", "codebase", "monorepo", "代码库", "整个项目", "全局搜索", "batch refactor", "重构", "复杂项目", "跨文件调用"]
 ---
 
 # Large Project Skill
 
 ## 核心原则
 **永远不要盲目 cat 整个目录**。大项目的 token 预算比小项目紧张 10 倍。
+
+## LiteCode 工具速查 (优先用工具, 少拼 shell)
+
+| 目的 | 工具 |
+| --- | --- |
+| 目录结构 | `get_tree(path)` (自动跳过 node_modules/.git/venv 等) |
+| 建符号清单 + 调用图 | `project_init(path)` (一次), 之后 `locate_symbol(name)` 给文件:行号 + 调用链 |
+| 找定义 / 找文件 / 全文检索 | `find_symbol(name)` / `find_files(pattern)` / `search_code(query, path, ext)` |
+| 读一段 | `read_file(filepath, lines="100:150")` (冒号分隔) |
+| 改一个函数/类 | `edit_symbol` (自动找边界并做语法检查) |
+| 小改一处 / 多处多文件 | `patch_file` (old_str 唯一) / `apply_blocks` (SEARCH/REPLACE 多块一次提交) |
+| 改坏了回滚 | `snapshot_list` → `snapshot_restore` |
+| 并行探索或改多个模块 | `spawn_agent(parallel_tasks=[...])`, ≥2 个写类子代理在 git 仓库里自动用独立工作树 |
 
 ## Step 1 — 项目地图（先做，永远）
 
@@ -114,10 +128,8 @@ python changed_file.py --help 2>&1 | head -10
 # 读文件头部了解结构
 read_file filepath lines="1:30"
 
-# 读文件尾部看最新内容
-read_file filepath lines="-50:-1"   # 如果支持负数
-# 或
-execute_shell "tail -50 filepath"
+# 读文件尾部看最新内容 (日志用 tail_log)
+tail_log(path=filepath, lines=50)
 
 # 分段读大文件
 read_file filepath lines="200:280"

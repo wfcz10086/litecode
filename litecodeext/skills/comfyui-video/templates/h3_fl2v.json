@@ -1,0 +1,240 @@
+{
+ "_litecode_template": {
+  "name": "h3_fl2v",
+  "kind": "video",
+  "desc": "MiniMax H3 首尾帧生视频 (首帧 + 尾帧 + 文字)",
+  "requires_nodes": [
+   "MiniMaxH3ImageToVideo",
+   "RayInitializerAdvanced",
+   "XFuserKSamplerAdvanced"
+  ],
+  "params": {
+   "prompt": [
+    "cond.prompt"
+   ],
+   "negative": [
+    "neg.text"
+   ],
+   "seed": [
+    "sample.noise_seed"
+   ],
+   "steps": [
+    "sample.steps"
+   ],
+   "width": [
+    "cond.width"
+   ],
+   "height": [
+    "cond.height"
+   ],
+   "frames": [
+    "cond.length"
+   ],
+   "fps": [
+    "mkvideo.fps"
+   ]
+  },
+  "defaults": {
+   "steps": 8,
+   "width": 864,
+   "height": 480,
+   "frames": 124
+  },
+  "notes": "宽高 32 的倍数 (480/768/864/1344…, 720 不行); 帧数 17n+5 (22≈1s 73≈3s 124≈5s); 24fps; 线上默认 8 步; ray_init 运行时跟随服务器最近一次 Raylight 任务的参数 (复用已加载 worker), 没有历史才用模板值 (4 卡 Ulysses, TORCH_FLASH)",
+  "inputs": {
+   "first": "load_first.url",
+   "last": "load_last.url"
+  },
+  "required_inputs": [
+   "first",
+   "last"
+  ]
+ },
+ "prompt": {
+  "ray_init": {
+   "class_type": "RayInitializerAdvanced",
+   "inputs": {
+    "ray_cluster_address": "local",
+    "ray_cluster_namespace": "litecode",
+    "GPU": 4,
+    "ulysses_degree": 4,
+    "ring_degree": 1,
+    "cfg_degree": 1,
+    "dp_degree": 1,
+    "sync_ulysses": false,
+    "clear_vram_after_sampling": true,
+    "FSDP": false,
+    "FSDP_CPU_OFFLOAD": false,
+    "XFuser_attention": "TORCH_FLASH",
+    "skip_comm_test": true,
+    "use_mmap": true,
+    "GPU_SELECT": "",
+    "ray_object_store_gb": 2.0,
+    "ray_dashboard_address": "None",
+    "torch_dist_address": "None"
+   }
+  },
+  "unet": {
+   "class_type": "RayUNETLoader",
+   "inputs": {
+    "unet_name": "minimax_h3_fl2va_int8_convrot.safetensors",
+    "weight_dtype": "default",
+    "ray_actors_init": [
+     "ray_init",
+     0
+    ]
+   }
+  },
+  "clip": {
+   "class_type": "CLIPLoader",
+   "inputs": {
+    "clip_name": "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors",
+    "type": "minimax",
+    "device": "default"
+   }
+  },
+  "vae_v": {
+   "class_type": "VAELoader",
+   "inputs": {
+    "vae_name": "minimax_h3_video_vae_fp16.safetensors"
+   }
+  },
+  "vae_a": {
+   "class_type": "VAELoader",
+   "inputs": {
+    "vae_name": "minimax_h3_audio_vae_fp32.safetensors"
+   }
+  },
+  "load_first": {
+   "class_type": "LoadImageFromURL",
+   "inputs": {
+    "url": ""
+   }
+  },
+  "load_last": {
+   "class_type": "LoadImageFromURL",
+   "inputs": {
+    "url": ""
+   }
+  },
+  "cond": {
+   "class_type": "MiniMaxH3ImageToVideo",
+   "inputs": {
+    "clip": [
+     "clip",
+     0
+    ],
+    "vae": [
+     "vae_v",
+     0
+    ],
+    "prompt": "镜头平滑过渡, 从首帧画面自然演变到尾帧画面",
+    "width": 864,
+    "height": 480,
+    "length": 124,
+    "first_frame": [
+     "load_first",
+     0
+    ],
+    "last_frame": [
+     "load_last",
+     0
+    ]
+   }
+  },
+  "neg": {
+   "class_type": "CLIPTextEncode",
+   "inputs": {
+    "clip": [
+     "clip",
+     0
+    ],
+    "text": ""
+   }
+  },
+  "sample": {
+   "class_type": "XFuserKSamplerAdvanced",
+   "inputs": {
+    "add_noise": "enable",
+    "noise_seed": 0,
+    "steps": 8,
+    "cfg": 1.0,
+    "sampler_name": "res_multistep",
+    "scheduler": "simple",
+    "ray_actors": [
+     "unet",
+     0
+    ],
+    "positive": [
+     "cond",
+     0
+    ],
+    "negative": [
+     "neg",
+     0
+    ],
+    "latent_image": [
+     "cond",
+     1
+    ],
+    "start_at_step": 0,
+    "end_at_step": 10000,
+    "return_with_leftover_noise": "disable",
+    "denoise": 1.0
+   }
+  },
+  "dec_v": {
+   "class_type": "VAEDecode",
+   "inputs": {
+    "samples": [
+     "sample",
+     0
+    ],
+    "vae": [
+     "vae_v",
+     0
+    ]
+   }
+  },
+  "dec_a": {
+   "class_type": "VAEDecodeAudio",
+   "inputs": {
+    "samples": [
+     "sample",
+     0
+    ],
+    "vae": [
+     "vae_a",
+     0
+    ]
+   }
+  },
+  "mkvideo": {
+   "class_type": "CreateVideo",
+   "inputs": {
+    "images": [
+     "dec_v",
+     0
+    ],
+    "audio": [
+     "dec_a",
+     0
+    ],
+    "fps": 24.0,
+    "bit_depth": 8
+   }
+  },
+  "save": {
+   "class_type": "SaveVideo",
+   "inputs": {
+    "video": [
+     "mkvideo",
+     0
+    ],
+    "filename_prefix": "litecode/h3_fl2v",
+    "format": "auto",
+    "codec": "auto"
+   }
+  }
+ }
+}

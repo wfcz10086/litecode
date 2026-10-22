@@ -6,6 +6,13 @@ import time
 import math
 from urllib.parse import urlsplit
 
+try:                                   # 节点上组件平铺下发, 按顶层名导入
+    from windows_desktop_ocr import (_INVISIBLE, UIA_INTERACTIVE, CHROMIUM_EXES, collect_elements,
+                                     choose_element, page_content_seen, clip_rect)
+except ImportError:                    # 服务端/测试环境按包导入
+    from lib.windows_desktop_ocr import (_INVISIBLE, UIA_INTERACTIVE, CHROMIUM_EXES, collect_elements,
+                                         choose_element, page_content_seen, clip_rect)
+
 HOTKEYS = {
     'enter': ['enter'], 'escape': ['esc'], 'tab': ['tab'], 'ctrl+l': ['ctrl', 'l'],
     'ctrl+a': ['ctrl', 'a'], 'ctrl+c': ['ctrl', 'c'], 'ctrl+s': ['ctrl', 's'], 'ctrl+w': ['ctrl', 'w'],
@@ -194,13 +201,20 @@ def validate_url(url):
     return url
 
 
+def normalize_title(value):
+    return ' '.join(str(value or '').translate(_INVISIBLE).split())
+
+
 def choose_window(windows, title, handle=None):
     if handle is not None and (isinstance(handle, bool) or not isinstance(handle, int) or handle <= 0):
         raise ValueError('窗口句柄必须来自最新窗口列表')
-    matches = [window for window in windows if (not title or window['title'] == title)
-               and (handle is None or window['handle'] == handle) and (title or handle is not None)]
+    wanted = normalize_title(title)
+    matches = [window for window in windows if (not wanted or normalize_title(window['title']) == wanted)
+               and (handle is None or window['handle'] == handle) and (wanted or handle is not None)]
     if len(matches) != 1:
-        raise ValueError(f'完整窗口标题匹配 {len(matches)} 个，请先列出窗口再选择')
+        near = [w['title'] for w in windows if wanted and wanted.casefold() in normalize_title(w['title']).casefold()]
+        hint = ('；包含该文字的窗口: ' + ' | '.join(near[:5]) + '（用完整标题或 window_handle）') if near else ''
+        raise ValueError(f'完整窗口标题匹配 {len(matches)} 个，请先列出窗口再选择{hint}')
     return matches[0]
 
 
@@ -237,8 +251,12 @@ def list_windows():
                 process = psutil.Process(pid.value).name()
             except psutil.Error:
                 process = ''
+            rect = wintypes.RECT()
+            user.GetWindowRect(hwnd, ctypes.byref(rect))
             items.append({'handle': int(hwnd), 'title': title.value, 'process': process,
-                          'foreground': hwnd == user.GetForegroundWindow()})
+                          'foreground': hwnd == user.GetForegroundWindow(),
+                          'minimized': bool(user.IsIconic(hwnd)),
+                          'rect': [rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top]})
         return True
     user.EnumWindows(callback_type(visit), 0)
     return items
@@ -399,6 +417,80 @@ CREATE_BREAKAWAY_FROM_JOB = 0x01000000
 CREATE_NO_WINDOW = 0x08000000
 
 
+def _elevated():
+    try:
+        import ctypes
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return False
+
+
+def _ps_quote(value):
+    return "'" + str(value).replace("'", "''") + "'"
+
+
+def launch_limited(command, cwd=None, run=None):
+    """以当前桌面用户的**普通权限**启动 GUI 程序 (节点代理自身是管理员计划任务)。
+
+    [2026-10-22 真机] 代理用 RunLevel Highest 运行 (静默装软件需要), 它直接 Popen 的 VS Code 等窗口带
+    [Administrator]: 普通窗口拖不进文件、新建文件归管理员。做法: 注册一次性计划任务 (同一用户、交互式、
+    RunLevel Limited) 跑一个 UTF-8 带 BOM 的 .ps1 (中文路径不乱码) 执行 Start-Process, 跑完立即删任务。
+    成功返回 True; 任何一步失败返回 False, 由调用方退回原来的直接启动。"""
+    import subprocess
+    import tempfile
+    import uuid
+    run = run or subprocess.run
+    name = 'LiteCode-Open-' + uuid.uuid4().hex[:12]
+    tmp = Path(tempfile.gettempdir())
+    script = tmp / (name + '.ps1')
+    exe, rest = str(command[0]), [str(x) for x in command[1:]]
+    body = ['$ErrorActionPreference = "Stop"', f'$args2 = @({", ".join(_ps_quote(x) for x in rest)})',
+            f'$p = @{{ FilePath = {_ps_quote(exe)} }}',
+            'if ($args2.Count) { $p.ArgumentList = $args2 }']
+    if cwd:
+        body.append(f'$p.WorkingDirectory = {_ps_quote(cwd)}')
+    body += ['Start-Process @p', f'Remove-Item -LiteralPath {_ps_quote(script)} -Force -ErrorAction SilentlyContinue']
+    try:
+        for old in tmp.glob('LiteCode-Open-*.ps1'):   # 上次没删掉的残留
+            if time.time() - old.stat().st_mtime > 600:
+                old.unlink()
+        script.write_text('\r\n'.join(body) + '\r\n', encoding='utf-8-sig')
+        reg = ('$ErrorActionPreference = "Stop"; '
+               '$u = [Security.Principal.WindowsIdentity]::GetCurrent().Name; '
+               f'$a = New-ScheduledTaskAction -Execute "powershell.exe" -Argument ("-NoProfile -WindowStyle Hidden '
+               f'-ExecutionPolicy Bypass -File `"" + {_ps_quote(script)} + "`""); '
+               '$pr = New-ScheduledTaskPrincipal -UserId $u -LogonType Interactive -RunLevel Limited; '
+               f'Register-ScheduledTask -TaskName {_ps_quote(name)} -Action $a -Principal $pr -Force | Out-Null; '
+               f'Start-ScheduledTask -TaskName {_ps_quote(name)}; '
+               f'$t0 = Get-Date; while (((Get-Date) - $t0).TotalSeconds -lt 10 -and '
+               f'(Get-ScheduledTask -TaskName {_ps_quote(name)}).State -eq "Running") {{ Start-Sleep -Milliseconds 200 }}; '
+               f'$r = (Get-ScheduledTaskInfo -TaskName {_ps_quote(name)}).LastTaskResult; '
+               f'Unregister-ScheduledTask -TaskName {_ps_quote(name)} -Confirm:$false; '
+               'if ($r -ne 0) { exit 3 }')
+        r = run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', reg],
+                capture_output=True, timeout=30, creationflags=CREATE_NO_WINDOW)
+        return r.returncode == 0
+    except Exception:
+        return False
+    finally:
+        try:
+            if script.exists() and time.time() - script.stat().st_mtime > 15:
+                script.unlink()
+        except OSError:
+            pass
+
+
+def launch_gui(command, cwd=None):
+    """启动给用户用的 GUI 程序: 代理是管理员时先降权 (launch_limited), 失败再直接启动。返回是否以管理员身份打开。"""
+    if _elevated():
+        if launch_limited(command, cwd):
+            return False
+        detached_popen(command, cwd=cwd)
+        return True
+    detached_popen(command, cwd=cwd)
+    return False
+
+
 def detached_popen(command, cwd=None, popen=None):
     """启动与节点代理脱离的 GUI 程序。
 
@@ -442,9 +534,14 @@ def launch_app(args):
             if executable is None:
                 raise ValueError('未发现 VS Code 默认安装目录，请先安装 VS Code，或使用已授权的系统通道检查自定义安装路径')
             command = [str(executable)]
+        extra = args.get('args') or []
+        if not isinstance(extra, list) or len(extra) > 8 or any(not isinstance(x, str) or len(x) > 400
+                                                                or any(c in x for c in '\r\n') for x in extra):
+            raise ValueError('args 须为字符串列表 (≤8 项, 每项 ≤400 字, 不含换行)')
+        command = list(command) + extra
         # 工作目录设为"文档": 代理 cwd 曾是 System32, 记事本/WPS 的"另存为"会默认跳到那里
-        detached_popen(command, cwd=str(documents_dir()))
-        return {'method': 'mapping', 'launched': key}
+        elevated = launch_gui(command, cwd=str(documents_dir()))
+        return {'method': 'mapping', 'launched': key, 'as_admin': elevated}
     # 兜底：开始菜单搜索。只输入应用名，不执行任意命令。
     if len(name) > 80 or any(c in name for c in '\r\n\t'):
         raise ValueError('应用名称不合法')
@@ -456,6 +553,213 @@ def launch_app(args):
     return {'method': 'start_menu', 'query': name}
 
 
+def window_at(point):
+    """坐标处的顶层窗口 (点之前取): 让模型核对点到的是不是目标窗口。
+    [2026-10-21] 真机 E2E: 模型按截图坐标点"+"新建标签页, 实际点在记事本外的用户 LiteCode 窗口上。"""
+    try:
+        from ctypes import wintypes
+        user = ctypes.windll.user32
+        handle = user.WindowFromPoint(wintypes.POINT(int(point[0]), int(point[1])))
+        root = user.GetAncestor(handle, 2) if handle else 0   # GA_ROOT
+        found = next((w for w in list_windows() if w['handle'] == int(root or 0)), None)
+        return {k: found[k] for k in ('handle', 'title', 'process')} if found else None
+    except Exception:
+        return None
+
+
+def bring_to_front(handle):
+    """把窗口切到前台并核对, 返回是否确实成为前台窗口。后台计划任务里起的进程受前台锁限制,
+    SetForegroundWindow 常被拒: 先附接前台线程输入队列再切; 仍不行再按一下 alt 解除前台锁重试
+    (alt 会落到原前台窗口, 可能点亮它的菜单栏, 所以只在第一次失败后才用)。"""
+    user = ctypes.windll.user32
+    target = ctypes.c_void_p(handle)
+    user.ShowWindow(target, 9 if user.IsIconic(target) else 5)
+    for attempt in range(2):
+        if attempt:
+            try:
+                pyautogui_module().press('alt')
+            except Exception:
+                pass
+        foreground = user.GetForegroundWindow()
+        foreground_thread = user.GetWindowThreadProcessId(foreground, None)
+        thread = ctypes.windll.kernel32.GetCurrentThreadId()
+        attached = user.AttachThreadInput(thread, foreground_thread, True)
+        try:
+            user.BringWindowToTop(target)
+            user.SetForegroundWindow(target)
+        finally:
+            if attached:
+                user.AttachThreadInput(thread, foreground_thread, False)
+        time.sleep(0.2)
+        if int(user.GetForegroundWindow() or 0) == int(handle):
+            return True
+    return False
+
+
+def pick_new_window(before, windows, process_hint=''):
+    """启动后新出现的可见顶层窗口; 优先进程名吻合的。before 是启动前的句柄集合。
+    浏览器/资源管理器常复用已有进程开新窗口, 所以按句柄而不是按进程判断"新"。"""
+    hint = str(process_hint or '').lower()
+    fresh = [w for w in windows if w['handle'] not in before and w.get('title')
+             and w.get('process', '').lower() not in ('textinputhost.exe', 'shellexperiencehost.exe')]
+    preferred = [w for w in fresh if hint and w.get('process', '').lower().startswith(hint)]
+    # 同时冒出主窗口和小浮窗时 (真机: Edge 的"翻译 俄语 页面?"浮窗排在主窗口前面) 取面积最大的
+    area = lambda w: (w.get('rect') or [0, 0, 0, 0])[2] * (w.get('rect') or [0, 0, 0, 0])[3]
+    return max(preferred or fresh, key=area) if (preferred or fresh) else None
+
+
+def follow_new_window(before, process_hint='', wait=8.0, poll=0.4, lister=None):
+    """[2026-10-21] 真机: 代理在后台计划任务里起的记事本落在 LiteCode 窗口后面, 结果却报 ok,
+    模型接着 type_text 就把字打进了别的窗口。启动后等新窗口出现并切到前台, 把结果如实回报。"""
+    lister = lister or list_windows
+    deadline = time.monotonic() + wait
+    window = None
+    while time.monotonic() < deadline:
+        window = pick_new_window(before, lister(), process_hint)
+        if window:
+            break
+        time.sleep(poll)
+    if not window:
+        return {'new_window': None, 'focused': False,
+                'warning': '未发现新窗口（程序可能复用了已有窗口、仍在启动或被拦截）；先 windows/截图确认，再 focus_window 后输入'}
+    focused = bring_to_front(window['handle'])
+    return {'new_window': window, 'focused': focused}
+
+
+BROWSER_EXES = (('msedge', 'msedge.exe'), ('chrome', 'chrome.exe'), ('firefox', 'firefox.exe'))
+
+
+def _app_path(exe):
+    import winreg
+    for hive in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(hive, r'SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths' + '\\' + exe) as key:
+                value = winreg.QueryValue(key, None)
+                if value and Path(value.strip('"')).is_file():
+                    return value.strip('"')
+        except OSError:
+            continue
+    return None
+
+
+def has_default_browser():
+    """https 是否已有用户选定的默认程序。没有时 webbrowser.open 会弹"选择一个应用以打开此链接"对话框
+    (真机 2026-10-21 复现), 动作却报成功。"""
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r'Software\Microsoft\Windows\Shell\Associations'
+                            r'\UrlAssociations\https\UserChoice') as key:
+            return bool(winreg.QueryValueEx(key, 'ProgId')[0])
+    except OSError:
+        return False
+
+
+def open_url(url, browser=''):
+    """打开网址: 指定 browser 或没有默认浏览器关联时直接启动浏览器程序, 否则交给系统默认浏览器。
+    返回 (方式, 进程名提示)。"""
+    url = validate_url(url)
+    wanted = str(browser or '').strip().lower()
+    candidates = [item for item in BROWSER_EXES if not wanted or item[0] == wanted]
+    if wanted and not candidates:
+        raise ValueError('browser 只支持 msedge / chrome / firefox')
+    if wanted or not has_default_browser():
+        for name, exe in candidates:
+            path = _app_path(exe)
+            if path:
+                launch_gui([path, url], cwd=str(Path(path).parent))
+                return name, exe
+        if wanted:
+            raise ValueError(f'未发现 {wanted} 安装路径')
+    import webbrowser
+    if not webbrowser.open(url):
+        raise RuntimeError('系统浏览器未接受打开请求')
+    # 有默认关联时 Windows 仍可能因为"装了新浏览器"弹 OpenWith 选择框 (真机 2026-10-21: "Google Chrome 新建")。
+    # 发现就关掉它改为直接启动已安装的浏览器, 不把选择框留给模型去猜。
+    time.sleep(1.2)
+    choosers = openwith_windows()
+    if choosers:
+        for handle in choosers:
+            ctypes.windll.user32.PostMessageW(ctypes.c_void_p(handle), 0x0010, 0, 0)
+        for name, exe in BROWSER_EXES:
+            path = _app_path(exe)
+            if path:
+                launch_gui([path, url], cwd=str(Path(path).parent))
+                return name + '(已关闭系统"选择应用"弹框改为直接启动)', exe
+    return 'default', ''
+
+
+def openwith_windows():
+    """可见的"选择一个应用以打开此链接"弹框 (OpenWith.exe) 句柄; 它可能没有标题, windows 列表里看不到。"""
+    from ctypes import wintypes
+    try:
+        import psutil
+    except ImportError:
+        return []
+    user = ctypes.windll.user32
+    found = []
+    callback_type = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def visit(hwnd, _):
+        if user.IsWindowVisible(hwnd):
+            pid = wintypes.DWORD()
+            user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            try:
+                if psutil.Process(pid.value).name().lower() == 'openwith.exe':
+                    found.append(int(hwnd))
+            except psutil.Error:
+                pass
+        return True
+    user.EnumWindows(callback_type(visit), 0)
+    return found
+
+
+def screen_fingerprint(screen, monitor, size=(160, 100)):
+    from PIL import Image
+    shot = screen.grab(monitor)
+    return Image.frombytes('RGB', shot.size, shot.rgb).convert('L').resize(size)
+
+
+def frame_delta(a, b):
+    """两帧缩略灰度图的平均像素差 (0-255)。光标闪烁等只改动几个像素, 远低于阈值。"""
+    pa, pb = a.tobytes(), b.tobytes()
+    return sum(abs(x - y) for x, y in zip(pa, pb)) / max(1, len(pa))
+
+
+def wait_settled(min_wait=0.5, max_wait=3.0, interval=0.3, threshold=0.6, clock=None, grab=None, stable_needed=2):
+    """等界面稳定再截图: 连续 stable_needed 个间隔画面几乎不变就返回, 最多等 max_wait 秒。
+    以前固定 sleep 1.5 秒 (open_url/launch_app 4 秒): 慢的页面没加载完就截图, 快的白等。
+    要求连续两个间隔都不变: 只比一次时, 点"保存"后对话框 0.8 秒才关, 0.6 秒就会误判已稳定。
+    返回 (是否稳定, 实际等待毫秒)。抓帧失败时退化为固定等待。"""
+    clock = clock or time.monotonic
+    start = clock()
+    time.sleep(min_wait)
+    try:
+        if grab is None:
+            import mss
+            screen_ctx = mss.MSS()
+            screen = screen_ctx.__enter__()
+            monitor = screen.monitors[1]
+            grab = lambda: screen_fingerprint(screen, monitor)
+        else:
+            screen_ctx = None
+        try:
+            previous, calm = grab(), 0
+            while clock() - start < max_wait:
+                time.sleep(interval)
+                current = grab()
+                calm = calm + 1 if frame_delta(previous, current) <= threshold else 0
+                if calm >= stable_needed:
+                    return True, int((clock() - start) * 1000)
+                previous = current
+            return False, int((clock() - start) * 1000)
+        finally:
+            if screen_ctx is not None:
+                screen_ctx.__exit__(None, None, None)
+    except Exception:
+        time.sleep(max(0.0, min(max_wait, 1.5) - (clock() - start)))
+        return None, int((clock() - start) * 1000)
+
+
 def set_window_state(args):
     state = args.get('window_state_mode')
     code = WINDOW_STATES.get(state)
@@ -464,6 +768,85 @@ def set_window_state(args):
     window = choose_window(list_windows(), args.get('title', ''), args.get('window_handle'))
     ctypes.windll.user32.ShowWindow(ctypes.c_void_p(window['handle']), code)
     return {'target': window, 'window_state_mode': state}
+
+
+# ---- 可访问性树 (UI Automation): 纯逻辑 (遍历/过滤/定位) 在 windows_desktop_ocr.py 的感知部分 ----
+
+
+def _uia_root(args):
+    """目标窗口: 传了 title/window_handle 就按窗口列表唯一定位, 否则取当前前台窗口。"""
+    import uiautomation as auto
+    if args.get('title') or args.get('window_handle'):
+        window = choose_window(list_windows(), args.get('title', ''), args.get('window_handle'))
+        handle = window['handle']
+    else:
+        handle = int(ctypes.windll.user32.GetForegroundWindow() or 0)
+        window = next((w for w in list_windows() if w['handle'] == handle), {'handle': handle, 'title': ''})
+    if not handle:
+        raise ValueError('没有前台窗口；先 windows 列出窗口再指定 title / window_handle')
+    root = auto.ControlFromHandle(handle)
+    if root is None:
+        raise ValueError('该窗口不支持 UI Automation')
+    return root, window
+
+
+def _bounds(window):
+    import mss
+    with mss.MSS() as screen:
+        monitor = screen.monitors[0]   # 整个虚拟桌面 (多显示器时含副屏)
+        primary = screen.monitors[1]
+    rect = window.get('rect') or [monitor['left'], monitor['top'], monitor['width'], monitor['height']]
+    desk = [monitor['left'], monitor['top'], monitor['width'], monitor['height']]
+    return clip_rect(rect, desk) or desk, primary
+
+
+def ui_tree(args):
+    root, window = _uia_root(args)
+    bounds, primary = _bounds(window)
+    items, truncated, visited = collect_elements(root, bounds, args.get('text', ''), args.get('control_type', ''))
+    if str(window.get('process', '')).lower() in CHROMIUM_EXES and not page_content_seen(items):
+        # Chromium 只在发现有 UIA 客户端后才懒加载网页可访问性树 (真机: 第一次只有浏览器外壳), 稍等再取一次
+        time.sleep(0.8)
+        items, truncated, visited = collect_elements(root, bounds, args.get('text', ''), args.get('control_type', ''))
+    elements = compact_elements(items, primary)
+    return {'target': {k: window.get(k) for k in ('handle', 'title', 'process') if k in window},
+            'elements': elements, 'element_count': len(elements), 'truncated': truncated, 'visited': visited,
+            'screen_size': [primary['width'], primary['height']],
+            'coordinates': 'center 为屏幕物理像素 (与未压缩截图像素一致), size 为 [宽, 高]'}
+
+
+def compact_elements(items, primary):
+    """给模型看的控件列表: rect 换成 center+size, 去掉与上一项同名同中心的重复项 (按钮里再套的同名文字)。"""
+    out, last = [], None
+    for item in items:
+        key = (item['name'], tuple(item['center']))
+        if item['name'] and key == last:
+            continue
+        last = key
+        element = {'type': item['type'], 'name': item['name'], 'center': item['center'], 'size': item['rect'][2:]}
+        for extra in ('value', 'enabled'):
+            if extra in item:
+                element[extra] = item[extra]
+        x, y = item['center']
+        if not (primary['left'] <= x < primary['left'] + primary['width']
+                and primary['top'] <= y < primary['top'] + primary['height']):
+            element['offscreen'] = True   # 在副屏上, 主屏截图里看不到; click_element 仍可点
+        out.append(element)
+    return out
+
+
+def click_element(args, pyautogui):
+    root, window = _uia_root(args)
+    bounds, _ = _bounds(window)
+    items, _, _ = collect_elements(root, bounds, '', args.get('control_type', ''), limit=2000)
+    element = choose_element(items, args.get('text', ''), args.get('control_type', ''))
+    if window.get('handle') and not window.get('foreground'):
+        bring_to_front(window['handle'])
+    x, y = element['center']
+    pyautogui.moveTo(x, y, duration=0.15)
+    pyautogui.click()
+    return {'target': {k: window.get(k) for k in ('handle', 'title', 'process') if k in window},
+            'element': element, 'point': [x, y]}
 
 
 def perform(action, folder, args):
@@ -485,11 +868,26 @@ def perform(action, folder, args):
         else:
             pyautogui.click(button='right' if action == 'right_click' else 'left',
                             clicks=2 if action == 'double_click' else 1, interval=0.08)
-        info.update(before_image='before.png', point=point)
+        info.update(before_image='before.png', point=point, hit_window=window_at(point))
     elif action == 'open_url':
-        import webbrowser
-        if not webbrowser.open(validate_url(args.get('url', ''))):
-            raise RuntimeError('系统浏览器未接受打开请求')
+        before_titles = {w['handle']: w['title'] for w in list_windows()}
+        method, exe = open_url(args.get('url', ''), args.get('browser', ''))
+        info['browser'] = method
+        followed = follow_new_window(set(before_titles), exe[:-4] if exe else '', wait=4.0)
+        if not followed.get('new_window') and openwith_windows():
+            info['warning'] = '系统弹出了"选择一个应用"对话框且未找到可直接启动的浏览器；请截图后在对话框里选择浏览器'
+        if followed.get('new_window'):
+            info.update(followed)
+        else:
+            # 浏览器已开着时多半在已有窗口开了新标签页: 只认标题变了的浏览器窗口 (同为 msedge 的
+            # LiteCode 应用窗口等标题不变, 不会被误切到前台)
+            names = {e for _, e in BROWSER_EXES}
+            changed = [w for w in list_windows() if w.get('process', '').lower() in names
+                       and w['handle'] in before_titles and before_titles[w['handle']] != w['title']]
+            if changed:
+                info.update(new_window=changed[0], focused=bring_to_front(changed[0]['handle']), reused_window=True)
+            else:
+                info['warning'] = followed['warning']
     elif action == 'hotkey':
         keys = HOTKEYS[normalize_hotkey(hotkey_arg(args))]
         shell_guard('hotkey', args, args.get('shell_allowed') is True)
@@ -539,31 +937,34 @@ def perform(action, folder, args):
         window = choose_window(list_windows(), args.get('title', ''), args.get('window_handle'))
         handle = ctypes.c_void_p(window['handle'])
         if action == 'focus_window':
-            # 解除前台切换限制，并在当前交互桌面附接前台输入线程。
-            pyautogui.press('alt')
-            ctypes.windll.user32.ShowWindow(handle, 9)
-            foreground = ctypes.windll.user32.GetForegroundWindow()
-            foreground_thread = ctypes.windll.user32.GetWindowThreadProcessId(foreground, None)
-            thread = ctypes.windll.kernel32.GetCurrentThreadId()
-            attached = ctypes.windll.user32.AttachThreadInput(thread, foreground_thread, True)
-            try:
-                ctypes.windll.user32.BringWindowToTop(handle)
-                ctypes.windll.user32.SetForegroundWindow(handle)
-            finally:
-                if attached:
-                    ctypes.windll.user32.AttachThreadInput(thread, foreground_thread, False)
+            bring_to_front(window['handle'])
         else:
             if not ctypes.windll.user32.PostMessageW(handle, 0x0010, 0, 0):
                 error = ctypes.windll.kernel32.GetLastError()
                 raise RuntimeError(f'Windows 拒绝关闭窗口，错误码 {error}；目标可能权限更高 (SSH 通道仅管理员授权的别名可用 elevated=true)')
         info['target'] = window
     elif action == 'launch_app':
+        before = {w['handle'] for w in list_windows()}
         info.update(launch_app(args))
+        hint = str(args.get('name', '')).strip().lower()
+        hint = {'paint': 'mspaint', 'edge': 'msedge', 'vscode': 'code'}.get(hint, hint)
+        info.update(follow_new_window(before, hint))
+        title = normalize_title((info.get('new_window') or {}).get('title', ''))
+        if hint == 'notepad' and title and not title.lower().startswith(('untitled', '无标题', 'notepad')):
+            info['note'] = (f'Win11 记事本恢复了上次打开的标签页（{title}），当前不是空白文档；'
+                            '要新建先 hotkey ctrl+n，别在旧文件里打字')
+    elif action == 'ui_tree':
+        info.update(ui_tree(args))
+    elif action == 'click_element':
+        info.update(click_element(args, pyautogui))
     elif action == 'window_state':
         info.update(set_window_state(args))
     elif action != 'windows':
         raise ValueError('不支持的桌面动作')
-    time.sleep(1.5 if action not in ('open_url', 'launch_app') else 4)
+    if action not in ('windows', 'ui_tree', 'clipboard'):
+        slow = action in ('open_url', 'launch_app')
+        settled, waited = wait_settled(min_wait=1.0 if slow else 0.5, max_wait=8.0 if slow else 4.0)
+        info.update(settled=settled, settle_ms=waited)
     with mss.MSS() as screen:
         screen.shot(output=str(folder / 'screen.png'))
     if args.get('compress'):
@@ -574,5 +975,20 @@ def perform(action, folder, args):
     pending = action == 'close_window' and any(w['handle'] == info['target']['handle'] for w in windows)
     state = ('close_pending' if pending else 'closed' if action == 'close_window'
              else 'action_executed' if focused else 'focus_failed')
+    if action in ('launch_app', 'open_url') and info.get('new_window') and not info.get('focused'):
+        state = 'focus_failed'   # 程序起来了但没到前台: ok 仍为 true, 但先 focus_window 再输入
+        info['warning'] = '新窗口未能切到前台，键盘输入会进别的窗口；先 focus_window 再操作'
     return {'ok': focused and not pending, 'state': state, 'image': 'screen.png',
-            'windows': windows, **info}
+            'windows': windows if action == 'windows' else compact_windows(windows), **info}
+
+
+def compact_windows(windows):
+    """动作结果里附带的窗口列表只留核对前台所需字段 (位置/大小只在 windows 动作里给)。
+    [2026-10-21] 真机 E2E: 每步都带完整窗口列表 + 控件树, 56 步后上下文溢出。"""
+    out = []
+    for w in windows:
+        item = {k: w[k] for k in ('handle', 'title', 'process', 'foreground') if k in w}
+        if w.get('minimized'):
+            item['minimized'] = True
+        out.append(item)
+    return out

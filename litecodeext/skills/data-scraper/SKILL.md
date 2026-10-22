@@ -13,6 +13,7 @@ description: >
 requests beautifulsoup lxml playwright selenium httpx aiohttp
 反爬 ua cookie proxy headers 代理 验证码 限流 rate limit
 json html xml csv api 接口 逆向 数据采集 批量 增量
+aliases: ["抓取", "爬虫", "爬取", "scrape", "crawl", "采集", "spider", "xpath", "beautifulsoup"]
 ---
 
 # Data Scraper Skill

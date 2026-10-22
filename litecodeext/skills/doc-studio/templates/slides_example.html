@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>示例幻灯片</title>
+<link rel="stylesheet" href="base.css">
+<style>
+  /* 主题: 改这里的 tokens 即可整套换色 (可照抄 theme-factory/themes/*.md 的配色) */
+  :root { --ds-primary: #1F2A44; --ds-accent: #2D8B8B; --ds-bg: #FBFBF9; }
+  .slide.cover { padding: 0; color: #fff; }
+  .cover .bg { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+  .cover .shade { position: absolute; inset: 0; background: linear-gradient(90deg, rgba(10,20,30,.78) 0%, rgba(10,20,30,.2) 70%); }
+  .cover .inner { position: relative; z-index: 2; padding: 0 96px; margin: auto 0; }
+  .cover h1 { color: #fff; font-size: 72px; }
+  .cover .lead { color: rgba(255,255,255,.88); margin-top: 20px; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 48px; flex: 1; min-height: 0; }
+  .split .photo { height: 100%; }
+</style>
+</head>
+<body>
+
+<!-- 封面: 整页照片 + 渐变压暗 + 标题 -->
+<section class="slide cover">
+  <img class="bg" data-need="城市天际线, 黄昏" data-kind="photo" data-query="city skyline dusk">
+  <div class="shade"></div>
+  <div class="inner">
+    <div class="eyebrow" style="color:#8FD3D3">2026 年度汇报</div>
+    <h1>主标题写在这里</h1>
+    <p class="lead">一句话副标题: 说明这份材料要解决什么问题</p>
+  </div>
+  <div class="footer" style="color:rgba(255,255,255,.6)"><span data-credit-page></span><span>01</span></div>
+</section>
+
+<!-- 图文: 左文右图 -->
+<section class="slide">
+  <div class="eyebrow">第一部分</div>
+  <h2>一页只讲一个观点</h2>
+  <div class="split">
+    <div>
+      <p class="lead">先给结论, 再给 2~3 条支撑。每条一行能说完。</p>
+      <ul>
+        <li>要点一: 用数字说话</li>
+        <li>要点二: 少用形容词</li>
+        <li>要点三: 图片要和内容相关</li>
+      </ul>
+    </div>
+    <figure class="photo" style="margin:0">
+      <img data-need="团队在白板前讨论" data-kind="photo" data-query="open plan office workspace">
+    </figure>
+  </div>
+  <div class="footer"><span data-credit-page></span><span>02</span></div>
+  <aside class="notes" style="display:none">演讲者备注写在这里, 会进 PPT 备注栏。</aside>
+</section>
+
+<!-- 数据: 图表 + KPI -->
+<section class="slide">
+  <h2>关键数据</h2>
+  <div class="split">
+    <img data-need="季度营收" data-kind="chart"
+         data-chart='{"type":"bar","labels":["Q1","Q2","Q3","Q4"],"series":[{"name":"营收","data":[120,150,180,240]}],"unit":"万元","highlight":3}'
+         style="width:100%;height:100%;object-fit:contain">
+    <div class="grid-2" style="align-content:center">
+      <div class="card kpi"><div class="num">+33%</div><div class="label">同比增长</div></div>
+      <div class="card kpi"><div class="num">240</div><div class="label">Q4 营收 (万元)</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- 结尾: 图片来源清单 -->
+<section class="slide">
+  <h2>谢谢</h2>
+  <div class="credits" data-credits></div>
+</section>
+
+</body>
+</html>

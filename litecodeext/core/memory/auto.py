@@ -102,12 +102,16 @@ def smart_auto_memory(
                 inject_for_compress(payload)
             except ImportError:
                 pass
+            from lib.usage_ledger import record_http as _usage_rec   # [usage-ledger] 记忆提取记账
+            import time as _time
+            _t0 = _time.time()
             r = httpx.post(
                 f"{vllm_url.rstrip('/')}/chat/completions",
                 headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
                 json=payload,
                 timeout=_LLM_TIMEOUT_S,
             )
+            _usage_rec("memory", model_id, payload, r, _t0, session_id=getattr(manager, "session_id", None))
             if r.status_code != 200:
                 # [route-A 2026-07] 429/5xx 不再重试打爆 vLLM
                 log.debug(f"  [smart-memory] vLLM {r.status_code}, rule-based already done")
@@ -324,6 +328,14 @@ _RE_PREFER = _re.compile(
     r"禁止|永远不|不能再)\s*[，,:：]?\s*"
     r"([^\n]{6,200})",
 )
+# [2026-10-21] 做法纠正: 用户中途提醒"换源/加速"常是问句或祈使句, 不带"记住/以后"
+# (实测: "能不能使用国内的模型下载源" 没被记住, 下个任务又走国外源)。只抓下载源/镜像/加速类,
+# "能不能用 python 写个脚本" 这类普通任务请求不算。
+_RE_METHOD_FIX = _re.compile(
+    r"((?:能不能|可不可以|可以|应该|最好|一律|统一)?\s*(?:改用|换成|换用|改成|使用|用|走)"
+    r"[^\n，。,!！?？]{0,30}?(?:源|镜像|加速|mirror|代理|registry|仓库下载|下载站)[^\n，。,!！?？]{0,30})",
+    _re.IGNORECASE,
+)
 _RE_HOST_PORT = _re.compile(
     r"(?:host|hostname|server|主机|地址|IP)\s*[:=:]\s*"
     r"([A-Za-z0-9_\-\.]{3,80}(?::\d{2,5})?)",
@@ -356,6 +368,7 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
 
     last_idx = getattr(manager, "_rcuf_last_idx", -1)
     captured: list = []
+    global_cands: list = []     # 高置信的用户档案事实 → 全局档案 (跨会话)
 
     for i, m in enumerate(messages):
         if i <= last_idx:
@@ -367,6 +380,15 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
             continue
         if content.startswith("[SYSTEM"):
             continue
+        # 主人消息里转发的第三方内容 (<<<外部内容 … 外部内容结束>>> 信封) 不是主人说的, 不抽事实
+        content = _strip_envelopes(content)
+        _g = _global_candidates(content) if getattr(manager, "root", None) is not None else []
+        if _g:
+            global_cands.extend(_g)
+            # 这条消息的偏好/事实改由全局档案承载, 不再进会话 L1 / L3 preference (免得两处各存一份、改值后残留旧值)
+            content = _drop_sentences(content, [c for c, _ in _g])
+            if len(content) < 5:
+                continue
 
         # 1) SSH: "ssh long@10.0.0.5 -p 22 -i ~/.ssh/work"
         for mm in _RE_SSH_CMD.finditer(content):
@@ -405,6 +427,15 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
             rest = rest[:180]
             captured.append(("preference", f"{keyword}: {rest}"))
 
+        # 4b) 做法纠正 (下载源/镜像/加速)
+        for mm in _RE_METHOD_FIX.finditer(content):
+            # 存命中所在的整句 ("pip 走阿里云镜像" 只存"走阿里云镜像"会丢掉是给谁用的)
+            s = max(content.rfind(c, 0, mm.start()) for c in "\n。！？!?") + 1
+            e = min([i for i in (content.find(c, mm.end()) for c in "\n。！？!?") if i >= 0] or [len(content)])
+            fix = content[s:e].strip().rstrip("吗呢吧")
+            if len(fix) >= 4:
+                captured.append(("preference", f"做法纠正: {fix[:120]}"))
+
         # 5) [route-A 2026-07] Vault: 命令/URL/IP:port/token
         for mm in _RE_VAULT_CMD.finditer(content):
             cmd = mm.group(0).strip()[:200]
@@ -425,8 +456,10 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
 
     manager._rcuf_last_idx = len(messages) - 1
 
+    n_global = _save_global(manager, global_cands, log)
+
     if not captured:
-        return 0
+        return n_global
 
     # 去重
     seen = set()
@@ -484,8 +517,66 @@ def rule_capture_user_facts(manager: "MemoryManager", messages: list) -> int:
                 log.warning(f"  [capture-fact] L3 init failed: {_me}")
 
     log.info(f"  [capture-fact:{getattr(manager,'session_id','?')[:8]}] "
-             f"L1+L3 captured {len(final)} facts (ssh/host/pref)")
-    return len(final)
+             f"L1+L3 captured {len(final)} facts (ssh/host/pref), global {n_global}")
+    return len(final) + n_global
+
+
+# ── 全局用户档案 (core/memory/profile.py) ────────────────────────────
+_SENT_SPLIT = _re.compile(r"(?<=[。！？!?\n])")
+
+
+def _strip_envelopes(text: str) -> str:
+    try:
+        from lib.agent.untrusted import _ENVELOPE
+    except Exception:
+        return text
+    return _ENVELOPE.sub(" ", text)
+
+
+def _global_candidates(content: str) -> list:
+    """[(原句, 事实文本)]: 抽得出 key 的身份/偏好事实, 或明确长期偏好 (记住/以后/每次…)。
+    长消息 (> 300 字) 多半是任务说明, 里面的 "必须/不要" 不进全局。"""
+    from .facts import extract, is_durable_preference
+    out = []
+    for sent in _SENT_SPLIT.split(content):
+        sent = sent.strip()
+        if len(sent) < 3 or any(q in sent for q in ("吗", "?", "？")):
+            continue
+        f = extract(sent)
+        if f.key:
+            out.append((sent, f.text))
+        elif len(content) <= 300 and len(f.text) <= 150 and is_durable_preference(sent):
+            out.append((sent, f.text.rstrip("。！!")))
+    return out
+
+
+def _drop_sentences(content: str, sents: list) -> str:
+    for s in sents:
+        content = content.replace(s, " ")
+    return content.strip()
+
+
+def _save_global(manager: "MemoryManager", cands: list, log) -> int:
+    root = getattr(manager, "root", None)
+    if not cands or root is None:
+        return 0
+    try:
+        from .profile import ProfileStore, sync_index
+        ws = root.parent.parent                      # workspace/sessions/<sid> → workspace
+        sid = getattr(manager, "session_id", "")
+        store = ProfileStore.for_session(ws, sid)
+        n = 0
+        for _sent, text in cands:
+            action, fact, old = store.upsert(text, source="auto", session_id=sid)
+            if action in ("added", "updated"):
+                n += 1
+                sync_index(ws, action, fact, old, session_id=sid)
+                log.info(f"  [profile:{store.profile_id}] {action}: {fact['text']}"
+                         + (f" (替换: {old})" if old else ""))
+        return n
+    except Exception as e:
+        log.warning(f"  [profile] auto capture failed: {e}")
+        return 0
 
 
 def _redact_secret(key: str, value: str) -> str:

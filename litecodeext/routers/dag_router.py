@@ -11,6 +11,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 
 router = APIRouter()
@@ -89,7 +90,7 @@ async def api_dag_set_breakpoint(job_id: str, node_id: str, request: Request):
     job = _wui()._DAG_JOBS.get(job_id)
     if not job:
         return JSONResponse({"error": "job not found"}, status_code=404)
-    body = await request.json()
+    body = await json_object(request)
     if body.get("set", True):
         job["breakpoints"].add(node_id)
     else:
@@ -198,7 +199,7 @@ async def _llm_call(prompt: str, model_id: str, max_tokens: int = 2000, timeout:
             f"http://127.0.0.1:{port}/v1/chat/completions",
             headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
             json={"model": model_id, "stream": False, "max_tokens": max_tokens,
-                  "messages": [{"role": "user", "content": prompt}]}
+                  "messages": [{"role": "user", "content": prompt}], "litecode_source": "dag"}
         )
         r.raise_for_status()
         return r.json()["choices"][0]["message"]["content"]
@@ -211,7 +212,7 @@ def _default_model(body: dict) -> str:
 @router.post("/api/dags/generate")
 async def api_dags_generate(request: Request):
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     user_request = (body.get("request") or "").strip()
     if not user_request:
         return JSONResponse({"error": "need 'request' field"}, status_code=400)
@@ -234,7 +235,7 @@ async def api_dags_nl_edit(name: str, request: Request):
     require_auth(request)
     if not _validate_dag_name(name):
         return JSONResponse({"error": "invalid DAG name"}, status_code=400)
-    body = await request.json()
+    body = await json_object(request)
     instruction = (body.get("instruction") or "").strip()
     if not instruction:
         return JSONResponse({"error": "need 'instruction'"}, status_code=400)
@@ -263,7 +264,7 @@ async def api_dags_nl_delete(request: Request):
     """自然语言删 DAG. body: {query, confirm?} — 默认 dry-run 返回候选; confirm=True 才删.
     匹配策略: name/description 大小写不敏感子串匹配, 命中 ≥1 才返回候选."""
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     query = (body.get("query") or "").strip()
     if not query:
         return JSONResponse({"error": "need 'query'"}, status_code=400)
@@ -302,7 +303,7 @@ async def api_dags_nl_schedule(request: Request):
     """自然语言给 DAG 定时. body: {name, when, model?} → LLM 转 cron → 创建 timer.
     直接返回 timer 对象 + 生成的 cron 表达式."""
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     name = (body.get("name") or "").strip()
     when = (body.get("when") or "").strip()
     if not name or not when:
@@ -342,6 +343,16 @@ async def api_dags_nl_schedule(request: Request):
 
 
 # ── DAG 定义文件 CRUD ──
+@router.get("/api/dags/tool_names")
+async def api_dag_tool_names(request: Request):
+    """DAG 编辑器 tool_name 下拉的候选 (允许进 DAG 的工具, 带一句说明)。"""
+    require_auth(request)
+    from lib.tool_registry import unified
+    idx = unified()
+    return {"tools": [{"name": n, "desc": (e.description or "").split("\n")[0][:60]}
+                      for n, e in sorted(idx.entries.items()) if e.capabilities.get("dag", True)]}
+
+
 @router.get("/api/dags")
 async def api_dags_list(request: Request):
     require_auth(request)
@@ -385,9 +396,9 @@ async def api_dags_save(name: str, request: Request):
     require_auth(request)
     if not _validate_dag_name(name):
         return JSONResponse({"error": "invalid DAG name (allowed: A-Za-z0-9_-., 不可路径穿越)"}, status_code=400)
+    body = await json_object(request)
     try:
         from lib.dag_schema import save_dag, validate_dag_json
-        body = await request.json()
         ok, errs = validate_dag_json(body)
         if not ok:
             return JSONResponse({"error": "invalid DAG", "details": errs}, status_code=400)

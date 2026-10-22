@@ -67,12 +67,12 @@ CODE_DEFS = [
         "type": "function",
         "function": {
             "name": "read_file",
-            "description": "Read file content. Use lines='start:end' to read a range (colon separator, e.g. lines='1:50' or lines='100:200'). Do NOT use dash '-' as separator.",
+            "description": "Read file content. Use lines='start:end' to read a range (colon separator, e.g. lines='1:50' or lines='100:200'). Do NOT use dash '-' as separator. Any file size works: long files come back in segments (max 500 lines / 20000 chars per call) with a header '共 N 行 / 本次 a-b / 还剩 R 行' and the exact lines= value for the next segment. For big logs search first (search_code / grep -n) then read around the hit; for big CSV/Excel use a python script instead of reading rows into context.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "filepath": {"type": "string"},
-                    "lines":    {"type": "string", "description": "Line range as 'start:end', e.g. '1:50'. Use COLON not dash."}
+                    "lines":    {"type": "string", "description": "Line range as 'start:end', e.g. '1:50'; 'start:' reads on from start; '-100:' = last 100 lines. Use COLON not dash."}
                 },
                 "required": ["filepath"]
             }

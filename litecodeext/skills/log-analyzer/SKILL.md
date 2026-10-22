@@ -11,9 +11,17 @@ description: >
 日志 log journalctl syslog 报错 error 异常 exception tail grep
 分析日志 日志统计 access.log error.log nginx apache python java
 排查 debug trace warning fatal 告警 alert 监控 logrotate
+aliases: ["日志分析", "分析日志", "journalctl", "error.log", "access.log", "日志统计", "报错日志", "排查日志"]
 ---
 
 # Log Analyzer Skill
+
+## LiteCode 工具
+- 看尾部: `tail_log(path="/var/log/app.log", lines=100)` (最多 500 行); 盯实时输出加 `follow_seconds=10`。
+- 自己用 `execute_shell(background=true)` 起的进程: `list_bg` 拿日志路径再 `tail_log`。
+- 统计/过滤/聚合: `execute_shell` 跑下面的 grep/awk/Python, **不要 read_file 整个大日志**。
+- 远程主机日志: `ssh_exec(alias=..., cmd="journalctl -u xxx -n 200 --no-pager")` 或 `ssh_read_file`。
+- 报错堆栈想查是否已知问题: `search_code_error(error_text=...)`。
 
 ## 快速诊断命令
 

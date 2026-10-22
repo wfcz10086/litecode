@@ -12,8 +12,9 @@
     (inspect_file/list_dir/run_powershell/download); 其它界面动作之后是否有 screenshot/ocr 确认
 
 判定 (verdict):
-  - 写类角色 (与 subagent_worktree.is_write_role 一致) 且有代码改动: 至少一次测试/构建/运行类命令
-    退出码 0 (且解析出的失败数为 0), 或工具写入的改动文件全部回读过, 才算 verified。
+  - 写类角色 (与 subagent_worktree.is_write_role 一致) 且有代码改动: 最后一次修改之后、与改动相关的
+    (测试/构建为项目级; 运行类须提到改动文件) 最新一条测试/构建/运行命令退出码 0 (且解析出的失败数为 0),
+    或工具写入的改动文件在各自最后一次写入后全部回读过, 才算 verified。改前跑过的测试不算。
   - operator 属写类: 改过文件 → 最后一次文件改动之后必须有成功回读 (截图/OCR 不算, 数字以文件为准);
     没改文件但做过界面动作 → 最后一次界面动作之后有 screenshot/ocr 或回读确认才算 verified。
   - 其余 (只读角色, 或写类角色但没改动): 至少一次成功的取证类工具调用才算 verified;
@@ -26,7 +27,8 @@
   - spawn_agent 两条派发路径: EvidencePlan.wrap 包住 (工作树 wrap 之外), 结束 decorate 结果
     —— 结果开头加 [已验证] / [未验证: 原因], 末尾附「证据」小节; 多个子代理时列出每个的判定。
   - 不经 spawn_agent 的 DAG 运行时 (dag 工具 / DAG 编辑器) 只采集+补证+记日志, 不改步骤输出文本,
-    以免破坏 when 条件与 JSON 传值。
+    以免破坏 when 条件与 JSON 传值; 但 explicit_failure() (最后一次修改后相关验证明确失败) 会让该步判失败
+    (core/orchestrator/step_judge.py)。
 开关: config agent.subagent_evidence (默认 true), 关闭时以上全部不生效。
 """
 from __future__ import annotations
@@ -48,7 +50,7 @@ _WIN_READBACK_ACTIONS = {"inspect_file", "list_dir"}
 # operator 判定用 (与 readback_gate.READBACK_ACTIONS 一致)
 _OP_READBACK = {"inspect_file", "list_dir", "run_powershell", "download"}
 _OP_SYS_CONFIRM = {"processes", "system_info", "services"}
-_OP_CONFIRM = {"screenshot", "ocr"}
+_OP_CONFIRM = {"screenshot", "ocr", "ui_tree"}
 _OP_NEUTRAL = {"windows", "clipboard", "wechat_status", "initialize"}   # 纯查看, 不改界面也不算确认
 # operator 任务里点名的文件 (生产实测 2026-10-18: 操作员被桌面旧文件带偏, 回读了别的文件却判 verified)
 _TARGET_RE = re.compile(r'([^\s\\/:*?"<>|，。、；：“”‘’（）()「」【】\[\]]{1,80}?\.'
@@ -368,6 +370,9 @@ class EvidenceCollector:
     op_last_readback: str = ""
     op_targets: List[str] = field(default_factory=list)       # 任务点名的文件 (小写 basename)
     op_target_seen: set = field(default_factory=set)          # 最后一次文件改动之后已确认的点名文件
+    # [P0-3] 待回读的改动绑定目标文件 (与 readback_gate 同一套规则): 目标文件名或 None(未识别) → content/fs
+    op_pending: Dict[Optional[str], str] = field(default_factory=dict)
+    op_focus: Optional[str] = None                            # 最近一次桌面返回里前台窗口的文件名
 
     # ── 观察一次工具调用 ──
     def observe(self, name: str, args: dict, result) -> None:
@@ -415,10 +420,20 @@ class EvidenceCollector:
                 if self._operator():
                     self._note_targets(act, args, result)
                     if act in _OP_READBACK:
-                        self.op_file_pending = self.op_confirm_pending = False
-                        self.op_last_readback = f"windows_system {act} {args.get('path', '')}".strip()
+                        from .readback_gate import _clears, _ok as _rb_ok
+                        cleared = [t for t, kind in self.op_pending.items()
+                                   if _rb_ok(result) and _clears(kind, t, act, args, result)]
+                        for t in cleared:
+                            del self.op_pending[t]
+                        self.op_file_pending = bool(self.op_pending)
+                        self.op_confirm_pending = False
+                        if cleared or not self.op_pending:
+                            self.op_last_readback = f"windows_system {act} {args.get('path', '')}".strip()
                     elif act == "upload":
+                        from .readback_gate import norm_name
+                        target = norm_name(args.get("dest_name") or args.get("source")) or None
                         self.op_file_changes += 1
+                        self.op_pending[target] = "content"
                         self.op_file_pending = self.op_confirm_pending = True
                         self.op_target_seen.clear()
                     elif act == "kill_process":
@@ -432,8 +447,14 @@ class EvidenceCollector:
             if ok:
                 self.tool_ok[f"windows_desktop.{act}"] += 1
                 if self._operator():
-                    from .readback_gate import is_file_change
+                    from .readback_gate import is_file_change, change_kind, _foreground_file
+                    fg = _foreground_file(result)
+                    if fg is not False:
+                        self.op_focus = fg
                     if is_file_change(act, args):
+                        kind = change_kind(act, args)
+                        prev = self.op_pending.get(self.op_focus)
+                        self.op_pending[self.op_focus] = "content" if "content" in (kind, prev) else "fs"
                         self.op_file_changes += 1
                         self.op_file_pending = self.op_confirm_pending = True
                         self.op_target_seen.clear()
@@ -480,7 +501,8 @@ class EvidenceCollector:
 
     def _add_write(self, path: str, via: str) -> None:
         k = _norm(path)
-        self.writes[k] = {"path": path, "via": via, "readback": False}   # 重写会清掉旧的回读标记
+        # 重写会清掉旧的回读标记; seq 记录这次修改发生在第几次工具调用, 验证必须在它之后
+        self.writes[k] = {"path": path, "via": via, "readback": False, "seq": self._seq}
 
     def _observe_shell(self, cmd: str, result: str, ok: bool) -> None:
         kind = classify_command(cmd)
@@ -503,7 +525,8 @@ class EvidenceCollector:
             self.tool_ok["execute_shell"] += 1
         if kind:
             counts = parse_test_counts(result) if kind == "test" else None
-            rec = {"kind": kind, "cmd": " ".join(cmd.split())[:120], "exit": code, "counts": counts}
+            rec = {"kind": kind, "cmd": " ".join(cmd.split())[:120], "exit": code, "counts": counts,
+                   "seq": self._seq, "full_cmd": cmd}
             if kind == "test" and counts is None:
                 rec["tail"] = _tail(result, 20)
             elif code not in (0, None):
@@ -526,6 +549,44 @@ class EvidenceCollector:
         cn = c.get("counts")
         return not (cn and (cn.get("failed") or cn.get("errors")))
 
+    # [P0-3 2026-10-21] 验证必须针对最后一次修改: 原先只要历史上有过一次通过的测试/运行命令就判 verified,
+    # 测完再改、先过后挂、跑个无关脚本都能"已验证"。现在只看最后一次修改之后、与改动相关的命令, 且以最新一条为准。
+    def _last_write_seq(self) -> int:
+        return max((w.get("seq", 0) for w in self.writes.values()), default=0)
+
+    def _relevant(self, c: dict) -> bool:
+        """测试/构建是项目级验证, 视为相关; 运行类命令必须提到某个改动文件 (文件名或模块名)。"""
+        if c["kind"] in ("test", "build"):
+            return True
+        cmd = c.get("full_cmd") or c["cmd"]
+        for p in self.changed_files():
+            stem = os.path.splitext(os.path.basename(p))[0]
+            if _mentions(cmd, p) or (len(stem) >= 3 and re.search(
+                    r"(?<![\w-])" + re.escape(stem) + r"(?![\w-])", cmd)):
+                return True
+        return False
+
+    def _post_edit_checks(self) -> List[dict]:
+        """最后一次修改之后的相关测试/构建/运行命令。测试/构建命令自己重定向出的日志 (同一 seq) 不算"之后又改"。"""
+        last = self._last_write_seq()
+        return [c for c in self.commands if c["kind"] in _RUN_KINDS and self._relevant(c)
+                and (c.get("seq", 0) > last or (c.get("seq", 0) == last and c["kind"] in ("test", "build")))]
+
+    @staticmethod
+    def _fail_text(c: dict) -> str:
+        cn = c.get("counts") or {}
+        extra = f", failed={cn.get('failed', 0)}" if cn else ""
+        return f"{_KIND_CN[c['kind']]}未通过: {c['cmd'][:60]} (exit {c['exit']}{extra})"
+
+    def explicit_failure(self) -> Optional[str]:
+        """有改动且最后一次修改之后最新的相关测试/构建/运行明确失败 → 原因; 否则 None (含"没测")。"""
+        if not self.changed_files():
+            return None
+        post = self._post_edit_checks()
+        if post and post[-1]["exit"] is not None and not self._cmd_passed(post[-1]):
+            return self._fail_text(post[-1])
+        return None
+
     def verdict(self) -> Tuple[bool, str]:
         if self._operator():
             ov = self._operator_verdict()
@@ -533,21 +594,24 @@ class EvidenceCollector:
                 return ov
         changed = self.changed_files()
         if self.write_role and changed:
-            passed = [c for c in self.commands if self._cmd_passed(c)]
-            if passed:
-                c = passed[-1]
-                return True, (f"改动 {len(changed)} 个文件, {_KIND_CN[c['kind']]}命令通过 "
+            post = self._post_edit_checks()
+            if post and self._cmd_passed(post[-1]):
+                c = post[-1]
+                return True, (f"改动 {len(changed)} 个文件, 最后一次修改后{_KIND_CN[c['kind']]}命令通过 "
                               f"(exit 0): {c['cmd'][:60]}")
             tool_writes = list(self.writes.values())
             unread = [w["path"] for w in tool_writes if not w["readback"]]
             if tool_writes and not unread:
                 return True, f"改动 {len(changed)} 个文件, 均已回读核对"
-            failing = [c for c in self.commands if c["kind"] in _RUN_KINDS and not self._cmd_passed(c)]
-            if failing:
-                c = failing[-1]
-                cn = c.get("counts") or {}
-                extra = f", failed={cn.get('failed', 0)}" if cn else ""
-                why = f"{_KIND_CN[c['kind']]}未通过: {c['cmd'][:60]} (exit {c['exit']}{extra})"
+            if post:
+                why = self._fail_text(post[-1])
+            elif any(self._cmd_passed(c) for c in self.commands):
+                c = [c for c in self.commands if self._cmd_passed(c)][-1]
+                why = (f"测试/运行发生在最后一次修改之前或与改动无关 ({c['cmd'][:60]}), "
+                       "最后一次修改后没有重新验证")
+            elif any(c["kind"] in _RUN_KINDS for c in self.commands):
+                c = [c for c in self.commands if c["kind"] in _RUN_KINDS][-1]
+                why = self._fail_text(c)
             else:
                 why = "没有运行任何测试/构建/运行命令"
             if unread:

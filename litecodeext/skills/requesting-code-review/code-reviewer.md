@@ -15,7 +15,7 @@
 
 ## 需求/计划
 
-{PLAN_REFERENCE}
+{PLAN_OR_REQUIREMENTS}
 
 ## 待审查的 Git 范围
 

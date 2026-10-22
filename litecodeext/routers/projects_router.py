@@ -7,6 +7,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 
 router = APIRouter()
@@ -40,8 +41,8 @@ async def api_projects_list(request: Request, status: str = ""):
 @router.post("/api/projects")
 async def api_projects_create(request: Request):
     require_auth(request)
+    body = await json_object(request)
     try:
-        body = await request.json()
         name = (body.get("name") or "").strip()
         if not name:
             return JSONResponse({"error": "name required"}, status_code=400)
@@ -69,7 +70,7 @@ async def api_projects_get(pid: str, request: Request):
 @router.patch("/api/projects/{pid}")
 async def api_projects_update(pid: str, request: Request):
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     allowed = {"name", "description", "status", "tags", "project_type", "workspace"}
     fields = {k: v for k, v in body.items() if k in allowed}
     if "workspace" in fields:
@@ -130,7 +131,7 @@ async def api_projects_context_put(pid: str, fname: str, request: Request):
     ps = _project_store()
     if not ps.get(pid):
         return JSONResponse({"error": "project not found"}, status_code=404)
-    body = await request.json()
+    body = await json_object(request)
     content = body.get("content", "")
     fp = ps.project_dir(pid) / fname
     fp.write_text(content)
@@ -171,7 +172,7 @@ async def api_projects_decisions_append(pid: str, request: Request):
     ps = _project_store()
     if not ps.get(pid):
         return JSONResponse({"error": "project not found"}, status_code=404)
-    body = await request.json()
+    body = await json_object(request)
     decision = (body.get("decision") or body.get("content") or "").strip()
     if not decision:
         return JSONResponse({"error": "decision/content required"}, status_code=400)
@@ -205,7 +206,7 @@ async def api_projects_decisions_clear(pid: str, request: Request):
 async def api_projects_bind_session(pid: str, request: Request):
     """把会话挪进项目 (一个会话只属于一个项目, 会先从原项目摘掉)。"""
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     sid = (body.get("session_id") or "").strip()
     if not sid or "/" in sid:
         return JSONResponse({"error": "session_id required"}, status_code=400)
@@ -247,7 +248,7 @@ async def api_projects_instructions_put(pid: str, request: Request):
     ps = _project_store()
     if not ps.get(pid):
         return JSONResponse({"error": "project not found"}, status_code=404)
-    body = await request.json()
+    body = await json_object(request)
     content = str(body.get("content") or "")
     mod = _sessions_mod()
     if len(content) > mod.INSTRUCTIONS_MAX:

@@ -279,14 +279,19 @@ async def _describe_image(local_path: str) -> str:
             ]}]
         }
 
+            from lib.usage_ledger import record_http as _usage_rec   # [usage-ledger] 微信看图记账
+            import time as _time
+            _t0 = _time.time()
             async with aiohttp.ClientSession() as sess:
                 async with sess.post(f"{url}/chat/completions", headers=headers,
                                      json=payload, timeout=aiohttp.ClientTimeout(total=90)) as resp:
                     if resp.status != 200:
+                        _usage_rec("vision", vision_model["id"], payload, None, _t0)
                         _last_err = f"{vision_model['id']} HTTP {resp.status}: {(await resp.text())[:120]}"
                         log.warning(f"[vision] {_last_err}")
                         continue
                     data = await resp.json()
+                    _usage_rec("vision", vision_model["id"], payload, data, _t0)
                     desc = (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
                     # 清理 Qwen thinking 标签
                     if "<think>" in desc:

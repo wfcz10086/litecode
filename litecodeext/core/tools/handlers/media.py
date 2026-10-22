@@ -49,8 +49,12 @@ async def h_vision_ocr(sid: str, args: dict) -> tuple[str, Any]:
     if not prompt:
         mode = str(args.get("mode", "auto")).strip().lower()
         prompt = _VISION_PROMPTS.get(mode, _VISION_PROMPTS["auto"])
+    paths = args.get("paths")
+    if isinstance(paths, str):
+        paths = [paths]
     return await _do_vision_ocr(
         path=args.get("path", ""),
         prompt=prompt,
         max_tokens=int(args.get("max_tokens", 4096)),
+        paths=paths if isinstance(paths, list) else None,
     ), None

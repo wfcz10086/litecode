@@ -4,6 +4,7 @@ description: >
   重型项目代码 bug 定位技能: 在十万~百万行代码库里从症状/错误堆栈反推到具体文件行号.
   融合 systematic-debugging 的 5-step 流程 + large-project 的 token-省俭搜索策略.
   触发词: bug 定位, 定位错误, 追踪报错, 找 bug, 复现 bug, 线上事故, 错误溯源, 栈跟踪, 错误堆栈, root cause, production bug, 重型项目调试
+aliases: ["bug 定位", "bug定位", "定位错误", "追踪报错", "找 bug", "找bug", "复现 bug", "线上事故", "错误溯源", "栈跟踪", "错误堆栈", "root cause", "production bug", "项目级 bug", "项目级bug"]
 ---
 
 # Bug Localization Skill
@@ -27,31 +28,33 @@ description: >
 
 ### Step 2: 精准搜索 (而非盲读)
 
-用 Grep **检索短语**而不是 LS/cat:
+用 `search_code` **检索短语**而不是 ls/cat:
 ```
 # 错误消息原文 → 必定命中抛出点
-Grep(pattern="exact error message fragment", path="src/")
+search_code(query="exact error message fragment", path="src/")
 
-# 堆栈顶函数名
-Grep(pattern="def function_name|function function_name", path="src/")
+# 堆栈顶函数名 (已知符号名时 find_symbol / locate_symbol 更快, 后者还给调用链)
+search_code(query="def function_name|function function_name", path="src/")
+locate_symbol(name="function_name")
 
 # 符号是类/常量 → 找定义点
-Grep(pattern="class MyClass|MyClass\s*=", path="src/")
+search_code(query="class MyClass|MyClass\s*=", path="src/")
 ```
+报错原文不在本仓库 (来自第三方库) → `search_code_error(error_text=完整 traceback)` 查已知 issue。
 
 **不准**:
 - `find . -name "*.py" | xargs cat`   # 爆 token
 - `ls src/` 然后 read 每个文件         # 盲打
 
 **准**:
-- 先 Grep → 得到 5 个候选 → 然后 Read 特定行号
+- 先 search_code → 得到 5 个候选 → 然后 read_file 读特定行段
 - 如果 PROJECT_MAP.md 存在, 先读它: `read_file PROJECT_MAP.md` — 会直接告诉你模块映射
 
 ### Step 3: 阅读可疑点 (limit/offset 精读)
 
-找到候选后不要整文件读, 用 `read_file` 的 offset/limit:
+找到候选后不要整文件读, 用 `read_file` 的 lines 区间 (冒号分隔):
 ```
-Read(file_path="src/module.py", offset=120, limit=40)
+read_file(filepath="src/module.py", lines="120:160")
 # 读 120-160 行, 覆盖堆栈指向的函数
 ```
 
@@ -80,26 +83,28 @@ H1: request.headers 缺 Auth 时 line 87 的 header["Authorization"] KeyError
 只有 Step 4 的假设之一被数据确认后才能动手修.
 **严禁先改再跑** — 在错的假设上改代码是典型反模式.
 
-## 与 tool_dispatch 的协作
+## 可用工具
 
-- `get_project_map(path)` — 若项目有 map, 用它不必 Grep
-- `ast_search(pattern, type='class|function|call')` — 按语法结构找
-- `git log -S 'symbol'` — 谁引入的, 何时引入
-- `git blame file:line` — 最后改这行的人 / 原因
+- `project_init(path)` — 首次进大项目时建符号清单 + 调用图, 之后 `locate_symbol` 直接给文件:行号 + 调用链
+- `find_symbol(name)` — 按名字找定义 (依赖 SYMBOL_INDEX.json)
+- `search_code` / `find_files` / `get_tree` — 文本检索 / 按文件名找 / 看目录结构
+- `tail_log(path)` — 看服务日志尾部, 拿到真实报错和时间点
+- `git_log` / `git_diff`, 以及 `execute_shell("git log -S 'symbol' --oneline")` 找引入点、`git blame -L 80,95 file` 看最后修改原因
+- 只想要结论、不想把大量文件读进上下文: `spawn_agent(agent_type="explorer", task="定位 X 报错的根因候选, 返回文件:行号和理由")`
 
 ## 重型项目的 token 预算
 
 | 项目规模 | 首轮可读上限 | 策略 |
 |---------|-------------|------|
-| < 1 万行  | 30K tokens | Grep + 关键文件 Read |
+| < 1 万行  | 30K tokens | search_code + 关键文件 read_file |
 | 1-10 万行 | 10K tokens | PROJECT_MAP + 精准 Read |
-| > 10 万行 | 5K tokens  | PROJECT_MAP + ast_search + 子 agent |
+| > 10 万行 | 5K tokens  | project_init + locate_symbol + explorer 子代理 |
 
 ## 反模式
 
 - ❌ **一上来就 Read 堆栈里提到的整个文件** → 大文件 3000 行 = 30K token
 - ❌ **写"先理解项目结构"就 ls 全部目录** → 对 bug 定位毫无帮助
-- ❌ **找不到就换关键词乱 Grep** → Grep 失败通常是索引/路径问题, 不是关键词
+- ❌ **找不到就换关键词乱搜** → 搜不到通常是路径/文件类型过滤问题, 先确认搜索范围
 - ❌ **改完不验证直接说"修好了"** → 必须能复现再确认消除
 
 ## 与 systematic-debugging 的关系

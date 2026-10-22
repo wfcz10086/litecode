@@ -5,14 +5,13 @@ model_switch 会 mutate litecode_server 模块的全局变量 (MODEL_ID / BACKEN
 """
 from __future__ import annotations
 
-import json
 import time
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
 from lib.config import (
-    HAS_DEEP_SEARCH, deep_search_tool, load_cfg, log,
+    HAS_DEEP_SEARCH, deep_search_tool, load_cfg, log, save_cfg,
     SEARCH_CFG as _SEARCH_CFG,
 )
 
@@ -67,12 +66,21 @@ def is_masked(v) -> bool:
 async def model_switch(request: Request):
     """热切换模型：更新 config.json 并重载全局变量"""
     require_auth(request)
-    srv = _srv()
     body = await request.json()
-    model_id = body.get("model_id", "")
-    if not model_id:
+    if not body.get("model_id", ""):
         raise HTTPException(400, "model_id required")
+    try:
+        return apply_switch(body)
+    except LookupError as e:
+        raise HTTPException(404, str(e))
 
+
+def apply_switch(body: dict, *, set_default: bool = False) -> dict:
+    """切换激活模型 (HTTP 接口与 manage_models 工具共用)。body: {model_id, backend_url?, abort_active?}。
+    set_default=True 时同时写 default_model_id (否则启动同步可能把 model 段改回旧默认)。
+    找不到模型抛 LookupError。"""
+    srv = _srv()
+    model_id = body.get("model_id", "")
     cfg = load_cfg()
     models = cfg.get("models", [])
     body_url = body.get("backend_url")
@@ -95,12 +103,13 @@ async def model_switch(request: Request):
         if body_url:
             target = body
         else:
-            raise HTTPException(404, f"model {model_id} not found in models list")
+            raise LookupError(f"model {model_id} not found in models list")
 
     # 更新 config.json 中的 model 段
     cfg["model"] = {k: v for k, v in target.items() if k != "label"}
-    _p = srv.BASE / "config.json"
-    _p.write_text(json.dumps(cfg, ensure_ascii=False, indent=4))
+    if set_default:
+        cfg["default_model_id"] = target["id"]
+    save_cfg(cfg)
 
     # [v1.0] 通过 config.reload_model 原子更新所有共享变量
     # 这样 transport.py / subagent.py 的 _LIVE dict 也会同步
@@ -200,31 +209,49 @@ async def model_switch(request: Request):
 async def model_add(request: Request):
     """添加新模型到预设列表"""
     require_auth(request)
-    srv = _srv()
     body = await request.json()
     if not body.get("id") or not body.get("backend_url"):
         raise HTTPException(400, "id and backend_url required")
+    return {"ok": True, "count": upsert_model(body)}
 
+
+def upsert_model(entry: dict) -> int:
+    """按 id 新增或覆盖 config.models[] 的一条 (HTTP 接口与 manage_models 工具共用), 返回模型总数。
+    传回的 api_key 是脱敏值 (••••) 时保留原 key。"""
+    entry = dict(entry)
     cfg = load_cfg()
     models = cfg.setdefault("models", [])
-    # 检查是否已存在
     for i, m in enumerate(models):
-        if m["id"] == body["id"]:
-            if is_masked(body.get("api_key")):   # 前端拿到的是脱敏值, 回传时保留原 key
-                body["api_key"] = m.get("api_key", "")
-            models[i] = body
+        if m["id"] == entry["id"]:
+            if is_masked(entry.get("api_key")):   # 前端拿到的是脱敏值, 回传时保留原 key
+                entry["api_key"] = m.get("api_key", "")
+            models[i] = entry
             break
     else:
-        models.append(body)
-
-    _p = srv.BASE / "config.json"
-    _p.write_text(json.dumps(cfg, ensure_ascii=False, indent=4))
-    return {"ok": True, "count": len(models)}
+        models.append(entry)
+    save_cfg(cfg)
+    return len(models)
 
 
-# 1x1 白色 PNG, 视觉探测用
+# 1x1 白色 PNG (旧版视觉探测图; 保留名字给外部引用)
 _TINY_PNG = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg=="
 MODEL_TEST_TIMEOUT = 30.0
+
+
+def _solid_png(w: int = 64, h: int = 32, rgb=(230, 30, 30)) -> str:
+    """纯色 PNG (base64)。1x1 图会被部分视觉模型以"图太小"拒掉; 用纯红能顺带核对模型真看到了图。"""
+    import base64, struct, zlib
+    row = b"\x00" + bytes(rgb) * w
+    raw = zlib.compress(row * h)
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+    png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0))
+           + chunk(b"IDAT", raw) + chunk(b"IEND", b""))
+    return base64.b64encode(png).decode()
+
+
+_RED_PNG = _solid_png()
 
 
 def _test_target(body: dict) -> dict:
@@ -263,25 +290,51 @@ async def model_test(request: Request):
     if not target:
         return {"ok": False, "model_id": mid, "latency_ms": 0, "reply_preview": "",
                 "error": f"模型 {mid or '(未指定)'} 不在配置里" if mid else "model_id required"}
+    return await probe_model(target, test_vision=bool(body.get("test_vision")))
 
-    from lib.config import model_live_view, reset_turn_model, set_turn_model
+
+def _payload_for(target: dict, payload: dict, *, force_disable: bool) -> dict:
+    """按被测模型自己的线路格式注入思考参数。set_turn_model 只影响当前 context, 不碰全局激活模型。"""
+    from lib.config import reset_turn_model, set_turn_model
     from lib.thinking_adapter import inject_params
+    tok = set_turn_model(target)
+    try:
+        inject_params(payload, force_disable=force_disable)
+    except Exception:
+        pass
+    finally:
+        reset_turn_model(tok)
+    return payload
+
+
+def _reply_of(r) -> tuple[str, str]:
+    """→ (正文, 思考文本)。"""
+    try:
+        msg = (r.json().get("choices") or [{}])[0].get("message") or {}
+    except Exception:
+        msg = {}
+    content = str(msg.get("content") or "")
+    think = str(msg.get("reasoning_content") or msg.get("reasoning") or "")
+    if not think and "</think>" in content:
+        think, _, content = content.partition("</think>")
+        think = think.replace("<think>", "")
+    return content.strip(), think.strip()
+
+
+async def probe_model(target: dict, *, test_vision: bool = False, test_thinking: bool = False) -> dict:
+    """直连模型发最小请求 (关思考, 单次 30s 超时)。HTTP 接口与 manage_models 工具共用。
+    test_vision: 发一张 64×32 纯红 PNG, 200 且答出"红"才算能看图 (有的网关丢图照样 200);
+    test_thinking: 按该模型线路格式开思考再问一次, 回包里有思考内容才算支持。
+    返回 {ok, model_id, latency_ms, reply_preview, error, http_status, vision_test?, thinking_test?}。"""
+    from lib.config import model_live_view
     view = model_live_view(target)
     url = view["backend_url"].rstrip("/")
     hdrs = {"Content-Type": "application/json"}
     if view["api_key"]:
         hdrs["Authorization"] = f"Bearer {view['api_key']}"
-    payload = {"model": view["served_model_name"], "stream": False, "max_tokens": 16,
-               "messages": [{"role": "user", "content": "ping, reply with: pong"}]}
-    # 按被测模型自己的线路格式关思考 (vLLM chat_template_kwargs / DeepSeek thinking=disabled ...)。
-    # set_turn_model 只影响当前 context, 不碰全局激活模型。
-    tok = set_turn_model(target)
-    try:
-        inject_params(payload, force_disable=True)
-    except Exception:
-        pass
-    finally:
-        reset_turn_model(tok)
+    payload = _payload_for(target, {"model": view["served_model_name"], "stream": False, "max_tokens": 16,
+                                    "messages": [{"role": "user", "content": "ping, reply with: pong"}]},
+                           force_disable=True)
 
     result: dict = {"ok": False, "model_id": view["model_id"], "backend_url": url,
                     "backend_type": view["backend_type"], "latency_ms": 0,
@@ -293,28 +346,47 @@ async def model_test(request: Request):
             r = await client.post(f"{url}/chat/completions", headers=hdrs, json=payload)
             result["latency_ms"] = int((time.time() - t0) * 1000)
             result["http_status"] = r.status_code
+            from lib.usage_ledger import record_http as _usage_rec   # [usage-ledger] 模型连通测试也记账
+            _usage_rec("probe", view["model_id"], payload, r, t0)
             if r.status_code == 200:
-                try:
-                    msg = (r.json().get("choices") or [{}])[0].get("message") or {}
-                except Exception:
-                    msg = {}
-                reply = msg.get("content") or msg.get("reasoning_content") or msg.get("reasoning") or ""
-                result["reply_preview"] = str(reply).strip()[:120]
+                content, think = _reply_of(r)
+                result["reply_preview"] = (content or think)[:120]
                 result["ok"] = True
                 result["completion_test"] = "pass"
             else:
                 result["error"] = f"HTTP {r.status_code}: {r.text[:200]}"
                 result["completion_test"] = f"HTTP {r.status_code}"
-            if body.get("test_vision") and result["ok"]:
-                vp = {"model": view["served_model_name"], "max_tokens": 1, "stream": False,
-                      "messages": [{"role": "user", "content": [
-                          {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_TINY_PNG}"}},
-                          {"type": "text", "text": "hi"}]}]}
+            if test_vision and result["ok"]:
+                vp = _payload_for(target, {
+                    "model": view["served_model_name"], "max_tokens": 64, "stream": False,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_RED_PNG}"}},
+                        {"type": "text", "text": "这张图是什么颜色? 只回答一个颜色词。"}]}]}, force_disable=True)
                 try:
                     r3 = await client.post(f"{url}/chat/completions", headers=hdrs, json=vp)
-                    result["vision_test"] = "pass" if r3.status_code == 200 else f"HTTP {r3.status_code}"
+                    if r3.status_code != 200:
+                        result["vision_test"] = f"HTTP {r3.status_code}"
+                    else:
+                        content, think = _reply_of(r3)
+                        seen = (content or think).lower()
+                        result["vision_test"] = ("pass" if ("红" in seen or "red" in seen)
+                                                 else f"200 但没认出颜色: {seen[:40]!r}")
                 except Exception as ve:
-                    result["vision_test"] = str(ve)[:80]
+                    result["vision_test"] = f"{type(ve).__name__}: {ve}"[:80]
+            if test_thinking and result["ok"]:
+                tp = _payload_for(dict(target, enable_thinking=True, thinking_budget=1024), {
+                    "model": view["served_model_name"], "max_tokens": 512, "stream": False,
+                    "messages": [{"role": "user", "content": "17*23 等于多少? 只回答数字。"}]}, force_disable=False)
+                tp["max_tokens"] = min(int(tp.get("max_tokens") or 512), 1536)
+                try:
+                    r4 = await client.post(f"{url}/chat/completions", headers=hdrs, json=tp)
+                    if r4.status_code != 200:
+                        result["thinking_test"] = f"HTTP {r4.status_code}: {r4.text[:120]}"
+                    else:
+                        _, think = _reply_of(r4)
+                        result["thinking_test"] = "pass" if think else "no_reasoning"
+                except Exception as te:
+                    result["thinking_test"] = f"{type(te).__name__}: {te}"[:80]
     except Exception as e:
         result["error"] = (f"{type(e).__name__}: {e}")[:200]
         result["latency_ms"] = int((time.time() - t0) * 1000)
@@ -325,12 +397,36 @@ async def model_test(request: Request):
 
 @router.delete("/v1/model/{model_id}")
 async def model_delete(model_id: str, request: Request):
-    """从预设列表删除模型"""
+    """从预设列表删除模型 (当前激活 / 默认模型不能删, 回 409)"""
     require_auth(request)
-    srv = _srv()
-    cfg = load_cfg()
-    models = cfg.get("models", [])
-    cfg["models"] = [m for m in models if m["id"] != model_id]
-    _p = srv.BASE / "config.json"
-    _p.write_text(json.dumps(cfg, ensure_ascii=False, indent=4))
+    try:
+        remove_model(model_id)
+    except PermissionError as e:
+        raise HTTPException(409, str(e))
     return {"ok": True}
+
+
+def protected_ids(cfg: dict | None = None) -> set:
+    """当前激活模型 + default_model_id: 删除前必须先切走。"""
+    cfg = cfg if cfg is not None else load_cfg()
+    out = {str(cfg.get("default_model_id") or ""), str((cfg.get("model") or {}).get("id") or "")}
+    try:
+        out.add(str(_srv().MODEL_ID or ""))
+    except Exception:
+        pass
+    return {x for x in out if x}
+
+
+def remove_model(model_id: str) -> int:
+    """删除 config.models[] 里该 id 的条目, 返回删掉的条数 (0 = 本来就没有, 不写盘)。
+    激活模型 / 默认模型抛 PermissionError。"""
+    cfg = load_cfg()
+    if model_id in protected_ids(cfg):
+        raise PermissionError(f"{model_id} 是当前默认/激活模型, 不能删除; 先切换到别的模型")
+    models = cfg.get("models", [])
+    keep = [m for m in models if m["id"] != model_id]
+    if len(keep) == len(models):
+        return 0
+    cfg["models"] = keep
+    save_cfg(cfg)
+    return len(models) - len(keep)

@@ -25,11 +25,42 @@ class Entry:
     source: str = "L1"
 
 
-def tokens(text: str) -> list[str]:
+# ── 中文近义归一 (没有分词/向量依赖时的折中) ─────────────────────────
+# 用户问法和记下的说法常不同字: "我爱吃啥水果" vs "最喜欢的水果是山竹"。两字切词只剩"水果"一个
+# 重合词, 过不了召回门槛。先把常见同义说法归到同一写法, 再去掉虚词, 两字切词的重合率就上来了。
+_SYNONYMS = [(re.compile(p), r) for p, r in (
+    (r"不爱|讨厌|厌恶|反感", "不喜欢"),
+    (r"(?<![可恋热亲])爱(?=吃|喝|看|听|玩|用|穿|去)", "喜欢"),
+    (r"最爱", "最喜欢"),
+    (r"喜爱|偏爱|钟爱|钟意|中意|热爱|偏好|爱好", "喜欢"),
+    (r"啥|哪种|哪样|哪个|哪些|什么样", "什么"),
+    (r"咋", "怎么"),
+    (r"姓名|称呼|昵称|叫什么", "名字"),
+    (r"住哪儿?|住在哪里?", "住在"),
+    (r"干什么的|做什么工作|从事什么|职业是|工作是", "职业"),
+    (r"出生日期|哪天生|几号生", "生日"),
+    (r"答复|回答", "回复"),
+    (r"英语", "英文"), (r"汉语|普通话", "中文"),
+)]
+# 虚词/代词/疑问词: 去掉后两字切词不再产出 "我爱"/"吃啥" 这类无信息的词
+_STOP_WORDS = re.compile(r"什么|怎么|请问|告诉|记得|知道|一下|一个|是不是|还记|用户|主人")
+_STOP_CHARS = re.compile(r"[的了是吗呢吧啊呀么哦嘛我你他她它们]")
+
+
+def normalize(text: str) -> str:
     t = text.lower()
+    for pat, rep in _SYNONYMS:
+        t = pat.sub(rep, t)
+    return t
+
+
+def tokens(text: str) -> list[str]:
+    t = normalize(text)
     out = _WORD.findall(t)
     for run in _CJK.findall(t):
-        out.extend(run if len(run) == 1 else (run[i:i + 2] for i in range(len(run) - 1)))
+        run = _STOP_CHARS.sub("", _STOP_WORDS.sub(" ", run))
+        for part in run.split():
+            out.extend(part if len(part) == 1 else (part[i:i + 2] for i in range(len(part) - 1)))
     return out
 
 

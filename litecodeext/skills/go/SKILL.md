@@ -2,6 +2,7 @@
 name: go
 description: Go 语言开发：环境探测、模块管理、构建/测试/格式化，以及写完必须运行验证的完整循环。触发词：go、golang、.go、go mod、goroutine、gin、gRPC、go build、go test
 keywords: go golang .go goroutine gin grpc fiber echo cobra viper gomod gosum
+aliases: ["golang", "go语言", ".go", "goroutine", "gin框架", "grpc", "go mod", "go build", "go test", "用go", "go程序", "go并发", "go项目", "go写", "写go", "go代码", "go服务"]
 ---
 
 # Go 开发技能

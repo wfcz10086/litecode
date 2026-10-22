@@ -79,12 +79,11 @@ def download(args):
     if not source.exists() or not source.is_file():
         raise ValueError('文件不存在')
     size = source.stat().st_size
-    total = wt.chunk_count(size)   # 同时校验 ≤50MB
+    total = wt.chunk_count(size)   # 同时校验 ≤ MAX_TRANSFER
     index = args.get('index')
     if index is None:
-        data = source.read_bytes()
         return {'ok': True, 'state': 'download_meta', 'name': source.name,
-                'size': size, 'chunks': total, 'sha256': wt.sha256_hex(data)}
+                'size': size, 'chunks': total, 'sha256': wt.sha256_file(source)}
     if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < total:
         raise ValueError('index 超出范围')
     with source.open('rb') as handle:
@@ -131,17 +130,17 @@ def upload(args):
         handle.write(block)
     if temp.stat().st_size > wt.MAX_TRANSFER:
         temp.unlink(missing_ok=True)
-        raise ValueError('累计超过 50MB 上限')
+        raise ValueError('累计超过传输上限')
     if index < total - 1:
         return {'ok': True, 'state': 'upload_chunk', 'index': index, 'received': temp.stat().st_size}
-    data = temp.read_bytes()
-    if wt.sha256_hex(data) != sha256:
+    size = temp.stat().st_size
+    if wt.sha256_file(temp) != sha256:
         temp.unlink(missing_ok=True)
         raise ValueError('整体 sha256 校验失败，上传已损坏')
     final = wt.unique_target(downloads_dir(), name)
     os.replace(temp, final)
     return {'ok': True, 'state': 'upload_done', 'path': str(final),
-            'size': len(data), 'name': final.name, 'saved_at': int(time.time())}
+            'size': size, 'name': final.name, 'saved_at': int(time.time())}
 
 
 def perform(action, folder, args):

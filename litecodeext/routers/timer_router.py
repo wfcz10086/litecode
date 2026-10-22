@@ -3,6 +3,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 
 router = APIRouter()
 ORDER = 40  # 注册顺序 (routers.discover 按此升序 include, 路径重叠时先注册者生效)
@@ -30,7 +31,7 @@ async def api_timer_add(request: Request):
     require_auth(request)
     if not _TIMER_AVAILABLE:
         raise HTTPException(500, "timer module not available")
-    body = await request.json()
+    body = await json_object(request)
     try:
         timer = _timer_manager().add_timer(body)
     except ValueError as ve:
@@ -43,7 +44,7 @@ async def api_timer_update(tid: str, request: Request):
     require_auth(request)
     if not _TIMER_AVAILABLE:
         raise HTTPException(500, "timer module not available")
-    body = await request.json()
+    body = await json_object(request)
     t = _timer_manager().update_timer(tid, body)
     return {"ok": bool(t), "timer": t}
 

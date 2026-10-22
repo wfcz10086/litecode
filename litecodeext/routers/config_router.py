@@ -10,6 +10,7 @@ import json
 from fastapi import APIRouter, HTTPException, Request
 
 from routers.auth_router import require_auth
+from routers._body import json_object
 from routers.state import S
 
 router = APIRouter()
@@ -141,7 +142,7 @@ async def api_config_patch(request: Request):
     - 写入后不热加载 agent/memory 配置 (需要重启服务生效, 前端提示)
     """
     require_auth(request)
-    body = await request.json()
+    body = await json_object(request)
     if not isinstance(body, dict):
         raise HTTPException(400, "body must be object")
     try:

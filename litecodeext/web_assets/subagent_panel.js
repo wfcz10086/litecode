@@ -10,9 +10,10 @@
  * 依赖 app.js 的全局 cur / streaming (只读)。
  */
 (function () {
-  const POLL_MS = 3000, STREAM_POLL_MS = 10000, WATCH_MS = 1000, STOP_ARM_MS = 4000;
+  const POLL_MS = 3000, STREAM_POLL_MS = 4000, WATCH_MS = 1000, STOP_ARM_MS = 4000;
   let sid = null, items = [], sendMax = 2000, open = false, busy = false, lastFetch = 0, wasStreaming = false;
-  let root = null, entry = null, drawer = null, list = null;
+  let root = null, entry = null, drawer = null, list = null, bStopAll = null, stopAllArmed = 0;
+  const SV = () => window.LCSubView;   // subagent_view.js: 步骤时间线 / 进入只读视图 / 工作树分支操作
   const els = new Map();   // id -> {box, ...子元素}, 增量更新, 不整块重绘 (保住正在输入的补充指令)
 
   const api = (rid, tail) => `/api/sessions/${encodeURIComponent(sid)}/subagents`
@@ -44,6 +45,11 @@
     entry.addEventListener('click', () => { open = !open; renderShell(); if (open) refresh(); });
     drawer = h('div', 'sa-drawer'); drawer.id = 'sa-drawer'; drawer.hidden = true;
     list = h('div', 'sa-list');
+    const bar = h('div', 'sa-bar');
+    bStopAll = h('button', 'sa-btn sa-stop sa-stopall', '全部停止'); bStopAll.type = 'button';
+    bStopAll.addEventListener('click', stopAll);
+    bar.append(h('span', 'sa-bar-t', '任务树 · 点「进入」看某个子代理的实时过程'), bStopAll);
+    drawer.appendChild(bar);
     drawer.appendChild(list);
     root.appendChild(entry); root.appendChild(drawer);
     ia.parentNode.insertBefore(root, ia);
@@ -62,6 +68,7 @@
     entry.appendChild(h('span', 'sa-caret', open ? '▾' : '▸'));
     entry.setAttribute('aria-expanded', open ? 'true' : 'false');
     drawer.hidden = !open;
+    bStopAll.hidden = !items.some(i => i.status === 'running' && !i.stop_requested);
   }
 
   function note(it, text, bad) {
@@ -76,13 +83,15 @@
     const box = h('div', 'sa-item'); box.dataset.id = it.id;
     const head = h('div', 'sa-head');
     const badge = h('span', 'sa-st');
-    const idEl = h('span', 'sa-id', it.id);
+    const idEl = h('span', 'sa-id', it.id); idEl.title = it.id;
     const role = h('span', 'sa-role');
     const brief = h('span', 'sa-brief');
     const time = h('span', 'sa-time');
     head.append(badge, idEl, role, brief, time);
     const prog = h('div', 'sa-prog');
     const acts = h('div', 'sa-acts');
+    const x = SV() ? SV().rowExtras(it.id) : null;   // 步骤 ▸ / 进入 → / 工作树行
+    if (x) acts.append(...x.acts.childNodes);
     const bDetail = h('button', 'sa-btn sa-detail', '详情'); bDetail.type = 'button';
     const bSend = h('button', 'sa-btn sa-send', '补充指令'); bSend.type = 'button';
     const bStop = h('button', 'sa-btn sa-stop', '停止'); bStop.type = 'button';
@@ -91,7 +100,8 @@
     const detail = h('div', 'sa-detailbox'); detail.hidden = true;
     const card = buildSendCard(it.id); card.box.hidden = true;
     box.append(head, prog, acts, note, card.box, detail);
-    const e = { box, badge, role, brief, time, prog, bDetail, bSend, bStop, note, detail, card, status: null, armed: 0 };
+    if (x) box.insertBefore(x.el, note);
+    const e = { box, badge, idEl, role, brief, time, prog, bDetail, bSend, bStop, note, detail, card, x, status: null, armed: 0 };
     bDetail.addEventListener('click', () => toggleDetail(it.id));
     bSend.addEventListener('click', () => {
       card.box.hidden = !card.box.hidden;
@@ -125,12 +135,15 @@
     e.box.dataset.status = it.status;
     e.badge.textContent = it.stop_requested && running ? '停止中' : (it.status_cn || it.status);
     e.badge.className = 'sa-st st-' + it.status;
-    e.role.textContent = (it.agent_type || '') + (it.background ? '' : ' · 阻塞');
+    e.idEl.textContent = '#' + it._no;
+    e.role.textContent = (SV() ? SV().roleCN(it.agent_type) : (it.agent_type || '')) + (it.background ? '' : ' · 前台');
+    e.box.style.setProperty('--sa-depth', String(it._depth || 0));
+    e.box.classList.toggle('sa-child', !!it._depth);
     e.brief.textContent = it.brief || '';
     e.brief.title = it.task || '';
     e.time.textContent = fmtSecs(it.elapsed);
     const iter = it.max_iter ? `${it.iteration}/${it.max_iter}` : String(it.iteration || 0);
-    let p = `迭代 ${iter} · 工具 ${it.tool_calls || 0} 次 · 最近: ${it.last_tool || '无'}`;
+    let p = `步数 ${it.steps != null ? it.steps : (it.tool_calls || 0)} · 迭代 ${iter} · 当前: ${it.current_step || it.last_tool || '无'}`;
     if (it.inbox) p += ` · 待送指令 ${it.inbox}`;
     if (it.delivered) p += ` · 已送达 ${it.delivered}`;
     if (it.restored) p += ' · (重启前的记录)';
@@ -139,6 +152,7 @@
     const ctl = running && !it.stop_requested;
     e.bSend.hidden = !ctl; e.bStop.hidden = !ctl;
     if (!ctl) e.card.box.hidden = true;
+    if (e.x) e.x.update(it);
     if (e.status && e.status !== it.status && !e.detail.hidden) loadDetail(it.id);   // 结束了 → 刷新已展开的结果
     e.status = it.status;
   }
@@ -153,14 +167,41 @@
       update(e, it);
       if (list.children[idx] !== e.box) list.insertBefore(e.box, list.children[idx] || null);
     });
-    for (const [id, e] of els) if (!seen.has(id)) { e.box.remove(); els.delete(id); }
+    for (const [id, e] of els) if (!seen.has(id)) { e.box.remove(); if (e.x) e.x.close(); els.delete(id); }
+  }
+
+  /* 任务树: 编号 #n 按派出顺序; 子代理排在父代理之后并缩进 (parent_id) */
+  function treeOrder(arr) {
+    arr.forEach((it, i) => { it._no = i + 1; });
+    const byId = new Map(arr.map(i => [i.id, i])), kids = new Map(), out = [];
+    arr.forEach(i => { const p = i.parent_id && byId.has(i.parent_id) ? i.parent_id : ''; if (!kids.has(p)) kids.set(p, []); kids.get(p).push(i); });
+    const walk = (p, d) => (kids.get(p) || []).forEach(i => { if (out.includes(i)) return; i._depth = Math.min(d, 4); out.push(i); walk(i.id, d + 1); });
+    walk('', 0);
+    arr.forEach(i => { if (!out.includes(i)) { i._depth = 0; out.push(i); } });
+    return out;
+  }
+
+  /* 全部停止: 两步确认 (第一次点上膛, 4s 内再点才发) */
+  async function stopAll() {
+    if (Date.now() - stopAllArmed > STOP_ARM_MS) {
+      stopAllArmed = Date.now(); bStopAll.textContent = '确认全部停止?'; bStopAll.classList.add('armed');
+      setTimeout(() => { if (Date.now() - stopAllArmed >= STOP_ARM_MS) { bStopAll.textContent = '全部停止'; bStopAll.classList.remove('armed'); } }, STOP_ARM_MS + 50);
+      return;
+    }
+    stopAllArmed = 0; bStopAll.textContent = '全部停止'; bStopAll.classList.remove('armed'); bStopAll.disabled = true;
+    const run = items.filter(i => i.status === 'running' && !i.stop_requested);
+    let ok = 0;
+    for (const it of run) { try { const d = await post(it.id, '/stop'); if (d.ok) ok++; } catch (e) { /* 继续停下一个 */ } }
+    bStopAll.disabled = false;
+    if (typeof toast === 'function') toast(`已请求停止 ${ok}/${run.length} 个子代理`);
+    refresh();
   }
 
   function render() { renderShell(); renderList(); }
 
   function reset() {
     items = []; open = false;
-    for (const e of els.values()) e.box.remove();
+    for (const e of els.values()) { e.box.remove(); if (e.x) e.x.close(); }
     els.clear();
     render();
   }
@@ -175,7 +216,7 @@
       if (!r.ok) { if (r.status === 403 || r.status === 404) { items = []; render(); } return; }
       const d = await r.json();
       if (s !== sid) return;
-      items = Array.isArray(d.items) ? d.items : [];
+      items = treeOrder(Array.isArray(d.items) ? d.items : []);
       sendMax = d.send_max || sendMax;
       render();
     } catch (e) { /* server 不通: 下次巡检再试 */ }
@@ -266,5 +307,6 @@
     if (!document.hidden && sid && items.some(i => i.status === 'running')) refresh();
   });
   setInterval(tick, WATCH_MS);
-  window.LCSubagents = { refresh, state: () => ({ sid, items, open }) };
+  window.LCSubagents = { refresh, state: () => ({ sid, items: items.slice().sort((a, b) => a._no - b._no), open }),
+    open: () => { open = true; renderShell(); refresh(); }, close: () => { open = false; renderShell(); } };
 })();

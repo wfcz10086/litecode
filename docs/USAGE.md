@@ -269,8 +269,35 @@ LiteCode 内置工具（LLM 自动调用）：
 | `list_timers` | 列定时任务 |
 | `delete_timer` | 删定时任务 |
 | `spawn_agent` | 起子 agent（支持 parallel / serial） |
+| `github_search` | 搜 GitHub：kind = repositories / code / issues(含 PR) / commits / topics |
+| `github_repo` | 不 clone 研读仓库：info / readme / tree / file / releases / commits / search_in_repo |
+| `package_search` | 查库：PyPI / npm（带周下载量）/ crates.io / Go |
 
 LLM 决定何时调用，调用过程在 thinking / tool_call / tool_result 三段折叠中可见。
+
+`web_search` 可加 `category`：`it`（GitHub / StackOverflow / MDN / Docker Hub / Arch Wiki）、`packages`、`repos`、`q&a`、`science`，只走本机 SearXNG 对应分类，没结果时自动退回普通搜索。
+
+### 7.1 GitHub token（可选）
+
+没有 token 也能用，但限额很低：
+
+| | 无 token | 有 token |
+| ---- | ---- | ---- |
+| REST（info / tree / releases / commits） | 60 次/小时 | 5000 次/小时 |
+| 搜索（repositories / issues / commits / topics） | 10 次/分钟 | 30 次/分钟 |
+| 代码搜索 | 不可用，改走 grep.app → sourcegraph.com | GitHub 代码搜索 10 次/分钟 |
+| README / 文件内容 | 走 raw.githubusercontent.com，不占配额 | 同左 |
+
+申请只读 token：GitHub → Settings → Developer settings → Personal access tokens → **Fine-grained tokens** → Generate new token；Repository access 选 **Public Repositories (read-only)**，不勾任何权限，过期时间按需设置。
+
+二选一配置：
+
+```jsonc
+// /opt/litecode/config.json（容器内 /opt/litecode/config.json）新增顶层段，热读、无需重启
+"github": { "token": "github_pat_xxx" }
+```
+
+或给容器加环境变量 `GITHUB_TOKEN=github_pat_xxx`（优先级高于 config.json，需重建容器）。`/api/config` 会把 `token` 脱敏显示，不会泄露。被限流时工具直接返回重置时间，不会反复重试。
 
 ---
 

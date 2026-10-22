@@ -22,6 +22,12 @@ def _store(sid: str) -> dict[str, dict]:
     return _STORE[sid]
 
 
+def recently_planned(sid: str, within: float = 1800) -> bool:
+    """本会话最近 within 秒内建过任务清单 (上一轮拆过解, 这一轮多半是同一件事的追加要求)。"""
+    cutoff = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time() - within))
+    return any(t.get("created_at", "") >= cutoff for t in (_STORE.get(sid) or {}).values())
+
+
 @register("task_create")
 async def h_task_create(sid: str, args: dict) -> tuple[str, Any]:
     title = (args.get("title") or "").strip()

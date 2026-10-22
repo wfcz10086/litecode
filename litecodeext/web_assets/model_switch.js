@@ -66,6 +66,7 @@
       <div class="msw-t"><div class="msw-n">${sel?'✓ ':''}${esc_(name)}</div><div class="msw-i">${esc_(sub)}</div></div>
       <span class="msw-r" data-res="${esc_(id)}">${res}</span>
       ${testable?`<button class="msw-test" data-test="${esc_(id)}" title="发一条极短消息测试是否可用 (不切换模型)">测试</button>`:''}
+      ${testable&&id!==S.active?`<button class="msw-test" data-default="${esc_(id)}" title="设为全局默认模型 (所有跟随默认的会话、微信等都会改用它)">设为默认</button>`:''}
     </div>`;
   }
   function cardHtml(){
@@ -78,7 +79,7 @@
     }
     const busy=!!window.streaming;
     return `<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-        <div style="font-size:12px;font-weight:600;color:var(--tx)">本会话模型</div>
+        <div style="font-size:13px;font-weight:600;color:var(--tx)">模型 · 本会话</div>
         <button data-close="1" style="background:transparent;border:none;color:var(--tx2);font-size:16px;cursor:pointer">×</button></div>
       <div style="font-size:10px;color:var(--tx3);margin-bottom:6px">只影响这个对话, 其它对话仍用默认模型。${busy?'<b style="color:var(--wn)">当前轮次进行中, 选择将从下一条消息起生效。</b>':'从下一条消息起生效。'}也可发送 <code>/model 名称</code>。</div>
       <div style="display:flex;flex-direction:column;gap:2px">${rows.join('')}</div>`;
@@ -104,6 +105,8 @@
     if(e.target.closest('[data-close]')){closePicker();return;}
     const tb=e.target.closest('[data-test]');
     if(tb){testModel(tb.dataset.test);return;}
+    const db=e.target.closest('[data-default]');
+    if(db){await setDefault(db.dataset.default);return;}
     const row=e.target.closest('[data-pick]');
     if(row)await pick(row.dataset.pick);
   }
@@ -125,6 +128,19 @@
       note(mid?`✓ 本会话改用 ${lab(mid)}${tail}`:`✓ 本会话跟随默认模型${tail}`);
     }catch(ex){note('❌ '+ex);}
   }
+  /* [ui-v2 2026-10-21] 卡片里「设为默认」= 全局默认 (原来只能去设置里切); 本会话的选择不受影响 */
+  async function setDefault(mid){
+    closePicker();   /* 确认卡片 z-index 低于选择卡片, 先关掉选择卡片免得挡住确认 */
+    if(typeof confirmCard==='function'&&!await confirmCard('设为默认模型',`把全局默认模型改成「${lab(mid)}」? 所有跟随默认的会话 (含微信/企微) 下一条消息起改用它。`,'设为默认'))return;
+    try{
+      const r=await fetch('/api/models/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({model_id:mid})});
+      const d=await r.json().catch(()=>({}));
+      if(!r.ok||!d.ok){note('❌ 设为默认失败: '+(d.detail||d.error||r.status));return;}
+      note(`✓ 默认模型已改为 ${lab(mid)}`);
+      await loadModels();await loadInfo();
+      if(typeof chkHealth==='function')chkHealth();if(typeof refreshSbfStatus==='function')refreshSbfStatus();
+    }catch(ex){note('❌ '+ex);}
+  }
   async function testModel(mid){
     S.tests[mid]={pending:true};rerenderCard();
     try{
@@ -141,7 +157,19 @@
     if(!S.active&&!S.loading&&Date.now()-(S.lastTry||0)>5000){   /* 登录前 401 → 登录后补拉 */
       S.loading=true;S.lastTry=Date.now();loadModels().then(()=>{S.loading=false;render();});}
     if(sid!==S.sid||(S.streaming&&!st)){S.sid=sid;loadInfo();}
+    if(S.streaming&&!st)syncModels();
     S.streaming=st;
+  }
+  /* [manage-models 2026-10-22] 对话里用 manage_models 增删/切换了模型 → 轮次结束后模型列表变了:
+   * 刷新 chip、左下角徽标, 设置抽屉开着就重画 (列表没变不动, 免得打断正在填的表单) */
+  const sig=()=>S.models.map(m=>m.id).join('\n')+'|'+(S.active||'');
+  async function syncModels(){
+    const before=sig();await loadModels();
+    if(sig()===before)return;
+    render();
+    try{if(typeof _loadModelsCache==='function')await _loadModelsCache();if(typeof refreshSbfStatus==='function')refreshSbfStatus();}catch(e){}
+    const bd=$('set-bd');
+    if(bd&&bd.offsetParent!==null&&typeof window.loadSet==='function')window.loadSet();
   }
   function boot(){
     ensureChip();if(!$('msw-chip'))return;
@@ -154,6 +182,6 @@
       window.send.__msw=true;
     }
   }
-  window.LCModelSwitch={refresh:()=>loadModels().then(loadInfo),test:testModel,pick};
+  window.LCModelSwitch={refresh:()=>loadModels().then(loadInfo),test:testModel,pick,syncModels};
   if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',boot);else boot();
 })();

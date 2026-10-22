@@ -18,7 +18,9 @@ from lib.session import _interrupt_flags
 from lib.session import _interrupt_lock
 from lib.sse import sse_content
 from lib.sse import sse_reasoning
+from lib.sse import sse_notice
 from lib.tools.defs import TOOL_DEFS
+from lib import tool_groups as _tg   # 低频工具组按会话按需暴露
 from lib.transport import vllm_stream as _vllm_stream
 from typing import Optional
 from lib.agent.loop_budget import _log_anchor
@@ -37,6 +39,9 @@ def delta_reasoning(delta: dict) -> str:
     return (delta.get("reasoning_content") or delta.get("reasoning")
             or delta.get("thinking") or "")
 
+
+NO_THINK_NOTE = ("本轮思考已关闭。不要在回复里写分析、推理或计划过程（不要列 1. 2. 3. 步骤、不要写「让我…」「我需要…」）；"
+                 "需要动手就直接调用工具，需要说明时只用一句话说正在做什么，完成后再给结论。")
 
 async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_count, out: StreamResult):
     """vLLM 流式调用主体: yield 透传 SSE chunk, 结果经 out 回传 8 字段。"""
@@ -73,10 +78,23 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
         # usage 锚点此前只喂上下文预算, 没回写 token_stats → 账单是估的、预算是真的, 思考模型下系统性偏差。
         iter_real_prompt = 0
         iter_real_completion = 0
+        # 上一轮思考卡住被截断 → 这一轮关思考直接动手 (只关这一轮)。
+        # 实测 GLM-5.3-Flash 画物理动画 SVG: 带约束重试照样想 12k 字被截, 连续 4 次白等 2 分钟 (2026-10-21)
+        _no_think = bool(getattr(ctx, "no_think_next", False))
+        _call_msgs = ctx.messages
+        if _no_think:
+            ctx.no_think_next = False
+            log.info(f"  [REASONING-STALL] 上轮思考被截断, 本轮关闭思考直接动手")
+            # [2026-10-22 真机] 关思考后 GLM 会把分析/计划过程写进正文 ("1. 用户要求我… 让我尝试点击…") 直接显示给用户。
+            # 只对这一次请求追加一条说明 (消息副本, 不进历史, 不改缓存前缀)。
+            # user 角色而不是 system: vLLM 的 GLM/Qwen 模板要求 system 只能在开头 (2026-10-22 桌面真机 400
+            # "System message must be at the beginning"); 框架其它 [SYSTEM-*] 提醒也都是 user 角色。
+            _call_msgs = list(ctx.messages) + [{"role": "user", "content": "[SYSTEM-NO-THINK] " + NO_THINK_NOTE}]
         while _vllm_retry_count <= _vllm_max_retry:
             try:
-                async for chunk in _vllm_stream(ctx.messages, _tf.visible(TOOL_DEFS, ctx.disabled_tools),
-                                                 max_tokens_override=_overflow_max_tokens):
+                async for chunk in _vllm_stream(_call_msgs, _tf.visible(_tg.tools_for(ctx, TOOL_DEFS), ctx.disabled_tools),
+                                                 max_tokens_override=_overflow_max_tokens,
+                                                 **({"no_thinking": True} if _no_think else {})):
                     # ── [STREAM-INTERRUPT] vLLM 流式输出期间检查中断 ──
                     with _interrupt_lock:
                         if ctx.session_id in _interrupt_flags:
@@ -90,6 +108,10 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                             break
                     # [USAGE-ANCHOR] 标准 OpenAI 的 usage 包是 choices=[] + 顶层 usage,
                     # 会被下面 `if not choices: continue` 丢掉 —— 先在这抓一次顶层 usage。
+                    # [trace 2026-10-22] transport 的自动重试 / 切备用模型说明 → SSE notice (前端时间线显示)
+                    if isinstance(chunk, dict) and chunk.get("_lc_notice"):
+                        yield sse_notice(chunk["_lc_notice"], level="warn", kind=chunk.get("_lc_kind", ""), model=model)
+                        continue
                     _top_usage = chunk.get("usage") if isinstance(chunk, dict) else None
                     choices = chunk.get("choices", [])
                     if not choices:
@@ -160,10 +182,8 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                 f"  [REASONING-LOOP] detected, breaking stream. "
                                 f"recent={_loop_detector.recent()}"
                             )
-                            _loop_msg = ("\n（思考绕进了同一个圈子里，已经先停下来了，"
-                                         "换个问法或补充点细节再试一次吧。）\n")
-                            full_text += _loop_msg
-                            yield sse_content(_loop_msg, model)
+                            # 提示放推理面板: 写进正文会混进最终回复和历史, 而且循环其实还会接着跑
+                            yield sse_reasoning("\n\n[思考在原地打转, 已截断, 换个方式直接动手]\n", model)
                             loop_broken = True
                             break
                         # 字数阈值随当前模型 thinking_budget 变化 (见 lib/reasoning_limits.py),
@@ -179,18 +199,13 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                                 if reasoning_stall_count > 0 else
                                 "\n（还在思考中，稍等一下……）\n"
                             )
-                            yield sse_content(_nudge, model)
+                            yield sse_reasoning(_nudge, model)
                         if (_loop_reasoning_chars > _break_thresh
                                 and not full_text and not acc_tools):
                             log.warning(
                                 f"  [REASONING-STALL] {_loop_reasoning_chars} 字 reasoning 无进展, "
                                 f"中断 (阈值 {_break_thresh}, 本次第 {reasoning_stall_count + 1} 次)")
-                            _stall_msg = (
-                                "\n（这轮想得太久了，已经先停下来了，"
-                                "你可以换个说法或拆成更小的问题再问我一次。）\n"
-                            )
-                            full_text += _stall_msg
-                            yield sse_content(_stall_msg, model)
+                            yield sse_reasoning("\n\n[思考过长, 已截断, 下一步不思考直接动手]\n", model)
                             loop_broken = True
                             break
 
@@ -311,6 +326,8 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                         f"→ retry with max_tokens={_safe_out}"
                     )
                     yield f": [400-overflow-retry] clamping max_tokens to {_safe_out}...\n\n"
+                    yield sse_notice(f"上下文接近模型上限, 已缩短输出长度自动重试 {_vllm_retry_count}/{_vllm_max_retry}",
+                                     level="warn", kind="retry", model=model)
                     full_text = ""
                     acc_tools = {}
                     finish_reason = None
@@ -324,6 +341,8 @@ async def _stream_llm_call(ctx, usage, model, last_yield_ts, reasoning_stall_cou
                 )
                 if _is_400 and _vllm_retry_count < _vllm_max_retry:
                     _vllm_retry_count += 1
+                    yield sse_notice(f"模型拒收了这轮请求 (400), 已自动整理对话记录重试 {_vllm_retry_count}/{_vllm_max_retry}",
+                                     level="warn", kind="retry", model=model)
                     # [DeepSeek-compat 2026-05-23] reasoning_content 400 → 给每条 assistant
                     # 补上 reasoning_content="" (DeepSeek 接受空字符串).
                     # 这种错误不需要 sanitize/nuke, 单独走快路径.

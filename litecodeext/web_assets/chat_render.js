@@ -35,11 +35,11 @@ function renderSL(){
     return new Date(ts*1000).toISOString().slice(5,10);
   };
   el.innerHTML=arr.map(s=>{
-    const icon=s.id.startsWith('wx-')?'💬 ':s.id.startsWith('cli-')?'🖥️ ':s.name.startsWith('🔌')?'':'';
+    const icon=s.id.startsWith('wx-')?'💬 ':s.id.startsWith('cli-')?'🖥️ ':'';
     const isPinned=pinned.has(s.id);
     const star=isPinned?'★':'☆';
     const ago=_fmtAgo(s.last_used||s.created);
-    return`<div class="si${s.id===cur?' act':''}" data-sid="${esc(s.id)}" onclick="swS('${s.id}')"><div style="flex:1;min-width:0"><div class="sn">${isPinned?'<span style="color:var(--ac);margin-right:2px">★</span>':''}${icon}${esc(s.name)}</div><div class="sm">${s.count}条 · ${ago}</div></div><button class="sdl" onclick="event.stopPropagation();pinSess('${s.id}')" title="标星" style="margin-right:2px;color:${isPinned?'var(--ac)':'var(--tx3)'}">${star}</button><button class="sdl" onclick="event.stopPropagation();delS('${s.id}')">✕</button></div>`;
+    return`<div class="si${s.id===cur?' act':''}" data-sid="${esc(s.id)}" onclick="swS('${s.id}')"><div style="flex:1;min-width:0"><div class="sn">${isPinned?'<span style="color:var(--ac);margin-right:2px">★</span>':''}${icon}${esc(_lcName(s.name))}</div><div class="sm">${s.count}条 · ${ago}</div></div><button class="sdl" onclick="event.stopPropagation();pinSess('${s.id}')" title="标星" style="margin-right:2px;color:${isPinned?'var(--ac)':'var(--tx3)'}">${star}</button><button class="sdl" onclick="event.stopPropagation();delS('${s.id}')">✕</button></div>`;
   }).join('');
   if (window.LCProjects) try { LCProjects.decorate(el); } catch (e) {}
   // 滚动到当前 active item
@@ -54,7 +54,7 @@ async function swS(sid){
   cur=sid;closeSB();
   try{localStorage.setItem('lc.cur',sid);}catch(e){}
   const s=sess.find(x=>x.id===sid);
-  document.getElementById('ct').textContent=s?.name||sid;
+  document.getElementById('ct').textContent=_lcName(s?.name)||sid;
   document.getElementById('exp-btn').style.display='inline-flex';
   renderSL();
   // 立即清屏 + loading
@@ -65,8 +65,16 @@ async function swS(sid){
   try{
     /* [perf 2026-10] 只拉最近 LC_PAGE_SIZE 条 (每条带全局 index), 更早的滚到顶部再分段拉, 见 chat_paging.js */
     const r=await fetch(`/api/sessions/${sid}?tail=${LC_PAGE_SIZE}`);
-    const d=await r.json();
     if(cur!==sid)return;  // 切换期间又点了别的会话, 丢弃旧 fetch
+    if(r.status===404){  /* [ui-audit 2026-10-21] 会话已在别处删除: 提示并移出列表, 不再渲染成空白新会话 */
+      sess=sess.filter(x=>x.id!==sid);renderSL();
+      if(msgsEl)msgsEl.innerHTML='<div style="padding:40px 20px;text-align:center;color:var(--tx3);font-size:13px">这个会话不存在或已被删除</div>';
+      return;
+    }
+    const d=await r.json();
+    if(cur!==sid)return;
+    /* [ui-v2 2026-10-21] 会话不在侧栏列表里 (刚建 / 列表未刷新) 时标题原来显示成 sid: 用会话数据里的名字补上 */
+    if(!s){const nm=_lcName(d.name);if(nm){document.getElementById('ct').textContent=nm;if(!sess.some(x=>x.id===sid)){sess.unshift({id:sid,name:d.name,count:(d.messages||[]).length,created:d.created,last_used:d.last_used});renderSL();}}}
     renderMsgs(d.messages||[]);
     sbot(true);
     if(window.LCAttach)LCAttach.resumeIfRunning(sid,d.messages||[]);
@@ -97,7 +105,11 @@ function renameCurSession(){
   inp.addEventListener('keydown',e=>{if(e.key==='Enter'){save();}else if(e.key==='Escape'){cancel();}});
   inp.addEventListener('blur',save);
 }
-async function newChat(){if(streaming)return;const r=await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})});const d=await r.json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0});renderSL();document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">New Chat</div></div>';document.getElementById('ct').textContent='New Chat';closeSB()}
+/* [ui-v2 2026-10-21] 老会话标题里重导时加的 "🔌 " 前缀只是来源标记, 显示时去掉 */
+function _lcName(n){return String(n==null?'':n).replace(/^🔌\s*/,'');}
+/* [ui-audit 2026-10-21] 工具结果里给模型看的 "[SYSTEM: ...]" 提示不展示给用户 */
+function _lcStripSys(t){const s=String(t==null?'':t);const i=s.indexOf('[SYSTEM:');return i>0?s.slice(0,i).trimEnd():s;}
+async function newChat(){if(streaming)return;const r=await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})});const d=await r.json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0,created:d.created,last_used:d.last_used||d.created});renderSL();document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">New Chat</div></div>';document.getElementById('ct').textContent='New Chat';closeSB()}
 async function delS(sid){if(!await confirmCard('删除会话','确定要删除此会话? 消息和上下文将永久移除','删除'))return;await fetch(`/api/sessions/${sid}`,{method:'DELETE'});sess=sess.filter(s=>s.id!==sid);renderSL();if(cur===sid){cur=null;document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div></div>';}}
 /* [v12.9] 渲染前合并连续 assistant 消息 —— 多轮 iteration 持久化成多条 assistant 时,
    刷新后显示为多个独立 "AI" 气泡, spawn_agent/工具调用被拆散。合并后同一轮成一个气泡。*/
@@ -115,17 +127,52 @@ function _mergeConsecutiveAssistants(msgs,base=0){
       last.tools=[...(last.tools||[]),...(m.tools||[])];
       last.diffs=[...(last.diffs||[]),...(m.diffs||[])];last.desktop_steps=[...(last.desktop_steps||[]),...(m.desktop_steps||[])];
       last._tool_results=[...(last._tool_results||[]),...(m._tool_results||[])];
+      /* [trace 2026-10-22] 调用链路 (每步成败/用时/摘要) 与整轮错误一起合并 */
+      if(m.trace_steps&&m.trace_steps.length)last.trace_steps=[...(last.trace_steps||[]),...m.trace_steps];
+      if(m.turn_error)last.turn_error=m.turn_error;
+      (last._parts||(last._parts=[])).push(_lcPart(m));
       const lr=last.reasoning||'', mr=m.reasoning||'';
       last.reasoning=lr+(lr&&mr?'\n\n':'')+mr;
       if(m.usage) last.usage=m.usage;  /* 用最后一条 usage (含总 tokens) */
+      if(m.meta) last.meta={...(last.meta||{}),...m.meta};  /* meta.skills: 本轮用到的技能 */
       last.ts=m.ts||last.ts;
     }else{
-      out.push({...m, tools:[...(m.tools||[])], diffs:[...(m.diffs||[])], _tool_results:[...(m._tool_results||[])], _i0:gi, _i1:gi, _key:key});
+      out.push(_lcSteerView({...m, tools:[...(m.tools||[])], diffs:[...(m.diffs||[])], _tool_results:[...(m._tool_results||[])], _i0:gi, _i1:gi, _key:key, _parts:m.role==='assistant'?[_lcPart(m)]:undefined}));
     }
   });
+  out.forEach(_lcSplitNarration);
   return out;
 }
 /* msgs 可以是完整列表, 也可以是 ?tail / ?before 返回的片段 (每条带全局 index) — 分段逻辑见 chat_paging.js */
+/* [steer] 会话记录里的插话是给模型看的完整文本 (lib/agent/steer.py: 头标记 + 原话 + 说明),
+ * 显示时只留用户原话并打「插话」标签 */
+const _LC_STEER_HEAD='[用户在任务进行中插话]';
+function _lcSteerView(m){
+  if(m.role!=='user'||typeof m.content!=='string'||!m.content.startsWith(_LC_STEER_HEAD))return m;
+  let t=m.content.slice(_LC_STEER_HEAD.length);const cut=t.lastIndexOf('\n\n（这是对当前任务');
+  if(cut>=0)t=t.slice(0,cut);
+  return {...m,content:t.trim(),steer:true};
+}
+/* [ui-v2 2026-10-21] 过程旁白归位: 一轮里「最后一次工具调用之前」的正文 (如"内存数据已拿到, 现在运行验证")
+   是步骤间说明, 并进折叠时间线 (tools 里插 LC_NOTE 标记项, _tool_results 对应位置补空); 正文只留最后一次工具调用之后的结论。
+   整轮没有工具 / 最后一段之后没有正文 (被中断) 时不动。流式路径见 chat_stream.js 同名逻辑。 */
+const LC_NOTE='\u2063note:';
+function _lcPart(m){return {c:typeof m.content==='string'?m.content:null, nt:(m.tools||[]).length, nr:(m._tool_results||[]).length};}
+function _lcSplitNarration(it){
+  const P=it._parts;delete it._parts;
+  if(!P||P.length<2||P.some(p=>p.c===null))return;
+  let L=-1;P.forEach((p,i)=>{if(p.nt)L=i;});
+  if(L<0||!P.slice(L+1).some(p=>p.c.trim()))return;
+  const tools=[],res=[],content=[];let tc=0,rc=0;
+  P.forEach((p,i)=>{
+    const segT=it.tools.slice(tc,tc+p.nt),segR=it._tool_results.slice(rc,rc+p.nr);tc+=p.nt;rc+=p.nr;
+    while(segR.length<segT.length)segR.push({});
+    if(i<=L){if(p.c.trim()){tools.push(LC_NOTE+p.c.trim());res.push({});}}
+    else if(p.c.trim())content.push(p.c);
+    tools.push(...segT);res.push(...segR);
+  });
+  it.tools=tools;it._tool_results=res;it.content=content.join('\n\n');
+}
 function renderMsgs(msgs){const el=document.getElementById('msgs');el.innerHTML='';if(!msgs.length){_lcPage.sid=cur;_lcPage.start=0;el.innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">LiteCode</div></div>';return}_lcRenderInitial(msgs);sbot()}
 function rdiff(df){if(typeof df!=='string')return '';return df.split('\n').map(l=>{const cl=l.startsWith('+')&&!l.startsWith('+++')?'da':l.startsWith('-')&&!l.startsWith('---')?'dd_':l.startsWith('@@')?'dm':'';return`<span class="${cl}">${esc(l)}</span>`;}).join('\n')}
 /* ── 微信附件解析：从消息文本中提取图片/文件路径 ── */
@@ -166,7 +213,8 @@ function _buildAttachNode(att){
   a.innerHTML=`<span class="wx-file-icon">${icon}</span><div class="wx-file-info"><div class="wx-file-name">${esc(fname)}</div><div class="wx-file-size">${esc(ext.toUpperCase()||'FILE')}</div></div><span class="wx-file-dl">↓</span>`;
   return a;
 }
-function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[],desktopSteps=[]){
+/* [trace 2026-10-22] extra = {trace_steps, turn_error}: 刷新后重绘时间线状态/用时/摘要 + 错误卡片 (chat_timeline.js) */
+function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',wx_user='',reasoning='',toolResults=[],desktopSteps=[],extra=null){
   tools=(tools||[]).filter(t=>t!=='推理中…'); /* 老会话里落库的等首包占位, 不是工具调用 */
   document.getElementById('empty')?.remove();const el=document.getElementById('msgs');
   const wrap=document.createElement('div');wrap.className=`msg ${role==='user'?'user':'ai'}`;
@@ -245,7 +293,7 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
       bubble.appendChild(rsEl);
       rsEl.querySelector('#'+rsid).textContent=reasoning;
     }
-    if(tools.length){const tg=document.createElement('div');tg.className='tg';tools.forEach((t,_i)=>{const ti=document.createElement('div');ti.className='ti';const c=t.indexOf(': ');if(c>0){const argsStr=t.slice(c+2);if(argsStr.length>TOOL_ARGS_PREVIEW){const aid='ta'+Date.now()+Math.random().toString(36).slice(2,4);ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="targs" id="${aid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="ta tap">${esc(argsStr.slice(0,TOOL_ARGS_PREVIEW))}…</span><span class="tac">${esc(argsStr)}</span></span>`;}else{ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="ta">${esc(argsStr)}</span>`;}}else ti.textContent=t.slice(0,TOOL_ARGS_PREVIEW);tg.appendChild(ti);if(toolResults&&toolResults[_i]&&toolResults[_i].result){const res=toolResults[_i].result;const tr=document.createElement('div');tr.className='tr_';if(res.length>TOOL_RESULT_PREVIEW){const rid='tr'+Date.now()+Math.random().toString(36).slice(2,4);tr.innerHTML=`<span class="trc" id="${rid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="trp">↳ ${esc(res.slice(0,TOOL_RESULT_PREVIEW))}…</span><span class="trf">↳ ${esc(res)}</span></span>`;}else{tr.textContent='↳ '+res;}tg.appendChild(tr);}});
+    if(tools.length){const tg=document.createElement('div');tg.className='tg';tools.forEach((t,_i)=>{if(typeof t==='string'&&t.startsWith(LC_NOTE)){const n=document.createElement('div');n.className='tnote';n.textContent=t.slice(LC_NOTE.length);tg.appendChild(n);return;}const ti=document.createElement('div');ti.className='ti';const c=t.indexOf(': ');if(c>0){const argsStr=t.slice(c+2);if(argsStr.length>TOOL_ARGS_PREVIEW){const aid='ta'+Date.now()+Math.random().toString(36).slice(2,4);ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="targs" id="${aid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="ta tap">${esc(argsStr.slice(0,TOOL_ARGS_PREVIEW))}…</span><span class="tac">${esc(argsStr)}</span></span>`;}else{ti.innerHTML=`<span class="tn" data-tool="${esc(t.slice(0,c))}">${esc(t.slice(0,c))}</span><span class="ta">${esc(argsStr)}</span>`;}}else ti.textContent=t.slice(0,TOOL_ARGS_PREVIEW);if(c>0)ti.dataset.ti=_i;/* [trace] 行↔tools 下标 */tg.appendChild(ti);if(toolResults&&toolResults[_i]&&toolResults[_i].result){const res=_lcStripSys(toolResults[_i].result);const tr=document.createElement('div');tr.className='tr_';if(res.length>TOOL_RESULT_PREVIEW){const rid='tr'+Date.now()+Math.random().toString(36).slice(2,4);tr.innerHTML=`<span class="trc" id="${rid}" onclick="this.classList.toggle('open')"><span class="arr">&#x25BA;</span><span class="trp">↳ ${esc(res.slice(0,TOOL_RESULT_PREVIEW))}…</span><span class="trf">↳ ${esc(res)}</span></span>`;}else{tr.textContent='↳ '+res;}tg.appendChild(tr);}});
       /* [#16 3段折叠] 工具调用 ≥3 条时收进折叠块; 1-2 条直接展开 (少量场景直看更快) */
       if(tools.length>=3){
         const tgb=document.createElement('div');tgb.className='tgb';
@@ -255,8 +303,12 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
         bubble.appendChild(tgb);
       }else{bubble.appendChild(tg);}
     }
+    /* [trace 2026-10-22] 中文名 + 状态 (✓ 用时 / ✗) + 展开详情; 老会话没有 trace_steps 时按结果是否 ERROR 判断 */
+    if(window.LCTimeline){try{LCTimeline.decorateHistory(bubble,tools,toolResults||[],(extra&&extra.trace_steps)||[]);}catch(e){}}
     desktopSteps.forEach(step=>window.LCDesktopSteps?.render(bubble,step));
     diffs.forEach(dv=>{const df=dv?.diff;if(typeof df!=='string'||!df)return;const fname=(typeof dv.filepath==='string'?dv.filepath:'file').split('/').pop();const adds=(df.match(/^\+[^+]/mg)||[]).length;const dels=(df.match(/^-[^-]/mg)||[]).length;const did='d'+Math.random().toString(36).slice(2,7);const dEl=document.createElement('div');dEl.className='dv';dEl.innerHTML=`<div class="dth" onclick="document.getElementById('${did}').classList.toggle('open')"><span style="color:var(--tx3);font-size:10px">&#x25BA;</span><span style="color:#93c5fd">${esc(fname)}</span><span style="color:var(--ac3)">+${adds}</span><span style="color:var(--dg)">-${dels}</span></div><div class="dbd" id="${did}"><pre><code>${rdiff(df)}</code></pre></div>`;bubble.appendChild(dEl);});
+    const _te=extra&&extra.turn_error;
+    if(_te&&_te.content_echo&&typeof content==='string'&&content.trimEnd().endsWith(_te.content_echo)){content=content.trimEnd().slice(0,-_te.content_echo.length).trimEnd();}  /* [trace] 与错误卡片重复 */
     if(content){
       /* [v1.4] 防御: 多模态 content 可能是 array, 提取 text 部分再 marked */
       let textContent = content;
@@ -271,7 +323,8 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
         textContent = String(content);
       }
       function _renderMd(container,txt){try{container.innerHTML=window.lcSafeMd(txt||'');}catch(e){container.textContent=txt;}_lcOptimizeImgs(container);container.querySelectorAll('pre').forEach(pre=>{const btn=document.createElement('button');btn.className='cpb';btn.textContent='copy';btn.onclick=()=>{navigator.clipboard.writeText(pre.querySelector('code')?.textContent||'');btn.textContent='✓';setTimeout(()=>btn.textContent='copy',1500);};pre.style.position='relative';pre.appendChild(btn);pre.querySelectorAll('code').forEach(c=>{try{hljs.highlightElement(c);}catch(e){}});});_scanAndPreview(container,txt);}
-      if(textContent.length>LONG_MSG_THRESHOLD){
+      /* [ui-v2 2026-10-21] 回答不再按长度折叠 (一线产品都不折叠回答; 原 >3000 字收进「长文消息」) */
+      if(false){
         const lmid='lm'+Date.now()+Math.random().toString(36).slice(2,4);
         const lmEl=document.createElement('div');lmEl.className='lmb';
         lmEl.innerHTML=`<div class="lmh"><span class="arr">&#x25BA;</span><span>📜 长文消息 ${textContent.length} 字符</span></div><div class="lmc" id="${lmid}"></div>`;
@@ -284,7 +337,9 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
         bubble.appendChild(md);
       }
     }
-    if(usage){const ub=document.createElement('div');ub.className='ub';const f=n=>(n||0).toLocaleString();ub.innerHTML=`<span>P:<b>${f(usage.prompt_tokens)}</b></span><span>C:<b>${f(usage.completion_tokens)}</b></span><span>T:<b>${f(usage.total_tokens)}</b></span>${usage.iterations>1?`<span>${usage.iterations}轮</span>`:''}${usage.elapsed_seconds?`<span>${usage.elapsed_seconds}s</span>`:''}`;bubble.appendChild(ub);}
+    if(_te&&window.LCTimeline){try{bubble.appendChild(LCTimeline.errorCard(_te,{partial:!!(String(content||'').trim()||bubble.querySelector('.ti.lct-ok'))}));}catch(e){}}  /* [trace] 刷新后重绘错误卡片 */
+    if(usage&&window.lcUsageLine){const ub=document.createElement('div');ub.className='ub';const r=lcUsageLine(usage,(tools||[]).filter(t=>!(typeof t==='string'&&t.startsWith(LC_NOTE))).length);ub.innerHTML=r.html;ub.dataset.el=r.el;bubble.appendChild(ub);}
+    else if(usage){const ub=document.createElement('div');ub.className='ub';const f=n=>(n||0).toLocaleString();ub.innerHTML=`<span>P:<b>${f(usage.prompt_tokens)}</b></span><span>C:<b>${f(usage.completion_tokens)}</b></span><span>T:<b>${f(usage.total_tokens)}</b></span>${usage.iterations>1?`<span>${usage.iterations}轮</span>`:''}${usage.elapsed_seconds?`<span>${usage.elapsed_seconds}s</span>`:''}`;bubble.appendChild(ub);}
     /* 流式路径在 send() 末尾会 _scanAndPreview(bodyEl, bodyEl.textContent) — tool 结果里的图片路径在那时被扫到并渲染预览卡。
        但 renderMsgs → addMsg 重放历史时只走 _renderMd 扫 content 文本, tool result 里的路径不会被扫 → 刷新后图没了。
        这里补一次, 仅扫 toolResults, 不重复扫 content 已扫过的部分。 */

@@ -337,10 +337,14 @@ def _offline_v10_fixes() -> list:
         # create_skill 的实际落地逻辑在 handlers/meta.py, 它独立 import 了
         # SKILLS_DIR (跟 tool_dispatch.py 各自的模块级绑定不是同一个引用),
         # 只 patch td.SKILLS_DIR 对 meta.py 里的执行路径无效, 得 patch 两处.
+        # [2026-10-22] 草稿改写到 WORKSPACE/skills/_drafts/ (lib/skill_registry.py), 这里把技能目录指到临时目录
+        import os as _os
         tmp = Path(tempfile.mkdtemp(prefix="skill_test_"))
         orig_td, orig_meta = td.SKILLS_DIR, _meta.SKILLS_DIR
+        orig_home = _os.environ.get("LITECODE_SKILLS_HOME")
         td.SKILLS_DIR = tmp
         _meta.SKILLS_DIR = tmp
+        _os.environ["LITECODE_SKILLS_HOME"] = str(tmp / "home")
         try:
             async def _run():
                 return await td.execute_tool("create_skill", {
@@ -349,12 +353,17 @@ def _offline_v10_fixes() -> list:
                     "content": "# test\n\n## 何时使用\n测试场景",
                 }, sid="test-sid")
             result, _ = _asyncio.run(_run())
-            # 应当写到 drafts/, 不是直接激活
-            assert (tmp / "drafts" / "test-draft-skill" / "SKILL.md").exists()
+            # 应当写到草稿区, 不是直接激活
+            assert (tmp / "home" / "_drafts" / "test-draft-skill" / "SKILL.md").exists()
+            assert not (tmp / "home" / "test-draft-skill").exists()
             assert "草稿" in result or "draft" in result.lower()
         finally:
             td.SKILLS_DIR = orig_td
             _meta.SKILLS_DIR = orig_meta
+            if orig_home is None:
+                _os.environ.pop("LITECODE_SKILLS_HOME", None)
+            else:
+                _os.environ["LITECODE_SKILLS_HOME"] = orig_home
             import shutil; shutil.rmtree(tmp, ignore_errors=True)
     _test("[v1.0] create_skill 默认写到 drafts/", test_create_skill_drafts)
 

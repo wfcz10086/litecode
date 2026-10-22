@@ -110,12 +110,23 @@ def _command(body):
 _SHA_HEX = ("function LcSha256([byte[]]$d){$x=[Security.Cryptography.SHA256]::Create(); "
             "([BitConverter]::ToString($x.ComputeHash($d))).Replace('-','').ToLower()}; ")
 _GET_BYTES = "function LcGetBytes($u,$hd){$r=Invoke-WebRequest $u -Headers $hd -UseBasicParsing; ,[byte[]]$r.RawContentStream.ToArray()}; "
+# [2026-10-21] 系统代理指向一个连不上的端口 (实测测试机残留 Clash 的 127.0.0.1:7890, 代理程序没在跑) 时,
+# Invoke-WebRequest 只报"无法连接到远程服务器", curl 不走该代理却能通, 很难自己查出来。
+# 2 秒连不上代理就让本次安装 (同一进程里的引导脚本) 改为直连并说明; 代理能连就照常用。
+# Windows PowerShell 5.1 认 DefaultWebProxy; PowerShell 6+ 的 Invoke-WebRequest 不认, 另设 -NoProxy 默认值。
+_PROXY_GUARD = ("try{$lp=[Net.WebRequest]::GetSystemWebProxy().GetProxy([Uri]$s); "
+                "if($lp -and $lp.Authority -ne ([Uri]$s).Authority){$lc=New-Object Net.Sockets.TcpClient; "
+                "try{$ok=$lc.ConnectAsync($lp.Host,$lp.Port).Wait(2000)}catch{$ok=$false}finally{$lc.Close()}; "
+                "if(-not $ok){[Net.WebRequest]::DefaultWebProxy=New-Object Net.WebProxy; "
+                "if($PSVersionTable.PSVersion.Major -ge 6){$PSDefaultParameterValues['Invoke-*:NoProxy']=$true}; "
+                "Write-Host ('系统代理 '+$lp.Authority+' 连不上 (代理软件没在运行?), 本次安装改为直连')}}}catch{}; ")
 
 
 def install_body(base_url, code, key_fingerprint='', ssh_public_key=''):
     """先下载引导脚本并核对安装命令里的 sha256, 一致才执行; 公钥指纹交给引导脚本校验签名公钥。"""
     from lib.windows_node_signing import bootstrap_sha256
-    body = ("$ErrorActionPreference='Stop'; $s='" + base_url + "'; $h='" + bootstrap_sha256() + "'; " + _SHA_HEX + _GET_BYTES +
+    body = ("$ErrorActionPreference='Stop'; $s='" + base_url + "'; $h='" + bootstrap_sha256() + "'; " + _PROXY_GUARD
+            + _SHA_HEX + _GET_BYTES +
             "$raw=LcGetBytes ($s+'/api/windows/bootstrap.ps1') @{}; "
             "if((LcSha256 $raw) -ne $h){throw '安装脚本校验失败：下载到的 bootstrap.ps1 与安装命令中的 sha256 不一致，"
             "可能在网络途中被替换，或控制端已升级。已停止，未执行任何安装步骤；请让管理员重新生成安装命令。'}; "
@@ -552,9 +563,16 @@ class Nodes:
             node = data[alias]
             if node['state'] != 'online':
                 raise ValueError('节点当前不能接受任务')
-            for _, existing in self._jobs():
+            for file, existing in self._jobs():
                 if existing['node_id'] == node['id'] and existing['expires'] > time.time() and existing['state'] in ('pending', 'dispatched'):
-                    raise ValueError('该节点已有桌面任务，等完成后再操作')
+                    # [2026-10-21] 跑分: 只回一句"已有桌面任务", 模型只能 sleep 15/30/90 盲轮询白等。说清占用的动作与已运行时长。
+                    try:
+                        age = int(time.time() - file.stat().st_mtime)
+                    except OSError:
+                        age = 0
+                    left = max(0, int(existing['expires'] - time.time()))
+                    raise ValueError(f"该节点已有桌面任务（{existing.get('action', '?')}，{existing['state']}，已 {age} 秒，"
+                                     f"最长还剩 {left} 秒），等完成后再操作；工具会自动排队等待，不要自己 sleep 轮询")
             record = {'id': job_id, 'node_id': node['id'], 'state': 'pending', 'action': action,
                       'request': request, 'expires': time.time() + timeout}
             _write(self.root / ('job-' + job_id + '.json'), record)

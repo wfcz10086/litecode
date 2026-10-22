@@ -2,6 +2,7 @@
 name: pdf-reading
 description: "Use this skill when you need to read, inspect, or extract content from PDF files — especially when file content is NOT in your context and you need to read it from disk. Covers content inventory, text extraction, page rasterization for visual inspection, embedded image/attachment/table/form-field extraction, and choosing the right reading strategy for different document types (text-heavy, scanned, slide-decks, forms, data-heavy). Do NOT use this skill for PDF creation, form filling, merging, splitting, watermarking, or encryption — use the pdf skill instead."
 license: Proprietary. LICENSE.txt has complete terms
+aliases: ["读取pdf", "提取pdf", "解析pdf"]
 ---
 
 # PDF Processing Guide
@@ -86,7 +87,7 @@ with pdfplumber.open("document.pdf") as pdf:
 
 Text extraction is **blind** to charts, diagrams, figures, equations,
 multi-column layout, and form structures. When any of these matter,
-rasterize the relevant page and Read the image:
+rasterize the relevant page and look at it with `vision_ocr`:
 
 ```bash
 # Rasterize a single page (page 3 here) at 150 DPI
@@ -98,24 +99,24 @@ pdftoppm -jpeg -r 150 -f 3 -l 3 document.pdf /tmp/page
 ls /tmp/page-*.jpg
 ```
 
-Then Read the resulting image file. This gives you full visual
-understanding of that page — layout, charts, equations, everything.
+Then call `vision_ocr(path="/tmp/page-03.jpg")` (default `mode=auto`;
+`mode="ocr"` for text only, `mode="describe"` for charts/figures). Several
+pages at once: `vision_ocr(paths=[...])`, **max 8 images per call**, and
+for text-dense pages keep it to 2–3 per call with `max_tokens=8192`
+(all images share one output budget). If the active model cannot see
+images, vision_ocr routes to the configured vision fallback model
+automatically.
 
 **When to rasterize vs. text-extract:**
 - **Content/data questions → text extraction** (cheaper, searchable)
 - **Figures, charts, visual layout → rasterize the page**
 - **Tables → try text extraction first, rasterize if garbled**
 - **Precision matters → do both** (extract text AND rasterize; use text
-  for data, image for context — this is what Claude's API does natively
-  with PDF uploads)
+  for data, image for context)
 
-**Token cost awareness:**
-- Text extraction: ~200–400 tokens per page
-- Rasterized image: ~1,600 tokens per page (at 150 DPI)
-- Both together: ~2,000–2,400 tokens per page
-
-For a 100-page PDF, rasterizing everything would consume ~160K tokens.
-Only rasterize pages that matter for the question at hand.
+**Cost awareness:** each vision_ocr call is a separate vision-model
+request (seconds each, 120 s timeout). Only rasterize pages that matter
+for the question at hand.
 
 ### Choosing your reading strategy
 
@@ -124,9 +125,9 @@ Only rasterize pages that matter for the question at hand.
   pages where layout matters.
 
 **Scanned documents** (no extractable text):
-→ Rasterize pages at 150 DPI and Read them visually. For bulk text
-  extraction, use OCR (pytesseract after converting pages to images —
-  see REFERENCE.md for a complete example).
+→ Rasterize pages (150–200 DPI) and run `vision_ocr` in batches. For
+  converting a whole scanned PDF to Markdown, `load_skill('pdf-ocr-pipeline')`
+  (tesseract is usually not installed — don't rely on pytesseract).
 
 **Slide-deck PDFs** (exported presentations):
 → Every page is primarily visual. Rasterize individual pages on demand.
@@ -157,7 +158,7 @@ pdfimages -png -f 3 -l 5 document.pdf /tmp/img
 pdfimages -all document.pdf /tmp/img
 ```
 
-Then Read `/tmp/img-000.png` (etc.) to see each extracted image.
+Then `vision_ocr(paths=["/tmp/img-000.png", ...])` to see the extracted images (≤8 per call).
 
 **Gotcha — vector graphics:** `pdfimages` extracts only raster image
 data. Charts and diagrams drawn as vector graphics (common in
@@ -202,25 +203,7 @@ pdfdetach -saveall -o /tmp/attachments/ document.pdf
 pdfdetach -save 1 -o /tmp/attachment.pdf document.pdf
 ```
 
-In Python:
-```python
-import os
-from pypdf import PdfReader
-
-reader = PdfReader("document.pdf")
-for name, content_list in reader.attachments.items():
-    safe_name = os.path.basename(name)  # sanitize — name comes from the PDF
-    for content in content_list:
-        with open(f"/tmp/{safe_name}", "wb") as f:
-            f.write(content)
-```
-
-**Two attachment mechanisms exist in PDFs:** page-level file annotation
-attachments (shown as paperclip icons in viewers) and document-level
-embedded files (in the EmbeddedFiles name tree). Both `pdfdetach` and
-pypdf handle the common cases. Rich media assets (3D, video) embedded
-as annotations may not appear in the attachment list — use PyMuPDF to
-iterate page annotations for those.
+In Python: `PdfReader(path).attachments` (dict name → [bytes]); sanitize names with `os.path.basename`.
 
 ### Extracting form field data
 
@@ -253,16 +236,12 @@ pdftk form.pdf dump_data_fields
 ```
 
 For anything beyond reading form data — filling forms, creating forms —
-use the pdf skill at `/mnt/skills/public/pdf/SKILL.md`.
+use `load_skill('pdf')`.
 
-### Audio, video, and other rare embedded content
+### Audio, video, 3D
 
-PDFs can occasionally embed audio, video, or 3D models. Check
-`pdfdetach -list` first — if the media appears as an attachment,
-extract with `pdfdetach -saveall`. If not, it may be a Rich Media
-annotation (harder to extract; requires PyMuPDF to iterate page
-annotations). This is very rare in practice. Most PDF viewers outside
-Adobe Acrobat do not support media playback.
+Rare. Check `pdfdetach -list`; if not an attachment it's a Rich Media
+annotation — iterate annotations with PyMuPDF.
 
 ### Font diagnostics
 
@@ -277,9 +256,6 @@ Look at the "emb" column — if fonts show "no" (not embedded) with
 custom encodings, the PDF's character mapping may be broken for text
 extraction. In that case, rasterize the page and use vision instead.
 
-Also check encoding: fonts with "Custom" or "Identity-H" encoding
-without embedded CIDToGID maps can cause character substitution issues
-even when the font is technically embedded.
 
 ---
 
@@ -295,11 +271,10 @@ even when the font is technically embedded.
 | Extract images | pdfimages | `pdfimages -png input.pdf prefix` |
 | Extract attachments | pdfdetach | `pdfdetach -saveall -o /tmp/` |
 | Read form fields | pypdf | `reader.get_fields()` |
-| OCR scanned PDFs | pytesseract | Convert to image first |
+| OCR scanned PDFs | vision_ocr | rasterize → `vision_ocr(paths=[...])` ≤8/call |
 
 ## PDF Form Filling, Creation, Merging, Splitting, and Other Operations
 
 This skill covers **reading and inspection** only. For filling forms,
 creating, merging, splitting, rotating, watermarking, encrypting, or
-other PDF manipulation tasks, use the public pdf skill at
-`/mnt/skills/public/pdf/SKILL.md`.
+other PDF manipulation tasks, use `load_skill('pdf')`.

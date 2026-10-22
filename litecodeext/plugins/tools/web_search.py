@@ -135,6 +135,13 @@ async def tool_web_fetch(args, sid, ctx):
     return await _do_web_fetch(args["url"], args.get("max_chars", 4000)), None
 
 
+_DEV_CATEGORIES = frozenset({"general", "it", "packages", "repos", "q&a", "science"})
+
+
+_ENGINE_COOLDOWN: dict = {}   # 浏览器搜索引擎 → 冷却到期时间 (失败/超时的引擎暂时不排)
+_ENGINE_COOLDOWN_S = 1800
+
+
 async def tool_web_search(args, sid, ctx):
     # 从 tool_dispatch 拿模块级依赖 (HAS_SEARCH / HAS_BROWSER_SEARCH 是可变全局)
     _bs = _td._bs
@@ -147,6 +154,11 @@ async def tool_web_search(args, sid, ctx):
     # 不能把提示文字当结果传给模型 — 参考 openclaw 的升级链路.
     _WEB_SEARCH_TOTAL_TIMEOUT = 15
     query = args["query"]
+    # [trace 2026-10-22] 降级说明透传到对话时间线 ("搜索源 A 失败, 改用 B"), 见 lib/tool_trace.report
+    from lib.tool_trace import report as _trace_report
+
+    def _note(text: str):
+        _trace_report(sid, "web_search", text)
     region = args.get("region", _SEARCH_CFG.get("default_mode", "domestic"))
 
     def _is_empty_search(txt: str) -> bool:
@@ -170,6 +182,46 @@ async def tool_web_search(args, sid, ctx):
                 return True
         return False
 
+    # [2026-10-20] 开发者分类: SearXNG 的 it/packages/repos/q&a/science 引擎组 (GitHub/StackOverflow/MDN/
+    # npm/Docker Hub...). 只有 SearXNG 支持分类, 没结果就退回下面的通用链路 (行为同不传 category).
+    category = str(args.get("category") or "general").strip().lower()
+    if category not in _DEV_CATEGORIES:
+        category = "general"
+    if category != "general" and HAS_BROWSER_SEARCH and _bs and hasattr(_bs, "searxng_search"):
+        try:
+            loop = asyncio.get_event_loop()
+            sx_result = await asyncio.wait_for(
+                loop.run_in_executor(None, lambda: _bs.searxng_search(query, 10, categories=category)),
+                timeout=12,
+            )
+            if isinstance(sx_result, dict) and sx_result.get("ok") and sx_result.get("message"):
+                log.info(f"  [web_search] searxng category={category} HIT")
+                return f"(分类: {category})\n" + sx_result["message"], None
+            log.info(f"  [web_search] searxng category={category} empty, fallback to general")
+        except Exception as _cxe:
+            log.warning(f"  [web_search] searxng category={category} failed: {_cxe}, fallback to general")
+
+    # [2026-10-22] 优先级 -1: 火山豆包搜索 (付费 API, 中文时效最好)。没配 key 跳过; 失败/空结果往下走免费链路
+    try:
+        import doubao_search as _dbs
+        _dbk = _dbs.api_key(_SEARCH_CFG)
+    except Exception:
+        _dbs, _dbk = None, ""
+    if _dbk:
+        try:
+            db_result = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(None, _dbs.doubao_search, query, _dbk, 8),
+                timeout=18,
+            )
+            if db_result.get("ok"):
+                log.info(f"  [web_search] doubao HIT ({len(db_result['results'])} 条)")
+                return db_result["message"], None
+            log.warning(f"  [web_search] doubao 无结果/失败, 走免费链路: {db_result.get('message', '')[:160]}")
+            _note("豆包搜索没有结果, 改用免费搜索源")
+        except Exception as _dbe:
+            log.warning(f"  [web_search] doubao failed: {_dbe}, 走免费链路")
+            _note("豆包搜索失败, 改用免费搜索源")
+
     # [2026-05-25] 优先级 0: 本机 SearXNG (JSON API, 不被反爬, ≤3s)
     # 走通就直接返回, 否则 fallback 到 deep_search → browser_search.
     if HAS_BROWSER_SEARCH and _bs and hasattr(_bs, "searxng_search"):
@@ -188,10 +240,13 @@ async def tool_web_search(args, sid, ctx):
                     log.info(f"  [web_search] searxng HIT ({len(sx_result.get('results', []))} 条)")
                     return msg, None
             log.info(f"  [web_search] searxng empty/down, fallback to deep_search")
+            _note("搜索源 SearXNG 没有结果, 改用 deep_search")
         except asyncio.TimeoutError:
             log.warning(f"  [web_search] searxng timeout (10s), fallback to deep_search")
+            _note("搜索源 SearXNG 超时, 改用 deep_search")
         except Exception as _sxe:
             log.warning(f"  [web_search] searxng failed: {_sxe}, fallback to deep_search")
+            _note("搜索源 SearXNG 失败, 改用 deep_search")
 
     if HAS_SEARCH and _ds:
         try:
@@ -203,10 +258,13 @@ async def tool_web_search(args, sid, ctx):
             if ds_result and not _is_empty_search(ds_result):
                 return ds_result, None
             log.info(f"  [web_search] deep_search returned empty/no-result, escalating to browser fallback")
+            _note("deep_search 没有结果, 改用浏览器多引擎搜索")
         except asyncio.TimeoutError:
             log.warning(f"  [web_search] deep_search timed out after {_WEB_SEARCH_TOTAL_TIMEOUT}s, trying fallback")
+            _note("deep_search 超时, 改用浏览器多引擎搜索")
         except Exception as _se:
             log.warning(f"  [web_search] deep_search failed: {_se}, trying fallback")
+            _note("deep_search 失败, 改用浏览器多引擎搜索")
 
     # [v1.3] deep_search 空结果 → 上真实浏览器. 改成**并行**多引擎取最快, 原先
     # 串行 bing→sogou 每个 25s, 总耗时可能 50s+. 现在并行, 总预算 15s, 谁先有
@@ -221,45 +279,62 @@ async def tool_web_search(args, sid, ctx):
         else:
             # 国内: 国内节点 bing.cn + sogou 都可用
             engines_to_try = ["duckduckgo", "bing", "sogou"]
-        log.info(f"  [web_search] parallel browser_search: {engines_to_try}")
+        # [2026-10-22 桌面版实测] 没有 SearXNG 时整次搜索 45s: 国内网络下 duckduckgo 卡满超时, 浏览器服务又是单例,
+        # 它占着浏览器, bing(5.7s)/sogou(3.0s) 只能排队。改成: 中文查询 bing/sogou 优先; 失败或超时的引擎冷却 30 分钟
+        # 不再排进来; 先只发首选引擎, 4s 没结果再并发补发其余 (对冲请求)。
+        if re.search(r"[\u4e00-\u9fff]", query):
+            engines_to_try = sorted(engines_to_try, key=lambda e: e not in ("bing", "sogou"))
+        now = time.time()
+        healthy = [e for e in engines_to_try if _ENGINE_COOLDOWN.get(e, 0) < now]
+        engines_to_try = healthy or engines_to_try[-1:]
+        log.info(f"  [web_search] browser_search: {engines_to_try}")
 
         loop = asyncio.get_event_loop()
-        futs = {
-            eng: loop.run_in_executor(None, _bs.browser_search_fallback, query, eng)
-            for eng in engines_to_try
-        }
         per_engine_timeout = 12
         total_deadline = time.time() + per_engine_timeout + 3
-        pending = set(futs.values())
-        fut_to_engine = {v: k for k, v in futs.items()}
+        futs, queued = {}, list(engines_to_try)
+
+        def _launch(eng):
+            futs[loop.run_in_executor(None, _bs.browser_search_fallback, query, eng)] = (eng, time.time())
+
+        _launch(queued.pop(0))
+        pending = set(futs)
 
         try:
             while pending and time.time() < total_deadline:
-                remaining = max(0.5, total_deadline - time.time())
+                wait_for = 4.0 if queued else max(0.5, total_deadline - time.time())
                 done, pending = await asyncio.wait(
-                    pending, timeout=remaining,
+                    pending, timeout=min(wait_for, max(0.5, total_deadline - time.time())),
                     return_when=asyncio.FIRST_COMPLETED,
                 )
                 for fut in done:
-                    eng_name = fut_to_engine.get(fut, "?")
+                    eng_name, t0 = futs.get(fut, ("?", now))
                     try:
                         res = fut.result()
                     except Exception as _be:
+                        res = None
                         log.warning(f"  [web_search] browser({eng_name}) failed: {_be}")
-                        continue
                     if res and not _is_empty_search(res):
-                        # 取到就跑, 顺手取消还在跑的
+                        log.info(f"  [web_search] browser({eng_name}) HIT {time.time() - t0:.1f}s")
                         for p in pending:
                             try: p.cancel()
                             except Exception: pass
                         return res, None
-                    else:
-                        log.info(f"  [web_search] browser({eng_name}) empty")
+                    _ENGINE_COOLDOWN[eng_name] = time.time() + _ENGINE_COOLDOWN_S
+                    log.info(f"  [web_search] browser({eng_name}) empty, 冷却 {_ENGINE_COOLDOWN_S}s")
+                if queued and (not done or not pending):
+                    for eng in queued:
+                        _launch(eng)
+                    queued = []
+                    pending = {f for f in futs if not f.done()}
             # 全部超时
             for p in pending:
+                eng_name = futs.get(p, ("?",))[0]
+                _ENGINE_COOLDOWN[eng_name] = time.time() + _ENGINE_COOLDOWN_S
                 try: p.cancel()
                 except Exception: pass
             log.warning(f"  [web_search] all browser engines empty/timeout after {per_engine_timeout+3}s")
+            _note("浏览器搜索也没有结果, 最后尝试直接抓取搜索页")
         except Exception as _me:
             log.warning(f"  [web_search] browser race loop error: {_me}")
 
@@ -447,7 +522,15 @@ async def tool_browser_read(args, sid, ctx):
         return f"ERROR: browser_read 失败: {e}", None
 
 
+async def tool_stock_quote(args, sid, ctx):
+    import market_quote as _mq
+    syms = args.get("symbols")
+    return await asyncio.get_event_loop().run_in_executor(
+        None, lambda: _mq.run(syms, bool(args.get("overview")))), None
+
+
 _TOOLS = {
+    "stock_quote": tool_stock_quote,
     "web_fetch": tool_web_fetch,
     "web_search": tool_web_search,
     "browser_search": tool_browser_search,
@@ -482,7 +565,8 @@ _OBJ = {"type": "object", "properties": {"query": {"type": "string"}, "url": {"t
 
 TOOLS = [
     {"name": "web_fetch",            "description": "抓取指定 URL 的正文内容",     "schema": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}, "run": _wrap(tool_web_fetch),            "capabilities": {"cost": "cheap", "safe": True}},
-    {"name": "web_search",           "description": "搜索引擎搜索关键字",           "schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}, "run": _wrap(tool_web_search),         "capabilities": {"cost": "cheap", "safe": True}},
+    {"name": "web_search",           "description": "搜索引擎搜索关键字",           "schema": {"type": "object", "properties": {"query": {"type": "string"}, "category": {"type": "string", "enum": sorted(_DEV_CATEGORIES)}}, "required": ["query"]}, "run": _wrap(tool_web_search),         "capabilities": {"cost": "cheap", "safe": True}},
+    {"name": "stock_quote",          "description": "股票/指数实时行情",           "schema": _OBJ, "run": _wrap(tool_stock_quote),         "capabilities": {"cost": "cheap", "safe": True}},
     {"name": "browser_search",       "description": "浏览器渲染搜索 (处理 JS)",     "schema": _OBJ, "run": _wrap(tool_browser_search),      "capabilities": {"cost": "medium", "safe": True}},
     {"name": "github_search_issues", "description": "搜索 GitHub Issue",           "schema": _OBJ, "run": _wrap(tool_github_search_issues), "capabilities": {"cost": "cheap", "safe": True}},
     {"name": "stackoverflow_search", "description": "搜索 StackOverflow",          "schema": _OBJ, "run": _wrap(tool_stackoverflow_search), "capabilities": {"cost": "cheap", "safe": True}},

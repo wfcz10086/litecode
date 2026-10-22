@@ -4,6 +4,8 @@
 param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][string]$Code,
       [string]$KeyFingerprint = '', [string]$SshPublicKey = '')
 $ErrorActionPreference = 'Stop'
+# [2026-10-20] PowerShell 5.1 的 Invoke-WebRequest 进度条会把下载拖慢几十倍 (真机装 Python 卡在"正在写入 Web 请求")
+$ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = New-Object Security.Principal.WindowsPrincipal($identity)
@@ -108,6 +110,12 @@ function Undo-LiteCodeSsh($Owner, [string]$Tag, [string]$Backup) {
         if ((Get-WindowsCapability -Online -Name $Owner.capability).State -eq 'Installed') {
             Remove-WindowsCapability -Online -Name $Owner.capability | Out-Null
         }
+    } elseif ($Owner.portable) {
+        # 自带官方安装包装的 sshd: 用它自己的卸载脚本注销服务, 再删安装目录
+        Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue
+        $uninstaller = Join-Path $Owner.portable 'uninstall-sshd.ps1'
+        if (Test-Path $uninstaller) { & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $uninstaller | Out-Null }
+        Remove-Item -LiteralPath $Owner.portable -Recurse -Force -ErrorAction SilentlyContinue
     } elseif ($Owner.service) {
         Set-Service -Name sshd -StartupType $Owner.service.start_type
         if ($Owner.service.status -ne 'Running') { Stop-Service -Name sshd -Force -ErrorAction SilentlyContinue }
@@ -120,14 +128,44 @@ $sshOwnerFile = Join-Path $root 'ssh-owner.json'
 $sshBackup = Join-Path $root 'sshd_config.litecode-backup'
 $sshPrior = $null
 if (Test-Path $sshOwnerFile) { try { $sshPrior = Get-Content $sshOwnerFile -Raw | ConvertFrom-Json } catch { $sshPrior = $null } }
-$sshRun = @{capability=''; firewall_rule=$false; builtin_rule_disabled=$false; service=$null; config_backup=$false; key_added=$false}
+$sshRun = @{capability=''; portable=''; firewall_rule=$false; builtin_rule_disabled=$false; service=$null; config_backup=$false; key_added=$false}
 function Save-SshOwner {
     # 每改一步就落盘 (之前运行登记的 OR 本次新建的), 中途崩溃也有据可依
     $merged = @{}
-    foreach ($name in @('capability','firewall_rule','builtin_rule_disabled','service','config_backup','key_added')) {
+    foreach ($name in @('capability','portable','firewall_rule','builtin_rule_disabled','service','config_backup','key_added')) {
         $merged[$name] = if ($sshPrior -and $sshPrior.$name) { $sshPrior.$name } else { $sshRun[$name] }
     }
     $merged | ConvertTo-Json -Compress -Depth 4 | Set-Content -Encoding UTF8 $sshOwnerFile
+}
+
+# [2026-10-20] Windows 可选功能装不上 OpenSSH 时 (连不上 Windows Update / 公司 WSUS, 如 0x80240007) 改用自带的
+# 微软官方 Win32-OpenSSH 安装包: 先从控制端下载 (国内访问 GitHub 不稳), 不行再回落 GitHub; 压缩包 sha256 必须与
+# 下面写死的值一致 (本脚本已被安装命令锁定哈希), 解出的 sshd.exe 还要通过微软 Authenticode 签名校验。
+$OpenSshZipSha256 = '23f50f3458c4c5d0b12217c6a5ddfde0137210a30fa870e98b29827f7b43aba5'
+$OpenSshZipUrl = 'https://github.com/PowerShell/Win32-OpenSSH/releases/download/10.0.0.0p2-Preview/OpenSSH-Win64.zip'
+function Install-LiteCodeOpenSsh {
+    $dest = Join-Path $env:ProgramFiles 'OpenSSH'
+    if (Test-Path (Join-Path $dest 'sshd.exe')) { throw ($dest + ' 已有 OpenSSH 文件但没有注册 sshd 服务，为免覆盖请手动检查后重试。') }
+    $bytes = $null
+    try { $bytes = Get-Bytes "$device/vendor/openssh.zip" $headers } catch { $bytes = $null }
+    if (-not $bytes -or (Get-Sha256Hex $bytes) -ne $OpenSshZipSha256) {
+        try { $bytes = [byte[]](Invoke-WebRequest $OpenSshZipUrl -UseBasicParsing).Content } catch { $bytes = $null }
+    }
+    if (-not $bytes -or (Get-Sha256Hex $bytes) -ne $OpenSshZipSha256) { throw '自带 OpenSSH 安装包下载失败或校验不符（控制端与 GitHub 都试过）。' }
+    $work = Join-Path $env:TEMP ('litecode-openssh-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+    try {
+        $zip = Join-Path $work 'openssh.zip'
+        [IO.File]::WriteAllBytes($zip, $bytes)
+        Expand-Archive -LiteralPath $zip -DestinationPath $work -Force
+        $src = Join-Path $work 'OpenSSH-Win64'
+        $sig = Get-AuthenticodeSignature -FilePath (Join-Path $src 'sshd.exe')
+        if ($sig.Status -ne 'Valid' -or [string]$sig.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') { throw '自带 OpenSSH 的 sshd.exe 签名校验失败，已停止。' }
+        $sshRun.portable = $dest; Save-SshOwner
+        Move-Item -LiteralPath $src -Destination $dest
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dest 'install-sshd.ps1') | Out-Null
+        if (-not (Get-Service -Name sshd -ErrorAction SilentlyContinue)) { throw '自带 OpenSSH 已解压，但注册 sshd 服务失败。' }
+    } finally { Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue }
 }
 try {
     Report-Stage 'ssh'
@@ -135,55 +173,79 @@ try {
     if ($SshPublicKey -notmatch ('^ssh-ed25519 [A-Za-z0-9+/=]+ litecode-node-' + $enrollment.id + '$')) {
         throw 'SSH 公钥与当前节点不匹配，请重新生成接入命令。'
     }
-    $existingSshService = Get-Service -Name sshd -ErrorAction SilentlyContinue
-    $capability = if (-not $existingSshService) { Get-WindowsCapability -Online -Name 'OpenSSH.Server*' | Select-Object -First 1 } else { $null }
-    if (-not $existingSshService -and -not $capability) { throw '此 Windows 未提供 OpenSSH Server 可选功能，请检查系统版本或可选功能源。' }
-    $sshWasInstalled = [bool]$existingSshService -or ($capability -and $capability.State -eq 'Installed')
-    $existingFirewall = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
-    if (-not $sshWasInstalled) {
-        $sshRun.capability = $capability.Name; Save-SshOwner
-        Add-WindowsCapability -Online -Name $capability.Name | Out-Null
-        if ((Get-WindowsCapability -Online -Name $capability.Name).State -ne 'Installed') {
-            throw 'OpenSSH Server 安装未完成，请检查 Windows Update/可选功能源后重试原命令。'
+    # [2026-10-20] OpenSSH 只是额外运维通道, 节点靠桌面代理主动回连就能用。真机遇到 Add-WindowsCapability 0x80240007
+    # (连不上 Windows Update/可选功能源, 如公司 WSUS) 整个安装失败; 改为撤销本步改动、提示后继续装代理。
+    try {
+        $existingSshService = Get-Service -Name sshd -ErrorAction SilentlyContinue
+        $capability = $null
+        if (-not $existingSshService) {
+            try { $capability = Get-WindowsCapability -Online -Name 'OpenSSH.Server*' -ErrorAction Stop | Select-Object -First 1 } catch { $capability = $null }
         }
-    }
-    # 新建规则只允许本地子网; 保留已有 SSH 环境及防火墙策略, 不打断现有隧道。
-    if (-not $existingFirewall) {
-        $builtinRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
-        if ($builtinRule) { $sshRun.builtin_rule_disabled = $true; Save-SshOwner; $builtinRule | Disable-NetFirewallRule }
-        if (-not (Get-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -ErrorAction SilentlyContinue)) {
-            $sshRun.firewall_rule = $true; Save-SshOwner
-            New-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -DisplayName 'LiteCode SSH (LocalSubnet)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow -RemoteAddress LocalSubnet | Out-Null
-        }
-    }
-    if ($existingSshService -and ([string]$existingSshService.StartType -ne 'Automatic' -or [string]$existingSshService.Status -ne 'Running')) {
-        # 已有 sshd 原本不是自动启动/运行中: 记下原状态, 卸载时恢复
-        $sshRun.service = @{start_type=[string]$existingSshService.StartType; status=[string]$existingSshService.Status}; Save-SshOwner
-    }
-    Set-Service -Name sshd -StartupType Automatic
-    Start-Service -Name sshd
-    if ((Get-Service -Name sshd).Status -ne 'Running') { throw 'OpenSSH Server 未启动成功' }
-    if ($SshPublicKey) {
-        $keyFile = Join-Path $env:ProgramData 'ssh/administrators_authorized_keys'
-        New-Item -ItemType Directory -Path (Split-Path $keyFile) -Force | Out-Null
-        if (-not (Test-Path $keyFile)) { New-Item -ItemType File -Path $keyFile -Force | Out-Null }
-        $keys = @([IO.File]::ReadAllLines($keyFile))
-        if ($keys -notcontains $SshPublicKey) {
-            $sshRun.key_added = $true; Save-SshOwner
-            [IO.File]::AppendAllText($keyFile, "`n" + $SshPublicKey + "`n", (New-Object Text.UTF8Encoding($false)))
-        }
-        & icacls.exe $keyFile /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw '无法设置 SSH 公钥文件权限' }
+        $sshWasInstalled = [bool]$existingSshService -or ($capability -and $capability.State -eq 'Installed')
+        $existingFirewall = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
         if (-not $sshWasInstalled) {
-            # 只收紧本次新装的服务; 已有 SSH 配置/密码认证及隧道不改动。
-            $sshdConfig = Join-Path $env:ProgramData 'ssh/sshd_config'
-            Copy-Item -LiteralPath $sshdConfig -Destination $sshBackup -Force
-            $sshRun.config_backup = $true; Save-SshOwner
-            $configText = [IO.File]::ReadAllText($sshdConfig)
-            $configText = [regex]::Replace($configText, '(?m)^\s*#?\s*PasswordAuthentication\s+.*$', '')
-            [IO.File]::WriteAllText($sshdConfig, "PasswordAuthentication no`n" + $configText, (New-Object Text.UTF8Encoding($false)))
-            Restart-Service -Name sshd
+            $viaCapability = $false
+            if ($capability) {
+                try {
+                    $sshRun.capability = $capability.Name; Save-SshOwner
+                    Add-WindowsCapability -Online -Name $capability.Name -ErrorAction Stop | Out-Null
+                    $viaCapability = (Get-WindowsCapability -Online -Name $capability.Name).State -eq 'Installed'
+                } catch { Write-Warning ('Windows 可选功能装不上 OpenSSH（' + $_.Exception.Message + '），改用自带的微软官方安装包…') }
+                if (-not $viaCapability) { $sshRun.capability = ''; Save-SshOwner }
+            }
+            if (-not $viaCapability) { Install-LiteCodeOpenSsh }
         }
+        # 新建规则只允许本地子网; 保留已有 SSH 环境及防火墙策略, 不打断现有隧道。
+        if (-not $existingFirewall) {
+            $builtinRule = Get-NetFirewallRule -Name 'OpenSSH-Server-In-TCP' -ErrorAction SilentlyContinue
+            if ($builtinRule) { $sshRun.builtin_rule_disabled = $true; Save-SshOwner; $builtinRule | Disable-NetFirewallRule }
+            if (-not (Get-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -ErrorAction SilentlyContinue)) {
+                $sshRun.firewall_rule = $true; Save-SshOwner
+                New-NetFirewallRule -Name 'LiteCode-SSH-In-TCP' -DisplayName 'LiteCode SSH (LocalSubnet)' -Direction Inbound -Protocol TCP -LocalPort 22 -Action Allow -RemoteAddress LocalSubnet | Out-Null
+            }
+        }
+        if ($existingSshService -and ([string]$existingSshService.StartType -ne 'Automatic' -or [string]$existingSshService.Status -ne 'Running')) {
+            # 已有 sshd 原本不是自动启动/运行中: 记下原状态, 卸载时恢复
+            $sshRun.service = @{start_type=[string]$existingSshService.StartType; status=[string]$existingSshService.Status}; Save-SshOwner
+        }
+        Set-Service -Name sshd -StartupType Automatic
+        Start-Service -Name sshd
+        if ((Get-Service -Name sshd).Status -ne 'Running') { throw 'OpenSSH Server 未启动成功' }
+        if ($SshPublicKey) {
+            $keyFile = Join-Path $env:ProgramData 'ssh/administrators_authorized_keys'
+            New-Item -ItemType Directory -Path (Split-Path $keyFile) -Force | Out-Null
+            if (-not (Test-Path $keyFile)) { New-Item -ItemType File -Path $keyFile -Force | Out-Null }
+            $keys = @([IO.File]::ReadAllLines($keyFile))
+            if ($keys -notcontains $SshPublicKey) {
+                $sshRun.key_added = $true; Save-SshOwner
+                [IO.File]::AppendAllText($keyFile, "`n" + $SshPublicKey + "`n", (New-Object Text.UTF8Encoding($false)))
+            }
+            & icacls.exe $keyFile /inheritance:r /grant:r '*S-1-5-32-544:F' '*S-1-5-18:F' | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw '无法设置 SSH 公钥文件权限' }
+            if (-not $sshWasInstalled) {
+                # 只收紧本次新装的服务; 已有 SSH 配置/密码认证及隧道不改动。
+                $sshdConfig = Join-Path $env:ProgramData 'ssh/sshd_config'
+                Copy-Item -LiteralPath $sshdConfig -Destination $sshBackup -Force
+                $sshRun.config_backup = $true; Save-SshOwner
+                $configText = [IO.File]::ReadAllText($sshdConfig)
+                $configText = [regex]::Replace($configText, '(?m)^\s*#?\s*PasswordAuthentication\s+.*$', '')
+                [IO.File]::WriteAllText($sshdConfig, "PasswordAuthentication no`n" + $configText, (New-Object Text.UTF8Encoding($false)))
+                Restart-Service -Name sshd
+            }
+        }
+    } catch {
+        $sshError = $_.Exception.Message
+        try {
+            if (Undo-LiteCodeSsh $sshRun ('litecode-node-' + $enrollment.id) $sshBackup) {
+                if ($sshRun.config_backup -and -not ($sshPrior -and $sshPrior.config_backup)) { Remove-Item -LiteralPath $sshBackup -Force -ErrorAction SilentlyContinue }
+            }
+            if ($sshPrior) { $sshPrior | ConvertTo-Json -Compress -Depth 4 | Set-Content -Encoding UTF8 $sshOwnerFile }
+            else { Remove-Item -LiteralPath $sshOwnerFile -Force -ErrorAction SilentlyContinue }
+        } catch { Write-Warning ('撤销本次 SSH 改动失败：' + $_.Exception.Message) }
+        $sshRun = @{}
+        Write-Warning ('OpenSSH Server 没装上，已跳过（' + $sshError + '）。这台电脑照常接入，桌面操作不受影响，只是暂时没有 SSH 运维通道。' +
+            '常见原因：连不上 Windows Update 或可选功能源（例如公司 WSUS）。处理后重新运行原命令即可补装；也可手动安装 OpenSSH Server 后重跑。')
+        try { Report-Stage 'ssh_skipped' } catch {}
     }
     Report-Stage 'python'
     Write-Host '正在准备 Python 运行环境…'
@@ -227,7 +289,14 @@ try {
         if (-not (Test-Path $python)) {
             $installer = Join-Path $root 'python-installer.exe'
             # 官方受支持维护版；验证签名后安装，无需预装 winget。
-            Invoke-WebRequest 'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe' -OutFile $installer -UseBasicParsing
+            # 先走国内镜像 (华为云, 同一官方安装包), 失败再回落 python.org; 来源不同不影响安全: 下面一律校验 PSF 签名
+            $downloaded = $false
+            foreach ($url in @('https://mirrors.huaweicloud.com/python/3.13.16/python-3.13.16-amd64.exe',
+                               'https://www.python.org/ftp/python/3.13.16/python-3.13.16-amd64.exe')) {
+                try { Invoke-WebRequest $url -OutFile $installer -UseBasicParsing -TimeoutSec 600; $downloaded = $true; break }
+                catch { Write-Warning ('Python 安装包下载失败，换下一个地址：' + $url) }
+            }
+            if (-not $downloaded) { throw 'Python 安装包下载失败（国内镜像和 python.org 都试过），请检查网络后重试原命令。' }
             $signature = Get-AuthenticodeSignature $installer
             if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'Python Software Foundation') {
                 throw 'Python 安装程序签名验证失败'

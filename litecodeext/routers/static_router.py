@@ -44,10 +44,11 @@ async def serve_asset(name: str):
 # 前端大量使用内联事件 (web_ui.html ~37 处 + JS 拼接的 ~119 处 onclick=) 和少量内联 <script>,
 # 一次性改成 nonce/addEventListener 牵动面太大, 所以 script-src 仍含 'unsafe-inline';
 # XSS 主防线是 DOMPurify (web_assets/safe_html.js, 所有 marked 渲染点)。这里补的是:
-#   - 只允许同源脚本 + 现有唯一外链 (drawflow @ cdn.jsdelivr.net), 注入的 <script src=evil> 加载不了
+#   - 只允许同源脚本 (drawflow 已于 2026-10-21 本地化到 web_assets/vendor/, 不再放行 cdn.jsdelivr.net),
+#     注入的 <script src=evil> 加载不了
 #   - object-src 'none' / base-uri 'self' (防 <base> 劫持相对路径) / form-action 'self'
 #   - frame-ancestors 'self' (防点击劫持)
-PAGE_CSP = ("script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; "
+PAGE_CSP = ("script-src 'self' 'unsafe-inline'; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'")
 PAGE_HEADERS = {
     "Content-Security-Policy": PAGE_CSP,

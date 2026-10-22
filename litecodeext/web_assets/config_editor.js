@@ -5,6 +5,7 @@ async function loadCfg(){
     const r=await fetch('/api/config');const d=await r.json();
     if(!d.ok){el.innerHTML=`<span style="color:var(--dg)">读取失败: ${esc(d.error||'')}</span>`;return;}
     const cfg=d.config||{};const editable=d.editable_sections||[];
+    const models=(typeof _loadModelsCache==='function')?await _loadModelsCache():[];
     window._cfgData=cfg;
     let h='';
     // 每个白名单 section 渲染成一组可编辑字段
@@ -24,7 +25,7 @@ async function loadCfg(){
         <div style="margin-top:4px;padding-left:8px;border-left:2px solid var(--bd2)">`;
       Object.keys(obj).forEach(k=>{
         const v=obj[k];const kid=`cfg-${sec}-${k}`;
-        if(v===null||v===undefined)return;
+        if(v===null||v===undefined||k.startsWith('_'))return;   // _note 等内部备注不展示
         // search/auth 等嵌套对象 — 只读展示
         if(typeof v==='object'){
           h+=`<div style="margin:3px 0;font-family:var(--mono);font-size:10px;color:var(--tx3)">
@@ -41,6 +42,24 @@ async function loadCfg(){
           h+=`<input type="checkbox" id="${kid}" ${v?'checked':''} data-sec="${sec}" data-key="${esc(k)}" data-t="bool" style="accent-color:var(--ac3)">`;
         }else if(isNum){
           h+=`<input type="number" id="${kid}" value="${v}" data-sec="${sec}" data-key="${esc(k)}" data-t="num" style="flex:1;padding:3px 6px;background:var(--bg);border:1px solid var(--bd2);border-radius:3px;color:var(--tx);font-size:11px;font-family:var(--mono)">`;
+        }else if(_cfgModelRef(k)){
+          // 引用模型的字段 (wechat.vision_model 识图/OCR 等): 下拉选已配置的模型, 不让手敲 id
+          const vis=/vision|ocr/i.test(k);
+          const opts=[...models].sort((a,b)=>vis?(!!b.supports_vision-!!a.supports_vision):0);
+          const known=opts.some(m=>m.id===v);
+          h+=`<select id="${kid}" data-sec="${sec}" data-key="${esc(k)}" data-t="str" style="flex:1;padding:3px 6px;background:var(--bg);border:1px solid var(--bd2);border-radius:3px;color:var(--tx);font-size:11px;font-family:var(--mono)">
+            <option value="" ${v===''?'selected':''}>（自动${vis?'：主模型能识图就用主模型':''}）</option>
+            ${opts.map(m=>`<option value="${esc(m.id)}" ${m.id===v?'selected':''}>${esc(m.label||m.id)}${vis&&m.supports_vision?' · 可识图':''}${vis&&!m.supports_vision?' · 不支持识图':''}</option>`).join('')}
+            ${v&&!known?`<option value="${esc(String(v))}" selected>${esc(String(v))} (未在模型列表中)</option>`:''}
+          </select>`;
+        }else if(_CFG_ENUMS[sec+'.'+k]){
+          const en=_CFG_ENUMS[sec+'.'+k], known=en.some(o=>o[0]===v);
+          h+=`<select id="${kid}" data-sec="${sec}" data-key="${esc(k)}" data-t="str" style="flex:1;padding:3px 6px;background:var(--bg);border:1px solid var(--bd2);border-radius:3px;color:var(--tx);font-size:11px;font-family:var(--mono)">
+            ${en.concat(known?[]:[[v,v+' (当前值)']]).map(o=>`<option value="${esc(o[0])}" ${o[0]===v?'selected':''}>${esc(o[1])}</option>`).join('')}
+          </select>`;
+        }else if(sec==='model'&&_CFG_MODEL_RO.includes(k)){
+          // 当前模型的身份字段跟着模型列表走: 在这里单改会和模型列表对不上 (改 id 不改地址 → 请求发错地方)
+          h+=`<input type="text" id="${kid}" value="${esc(String(v))}" readonly title="在「添加模型」或左下角模型切换里改" style="flex:1;padding:3px 6px;background:var(--sf2);border:1px solid var(--bd2);border-radius:3px;color:var(--tx3);font-size:11px;font-family:var(--mono)">`;
         }else{
           h+=`<input type="text" id="${kid}" value="${esc(String(v))}" data-sec="${sec}" data-key="${esc(k)}" data-t="str" ${isMasked?'readonly title="敏感字段, 在 config.json 直接改"':''} style="flex:1;padding:3px 6px;background:${isMasked?'var(--sf2)':'var(--bg)'};border:1px solid var(--bd2);border-radius:3px;color:var(--tx);font-size:11px;font-family:var(--mono)">`;
         }
@@ -60,11 +79,18 @@ async function loadCfg(){
   }
 }
 
+const _CFG_ENUMS={
+  'search.default_mode':[['domestic','国内 (domestic)'],['international','海外 (international)']],
+  'iteration_trace.log_level':[['NORMAL','NORMAL 普通'],['VERBOSE','VERBOSE 详细 (含模型原文)']],
+};
+const _CFG_MODEL_RO=['id','provider','deployment','served_model_name','backend_type','backend_url','api_key','api_format'];
+function _cfgModelRef(k){return /(^|_)model(_id)?$/i.test(k);}   // vision_model / default_model_id …
+
 async function cfgSave(){
   const hint=document.getElementById('cfg-hint');
   if(hint){hint.textContent='⏳ 保存中...';hint.style.color='var(--wn)';}
   const payload={};
-  document.querySelectorAll('#cfg-bd input[data-sec]').forEach(inp=>{
+  document.querySelectorAll('#cfg-bd input[data-sec], #cfg-bd select[data-sec]').forEach(inp=>{
     const sec=inp.dataset.sec,key=inp.dataset.key,t=inp.dataset.t;
     if(inp.readOnly)return;   // 脱敏字段跳过
     payload[sec]=payload[sec]||{};
@@ -91,7 +117,7 @@ async function mdlSwitch(id, backend_url){
   if(backend_url) body.backend_url=backend_url;
   const r=await fetch('/api/models/switch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
   const d=await r.json();
-  if(d.ok){toast('✅ 已切换到 '+id);loadSet();if(typeof chkHealth==='function')chkHealth();if(typeof refreshSbfStatus==='function')refreshSbfStatus();}else toast('❌ '+JSON.stringify(d));}
+  if(d.ok){toast('✅ 已切换到 '+id);loadSet();if(typeof chkHealth==='function')chkHealth();if(typeof refreshSbfStatus==='function')refreshSbfStatus();}else toast('❌ 切换失败: '+(d.detail||d.error||('HTTP '+r.status)));}
 async function mdlTest(i){
   const m=window._mdlList?.[i];if(!m)return;
   const el=document.getElementById('mtr'+i);const btn=document.getElementById('mt'+i);
@@ -109,7 +135,9 @@ async function mdlTest(i){
   }catch(ex){el.textContent=ex.name==='AbortError'?'❌ 超时（30s），请检查后端地址和网络':'❌ '+ex;el.style.color='var(--dg)';}
   btn.disabled=false;}
 async function mdlDel(id){if(!await confirmCard('删除模型',`将模型「${id}」从列表移除? 已有会话不受影响`,'删除'))return;
-  await fetch('/api/models/'+encodeURIComponent(id),{method:'DELETE'});toast('已删除');loadSet();}
+  const r=await fetch('/api/models/'+encodeURIComponent(id),{method:'DELETE'});
+  if(!r.ok){const d=await r.json().catch(()=>({}));toast('❌ 删除失败: '+(d.detail||('HTTP '+r.status)));return;}   /* 默认模型 409 */
+  toast('已删除');loadSet();}
 async function mdlAdd(){
   const id=document.getElementById('nm-id').value.trim();
   const btype=document.getElementById('nm-type').value;
@@ -127,7 +155,12 @@ async function mdlAdd(){
        改成在 body 定义完成后用局部变量 id/btype 拼出. */
     label:id+' ('+btype+')'};
   if(!body.id||!body.backend_url){toast('请填写 Model ID 和 Backend URL');return;}
-  await fetch('/api/models/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  /* [ui-audit 2026-10-21] 地址格式 + 重名先在前端拦, 且按后端结果提示 (原来不看返回值一律"已添加") */
+  if(!/^https?:\/\/[^\s/]+/i.test(body.backend_url)){toast('Backend URL 需以 http:// 或 https:// 开头');return;}
+  if((window._mdlList||[]).some(m=>m.id===body.id&&(m.backend_url||'').replace(/\/+$/,'')===body.backend_url.replace(/\/+$/,''))){toast('该模型 (同 ID + 同地址) 已在列表中');return;}
+  let d={};const r=await fetch('/api/models/add',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  try{d=await r.json();}catch(e){}
+  if(!r.ok||d.ok===false||d.error){toast('❌ 添加失败: '+(d.detail||d.error||('HTTP '+r.status)));return;}
   toast('✅ 已添加');loadSet();}
 async function doLogout(){await fetch('/api/logout',{method:'POST'});location.reload();}
 async function chkHealth(){try{const d=await(await fetch('/api/health')).json();const p=document.getElementById('mpill');if(d.ok){p.textContent=d.model?.split('-')[0]||'ok';p.className='hp';}if(d.version){const v=document.getElementById('verpill');if(v){v.textContent=`${d.version} · ${d.codename}`;v.title=`LiteCode ${d.version}「${d.codename}」`;v.style.display=window.innerWidth<640?'none':'';}}else{p.textContent='offline';p.className='hp off';}}catch{document.getElementById('mpill').className='hp off';}}
@@ -183,24 +216,25 @@ const _THINK_MODES = [
   {key:'high',label:'高',enable:true,budget:16384},
 ];
 window._thinkMode='mid';
+/* [session-thinking 2026-10-21] 🧠 只作用于当前会话 (PUT /api/sessions/{sid}/thinking);
+ * 全局默认在 设置 → 常用 → 默认思考强度 里改。window._thinkFollows=true 表示本会话跟随默认。 */
 function _thinkChipRender(){
   const btn=document.getElementById('thk');if(!btn)return;
   const m=_THINK_MODES.find(x=>x.key===window._thinkMode)||_THINK_MODES[2];
-  const on=m.enable;
-  btn.textContent='🧠 '+m.label;
-  btn.style.color = on?'var(--ac)':'var(--tx3)';
-  btn.style.borderColor = on?'var(--ac)':'var(--bd2)';
-  btn.title=`推理强度: ${m.label} (budget=${m.budget}). 点击切换 off/低/中/高`;
+  btn.textContent='🧠 '+m.label;btn.classList.toggle('on',!window._thinkFollows);
+  btn.style.color='';btn.style.borderColor='';
+  btn.title=`本会话推理强度: ${m.label}${window._thinkFollows?' (跟随默认)':''}。点击切换 off/低/中/高, 只影响这个对话; 全局默认在「设置」里改`;
 }
+function _thinkLevelOf(m){const en=!!m.enable_thinking,bd=+m.thinking_budget||0;return !en?'off':bd<=2048?'low':bd<=8000?'mid':'high';}
 async function _syncThinkChip(){
   try{
-    const r=await fetch('/api/config');const d=await r.json();
-    const m=d.config?.model||{};
-    const en=!!m.enable_thinking;const bd=+m.thinking_budget||0;
-    if(!en) window._thinkMode='off';
-    else if(bd<=2048) window._thinkMode='low';
-    else if(bd<=8000) window._thinkMode='mid';
-    else window._thinkMode='high';
+    const sid=(typeof cur!=='undefined')?cur:null;
+    if(sid){
+      const r=await fetch(`/api/sessions/${encodeURIComponent(sid)}/thinking`);
+      if(r.ok){const d=await r.json();if(sid===cur){window._thinkMode=d.effective;window._thinkFollows=!!d.follows_default;_thinkChipRender();}return;}
+    }
+    const d=await(await fetch('/api/config')).json();
+    window._thinkMode=_thinkLevelOf(d.config?.model||{});window._thinkFollows=true;
     _thinkChipRender();
   }catch(e){_thinkChipRender();}
 }
@@ -210,7 +244,7 @@ window._stratMode=false;
 function _stratChipRender(){
   const btn=document.getElementById('strat');if(!btn)return;
   const on=!!window._stratMode;
-  btn.textContent='🎭 '+(on?'推演·开':'推演');
+  btn.textContent='🎭 '+(on?'推演·开':'推演');btn.classList.toggle('on',on);
   btn.style.color = on?'var(--ac)':'var(--tx3)';
   btn.style.borderColor = on?'var(--ac)':'var(--bd2)';
 }
@@ -221,11 +255,18 @@ function toggleStrat(){
 async function cycleThink(){
   const idx=_THINK_MODES.findIndex(x=>x.key===window._thinkMode);
   const next=_THINK_MODES[(idx+1)%_THINK_MODES.length];
-  window._thinkMode=next.key;_thinkChipRender();
   try{
-    await fetch('/api/config',{method:'PATCH',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({model:{enable_thinking:next.enable, thinking_budget:next.budget}})});
-    toast(`🧠 推理: ${next.label}${next.enable?` (budget ${next.budget})`:''}`);
+    let sid=(typeof cur!=='undefined')?cur:null;
+    if(!sid){  /* 还没有会话: 先建一个, 设置挂在它上面 */
+      const d=await(await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})})).json();
+      cur=sid=d.id;sess.unshift({id:d.id,name:d.name,count:0,created:d.created,last_used:d.last_used||d.created});renderSL();
+    }
+    const r=await fetch(`/api/sessions/${encodeURIComponent(sid)}/thinking`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({level:next.key})});
+    const d=await r.json().catch(()=>({}));
+    if(r.status===404&&d.detail==='Not Found'){toast('会话级思考强度需要重启服务后可用 (后端尚未加载新接口)');return;}
+    if(!r.ok){toast('切换失败: '+(d.detail||r.status));return;}
+    window._thinkMode=d.effective;window._thinkFollows=!!d.follows_default;_thinkChipRender();
+    toast(`🧠 本会话推理: ${next.label}${next.enable?` (budget ${next.budget})`:''} · 下一条消息起生效`);
   }catch(e){toast('保存失败: '+String(e).slice(0,80));}
 }
 document.getElementById('lpwd').addEventListener('keydown',ev=>{if(ev.key==='Enter')doLogin();});

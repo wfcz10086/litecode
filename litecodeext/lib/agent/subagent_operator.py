@@ -84,7 +84,7 @@ OPERATOR_CONFIG = {
 }
 
 # 观察类动作: 重复调用是常态 (每步都要截图), 不计入子代理的"同参数重复调用"死循环检测
-_DESKTOP_OBSERVE = frozenset({"screenshot", "ocr", "windows", "clipboard", "wechat_status", "scroll"})
+_DESKTOP_OBSERVE = frozenset({"screenshot", "ocr", "windows", "clipboard", "wechat_status", "scroll", "ui_tree"})
 _SYSTEM_OBSERVE = frozenset({"system_info", "processes", "services", "list_dir", "inspect_file"})
 
 

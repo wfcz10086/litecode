@@ -1,0 +1,162 @@
+{
+ "_litecode_template": {
+  "name": "qwen21_t2i",
+  "kind": "image",
+  "desc": "Qwen-Image-2.1 文生图 (中英文字渲染好, 原生 2K)",
+  "requires_nodes": [
+   "TextEncodeQwenImage21",
+   "QwenImage21Cache"
+  ],
+  "params": {
+   "prompt": [
+    "enc.prompt"
+   ],
+   "negative": [
+    "enc.negative_prompt"
+   ],
+   "seed": [
+    "ks.seed"
+   ],
+   "steps": [
+    "ks.steps"
+   ],
+   "cfg": [
+    "ks.cfg"
+   ],
+   "sampler": [
+    "ks.sampler_name"
+   ],
+   "scheduler": [
+    "ks.scheduler"
+   ],
+   "width": [
+    "latent.width"
+   ],
+   "height": [
+    "latent.height"
+   ]
+  },
+  "defaults": {
+   "steps": 15,
+   "sampler": "dpmpp_2m",
+   "scheduler": "simple",
+   "cfg": 1.0,
+   "width": 1024,
+   "height": 1024
+  },
+  "notes": "宽高 16 的倍数; 官方画幅 1:1=2048², 16:9=2752×1536 (1K 预览各减半); 图里要出现的文字用双引号括起来"
+ },
+ "prompt": {
+  "unet": {
+   "class_type": "UNETLoader",
+   "inputs": {
+    "unet_name": "qwen_image_2.1_int8_convrot.safetensors",
+    "weight_dtype": "default"
+   }
+  },
+  "cache": {
+   "class_type": "QwenImage21Cache",
+   "inputs": {
+    "model": [
+     "unet",
+     0
+    ],
+    "device": "auto",
+    "dtype": "default"
+   }
+  },
+  "clip": {
+   "class_type": "CLIPLoader",
+   "inputs": {
+    "clip_name": "qwen3vl_8b_int8_convrot.safetensors",
+    "type": "qwen_image",
+    "device": "default"
+   }
+  },
+  "vae": {
+   "class_type": "VAELoader",
+   "inputs": {
+    "vae_name": "qwen_image_2.1_vae_bf16.safetensors"
+   }
+  },
+  "enc": {
+   "class_type": "TextEncodeQwenImage21",
+   "inputs": {
+    "clip": [
+     "clip",
+     0
+    ],
+    "prompt": "A neon shop sign that reads \"QWEN IMAGE 2.1\", rainy night, reflections on wet pavement",
+    "negative_prompt": "",
+    "resolution": 1024
+   }
+  },
+  "latent": {
+   "class_type": "EmptyLatentImage",
+   "inputs": {
+    "width": 1024,
+    "height": 1024,
+    "batch_size": 1
+   }
+  },
+  "ks": {
+   "class_type": "KSampler",
+   "inputs": {
+    "model": [
+     "cache",
+     0
+    ],
+    "positive": [
+     "enc",
+     0
+    ],
+    "negative": [
+     "enc",
+     1
+    ],
+    "latent_image": [
+     "latent",
+     0
+    ],
+    "seed": 42,
+    "steps": 25,
+    "cfg": 1.0,
+    "sampler_name": "euler",
+    "scheduler": "simple",
+    "denoise": 1.0
+   }
+  },
+  "dec": {
+   "class_type": "VAEDecode",
+   "inputs": {
+    "samples": [
+     "ks",
+     0
+    ],
+    "vae": [
+     "vae",
+     0
+    ]
+   }
+  },
+  "rgb": {
+   "class_type": "SplitImageWithAlpha",
+   "inputs": {
+    "image": [
+     "dec",
+     0
+    ]
+   }
+  },
+  "save": {
+   "class_type": "SaveImage",
+   "inputs": {
+    "images": [
+     "rgb",
+     0
+    ],
+    "filename_prefix": "litecode/qwen21_t2i"
+   }
+  }
+ }
+}

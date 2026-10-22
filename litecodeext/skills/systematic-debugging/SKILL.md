@@ -1,6 +1,7 @@
 ---
 name: systematic-debugging
 description: 遇到任何 bug、测试失败或异常行为时使用，在提出修复方案之前执行
+aliases: ["调试", "debug", "排查", "排错", "报错", "bug", "traceback", "exception", "不工作", "启动失败", "修复", "修bug"]
 ---
 
 # 系统化调试
@@ -42,6 +43,23 @@ description: 遇到任何 bug、测试失败或异常行为时使用，在提出
 - 问题看起来很简单（简单的 bug 也有根本原因）
 - 你很赶时间（越急越容易返工）
 - 领导要求立刻修好（系统化调试比反复尝试更快）
+
+## LiteCode 里的取证工具
+
+| 要做的事 | 用什么 |
+| --- | --- |
+| 看后台服务/任务输出 | `list_bg` 拿日志路径 → `tail_log(path, lines=100)`; 要盯一会儿加 `follow_seconds` |
+| 看大日志里的错误 | `execute_shell("grep -n -iE 'error\|exception\|traceback' app.log \| tail -30")`, 不要 read_file 整个日志 |
+| 拿到 traceback 想知道是不是已知问题 | `search_code_error(error_text=完整 stderr)` (并行查 GitHub issues + StackOverflow) |
+| 定位代码 | `search_code` (报错原文、函数名) → `read_file(filepath, lines="120:180")` 只读相关段; 知道符号名用 `find_symbol` / `locate_symbol` |
+| 查近期变更 | `git_log` / `git_diff`; 定位引入点 `execute_shell("git log -S '关键字' --oneline")`, 必要时 `git bisect` |
+| 改坏了想回到绿点 | `snapshot_list` → `snapshot_restore` (回滚本身也可再回滚) |
+| 前端/页面 bug | 用 Playwright 复现并抓 console 报错和截图, 见 webapp-testing |
+| LiteCode 自身异常 | 见 litecode-debug-protocol |
+
+**最小复现优先:** 先写一个能稳定触发问题的最小脚本或测试 (`python3 repro.py` / `pytest tests/test_x.py::test_case -x`), 用 `execute_shell` 跑出失败; 修复后同一条命令必须变绿。复现不了就继续收集证据, 不要开始猜着改。
+
+**长任务注意:** execute_shell 前台最多 900 秒, 跑得久的复现用 `background=true` + `tail_log` 看进度, 结束后 `kill_bg` 清理。
 
 ## 四个阶段
 

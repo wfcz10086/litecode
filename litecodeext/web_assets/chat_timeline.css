@@ -1,0 +1,62 @@
+/* chat_timeline.css — [trace 2026-10-22] 调用链路行状态/展开 + 友好错误卡片 (配合 chat_timeline.js)
+ * 颜色一律走 app.css 的主题变量, 深色 (默认) / 暖白 (kimi) / 其它主题自动跟随。 */
+
+/* ── 时间线行 ── */
+.ti.lct{flex-wrap:wrap;cursor:pointer;row-gap:2px;align-items:center}
+.ti.lct .ta{flex:1 1 0;min-width:0}
+.lct-arr{flex-shrink:0;width:10px;font-size:10px;color:var(--tx3);transition:transform .15s;display:inline-block;line-height:1}
+.ti.lct.open .lct-arr{transform:rotate(90deg)}
+.lct-st{flex-shrink:0;margin-left:auto;padding-left:8px;font-size:11px;font-family:var(--mono);white-space:nowrap;color:var(--tx3)}
+.lct-st.ok{color:var(--ac3)}
+.lct-st.fail{color:var(--dg);font-weight:600}
+.lct-st.stop{color:var(--tx3)}
+.lct-spin{display:inline-block;width:11px;height:11px;border:2px solid var(--bd2);border-top-color:var(--ac2);border-radius:50%;
+  animation:lct-rot .8s linear infinite;vertical-align:-2px}
+@keyframes lct-rot{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.lct-spin{animation-duration:2.4s}}
+.lct-retry{flex-shrink:0;font-size:10px;padding:0 5px;border-radius:6px;border:1px solid var(--wn);color:var(--wn);font-family:var(--sans);line-height:16px}
+.ti.lct.lct-fail{border-color:color-mix(in srgb,var(--dg) 45%,transparent)!important}
+
+.lct-sub{flex-basis:100%;min-width:0;cursor:default;font-family:var(--sans)}
+.lct-sub:empty{display:none}
+.lct-notes:empty,.lct-errl:empty{display:none}
+.lct-note{font-size:11.5px;color:var(--tx3);padding:1px 0 0 17px;line-height:1.5;word-break:break-word}
+.lct-errl{font-size:12px;color:var(--dg);padding:2px 0 0 17px;line-height:1.5;word-break:break-word;white-space:normal}
+.lct-errl b{font-weight:600}
+.lct-det{display:none;margin:6px 0 2px 17px;padding:8px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--bd);
+  white-space:normal;word-break:break-word}
+.ti.lct.open .lct-det{display:block}
+.lct-lbl{font-size:11px;color:var(--tx3);margin:2px 0 3px;font-family:var(--sans)}
+.lct-lbl ~ .lct-lbl{margin-top:8px}
+.lct-pre{margin:0;font-family:var(--mono);font-size:11.5px;line-height:1.5;color:var(--tx2);white-space:pre-wrap;word-break:break-all;
+  max-height:260px;overflow:auto;background:transparent;border:none;padding:0}
+.lct-thumbs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.lct-thumb{max-height:110px;max-width:180px;border-radius:6px;border:1px solid var(--bd);display:block;object-fit:cover}
+
+/* 整轮级自动重试 / 切换说明 */
+.lct-notice{font-size:12px;color:var(--tx2);padding:3px 10px;font-family:var(--sans);line-height:1.5}
+.lct-notice.warn{color:var(--wn)}
+
+/* ── 友好错误卡片 (覆盖 .msg-error 旧的 inline 样式由 JS 不再设置) ── */
+.lc-errcard{margin:10px 0;padding:12px 14px;border-radius:12px;border:1px solid color-mix(in srgb,var(--dg) 40%,var(--bd));
+  background:color-mix(in srgb,var(--dg) 7%,var(--sf));color:var(--tx);font-size:13px;line-height:1.55;font-family:var(--sans)}
+.lce-h{font-weight:600;color:var(--dg);font-size:14px}
+.lce-hint{color:var(--tx2);margin-top:4px}
+.lce-btns{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.lce-b{font:inherit;font-size:12px;padding:5px 11px;border-radius:999px;border:1px solid var(--bd2);background:var(--bg);color:var(--tx);
+  cursor:pointer;line-height:1.4;transition:background .12s,border-color .12s}
+.lce-b:hover{border-color:var(--ac);background:var(--hover-tint)}
+.lce-b.pri{background:var(--ac);border-color:var(--ac);color:#fff}
+:root:not([data-theme]) .lce-b.pri,:root[data-theme=""] .lce-b.pri{color:#000}
+.lce-b.pri:hover{filter:brightness(1.06);background:var(--ac)}
+.lce-det{display:none;margin-top:10px;padding:8px 10px;border-radius:8px;background:var(--bg);border:1px solid var(--bd)}
+.lc-errcard.open .lce-det{display:block}
+.lce-det .lce-b{margin-top:8px}
+
+@media(max-width:640px){
+  .lct-st{font-size:10.5px;padding-left:4px}
+  .lct-det,.lct-note,.lct-errl{margin-left:0;padding-left:0}
+  .lct-det{padding:8px}
+  .lce-b{padding:7px 12px}
+  .lct-thumb{max-width:140px}
+}

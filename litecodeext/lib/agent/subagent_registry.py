@@ -39,6 +39,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
+from . import subagent_events as _ev   # 每个子代理的完整过程记录 (事件环形缓冲 + 落盘, Web 任务树/只读视图)
+
 INSTR_PREFIX = "[来自主代理的补充指令]"
 AGENTS_PREFIX = "[SYSTEM-AGENTS]"
 SEND_MAX = 2000
@@ -92,6 +94,12 @@ class AgentRecord:
     last_progress: float = field(default_factory=time.time)   # 最近一次迭代推进/工具开始/工具结束的时刻
     last_tool_at: Optional[float] = None                      # 最近一次工具调用结束时刻
     last_output: str = ""                                     # 最近一条模型/工具输出片段 (tick 时从 messages 取)
+    # [subagent-view 2026-10-22] 过程记录 (见 subagent_events): 嵌套父 id / 工作树 id / 事件环形缓冲
+    parent_id: str = ""
+    worktree_id: str = ""
+    events: object = field(default_factory=_ev.new_buffer)
+    seq: int = 0
+    cur_call: Optional[tuple] = None
 
     @property
     def brief(self) -> str:
@@ -183,13 +191,14 @@ def _rec_to_dict(rec: AgentRecord) -> dict:
             "background": rec.background, "status": rec.status, "started": rec.started,
             "ended": rec.ended, "iteration": rec.iteration, "max_iter": rec.max_iter,
             "last_tool": rec.last_tool, "tool_calls": rec.tool_calls, "result": result,
-            "fetched": rec.fetched, "delivered": rec.delivered,
+            "fetched": rec.fetched, "delivered": rec.delivered, "parent_id": rec.parent_id,
+            "worktree_id": rec.worktree_id, "seq": rec.seq,
             "result_truncated": truncated, "persisted_at": time.time()}
 
 
 def _persist(rec: AgentRecord) -> None:
-    """后台子代理结束 (或结果被取走) 时落盘一次; 非后台不落盘。只在非热路径调用, 失败只记日志。"""
-    if not rec.background or rec.status == "running" or rec.ended is None:
+    """子代理结束 (或结果被取走) 时落盘一次 (前台/后台都落, 供界面回看)。只在非热路径调用, 失败只记日志。"""
+    if rec.status == "running" or rec.ended is None:
         return
     try:
         from ..atomic_io import atomic_write_json
@@ -266,7 +275,9 @@ def _rec_from_dict(d: dict) -> AgentRecord:
                       last_tool=str(d.get("last_tool") or ""), tool_calls=int(d.get("tool_calls") or 0),
                       result=result, fetched=bool(d.get("fetched", False)),
                       delivered=int(d.get("delivered") or 0),
-                      restored=True, result_truncated=bool(d.get("result_truncated", False)))
+                      restored=True, result_truncated=bool(d.get("result_truncated", False)),
+                      parent_id=str(d.get("parent_id") or ""), worktree_id=str(d.get("worktree_id") or ""),
+                      seq=int(d.get("seq") or 0))
     return rec
 
 
@@ -282,6 +293,7 @@ def _restore_once() -> None:
         _RESTORED = True
         try:
             _cleanup_disk()
+            _ev.cleanup()
         except Exception:
             pass
         root = _persist_root()
@@ -323,19 +335,23 @@ def _gc(now: Optional[float] = None) -> int:
             if now - r.ended > _keep_secs(r.background, r.fetched):
                 _RECORDS.pop(rid, None)
                 n += 1
-                if r.background:   # 内存淘汰的同时删掉其落盘文件, 保持磁盘一致
-                    try:
-                        (_persist_root() / _safe_name(r.sid) / f"{_safe_name(r.id)}.json").unlink()
-                    except Exception:
-                        pass
+                try:               # 内存淘汰的同时删掉其落盘文件, 保持磁盘一致
+                    (_persist_root() / _safe_name(r.sid) / f"{_safe_name(r.id)}.json").unlink()
+                except Exception:
+                    pass
+                _ev.remove_file(r)
     return n
 
 
 def _new_record(sid: Optional[str], agent_type: str, task: str, background: bool) -> AgentRecord:
+    parent = _CURRENT.get()   # 子代理里再派子代理 → 嵌套 (任务树缩进)
     rec = AgentRecord(id=f"sa-{uuid.uuid4().hex[:6]}", sid=sid or "", agent_type=agent_type or "coder",
-                      task=str(task or ""), background=background)
+                      task=str(task or ""), background=background,
+                      parent_id=parent.id if parent is not None and parent.sid == (sid or "") else "")
     with _LOCK:
         _RECORDS[rec.id] = rec
+    _ev.emit(rec, "start", agent_type=rec.agent_type, task=str(task or "")[:2000], background=background,
+             parent_id=rec.parent_id or None)
     return rec
 
 
@@ -367,6 +383,10 @@ def _status_of(rec: AgentRecord, out) -> str:
 def _finish(rec: AgentRecord, status: str, result: str) -> None:
     rec.status, rec.result, rec.ended = status, result, time.time()
     rec.inbox.clear()
+    rec.cur_call = None
+    if rec.worktree_id:
+        _ev.emit(rec, "worktree", **(_ev.worktree_info(rec) or {}))
+    _ev.end(rec)
     _persist(rec)   # 后台子代理结束 → 落盘 (重启后可取回); 非后台在 _persist 内跳过
 
 
@@ -394,6 +414,7 @@ def tick(messages: list, it: int, max_iter: int, agent_type: str) -> Optional[st
         return None
     rec.iteration, rec.max_iter = it + 1, max_iter
     rec.last_progress = time.time()
+    _ev.link_worktree(rec)
     try:
         _snip = _last_output_snippet(messages)
         if _snip:
@@ -413,6 +434,7 @@ def tick(messages: list, it: int, max_iter: int, agent_type: str) -> Optional[st
             messages.append({"role": "user", "content": msg})
         rec.delivered += 1
         rec.instructions.append(text)
+        _ev.emit(rec, "instruction", text=text[:SEND_MAX], state="delivered", iteration=it + 1)
         _log().info(f"  [subagent:{agent_type}] {rec.id} 收到主代理补充指令 @iter={it + 1}: {text[:120]}")
     return None
 
@@ -457,22 +479,41 @@ def _tool_label(fn_name: str, fn_args) -> str:
     return f"{fn_name}({' '.join(str(key).split())[:60]})" if key else fn_name
 
 
-def tool_begin(fn_name: str, fn_args) -> None:
+def tool_begin(fn_name: str, fn_args, call_id: str = "") -> None:
     """子代理开始执行一个工具调用 (send 时据此告诉主代理: 指令要等这个调用结束后才生效)。"""
     r = _CURRENT.get()
     if r is not None:
         r.tool_running, r.tool_started = _tool_label(fn_name, fn_args), time.time()
         r.last_progress = r.tool_started
+        _ev.tool_start(r, call_id, fn_name, fn_args)
 
 
-def note_tool(fn_name: str, fn_args) -> None:
+def note_tool(fn_name: str, fn_args, result=None, call_id: str = "") -> None:
     r = _CURRENT.get()
     if r is None:
         return
+    _ev.tool_done(r, call_id, fn_name, "" if result is None else result)
     r.tool_calls += 1
     r.last_tool = _tool_label(fn_name, fn_args)
     r.tool_running, r.tool_started = "", None
     r.last_tool_at = r.last_progress = time.time()
+
+
+def observe(stream):
+    """包住子代理的模型流 (原样转发), 每轮结束记思考摘要 + 正文片段; 不在子代理里时原样返回。"""
+    r = _CURRENT.get()
+    return stream if r is None else _ev.observe(r, stream)
+
+
+def current_step(r: AgentRecord) -> str:
+    """任务树"当前步骤": 正在跑的工具 / 思考中 / 结束状态。"""
+    if r.status != "running":
+        return _STATUS_CN.get(r.status, r.status)
+    if r.stop_requested:
+        return "停止中"
+    if r.tool_running:
+        return r.tool_running
+    return f"思考中 (第 {r.iteration} 轮)" if r.iteration else "准备中"
 
 
 def pin_instructions(messages: list) -> list:
@@ -626,7 +667,10 @@ def public_view(r: AgentRecord, with_result: bool = False) -> dict:
          "started": r.started, "ended": r.ended, "elapsed": r.elapsed(), "iteration": r.iteration,
          "max_iter": r.max_iter, "tool_calls": r.tool_calls, "last_tool": r.last_tool,
          "inbox": len(r.inbox), "delivered": r.delivered, "stop_requested": r.stop_requested,
-         "fetched": r.fetched, "restored": r.restored, "has_result": bool(r.result), "progress": _progress(r)}
+         "fetched": r.fetched, "restored": r.restored, "has_result": bool(r.result), "progress": _progress(r),
+         "parent_id": r.parent_id, "steps": r.tool_calls, "current_step": current_step(r),
+         "running_tool": r.tool_running if r.status == "running" else "", "seq": r.seq,
+         "worktree": _ev.worktree_info(r)}
     if with_result:
         d["result"] = r.result or ""
         d["result_truncated"] = r.result_truncated
@@ -685,6 +729,7 @@ async def agent_control_tool(sid: Optional[str], args: dict) -> str:
         if r.status != "running":
             return f"子代理 {r.id} 已结束 (状态 {r.status}), 无需停止。"
         r.stop_requested = True
+        _ev.emit(r, "notice", text=f"已请求停止 ({r.stop_reason}), 下一轮迭代开始时结束", level="warn")
         _log().info(f"  [agent-control] {r.id} 请求停止")
         return (f"已请求停止 {r.id}: 它会在下一轮迭代开始时结束 (状态 stopped, 证据按非正常结束判定; "
                 "若在独立工作树里, 改动只提交不合并)。正在执行的工具/模型调用会先跑完。用 wait 拿最终结果。")
@@ -700,6 +745,7 @@ async def agent_control_tool(sid: Optional[str], args: dict) -> str:
     if r.stop_requested:
         return f"ERROR: 子代理 {r.id} 已被请求停止, 不再接收补充指令。"
     r.inbox.append(msg)
+    _ev.emit(r, "instruction", text=msg, state="queued")
     _log().info(f"  [agent-control] {r.id} 投递补充指令 ({len(msg)} 字): {msg[:80]}")
     busy = _running_tool(r)
     when = (f"当前工具调用 {busy}, 指令将在本轮工具调用结束后、下一轮迭代开始前生效 (不会强行中断工具)"

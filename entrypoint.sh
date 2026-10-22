@@ -164,7 +164,8 @@ start_vnc() {
 
     # [sec 2026-10-19] x11vnc 无密码, 只能监听本机 (-localhost); 不再对外暴露 5999
     if ! pgrep -x x11vnc > /dev/null 2>&1; then
-        x11vnc -display :99 -forever -nopw -shared -localhost \
+        # WSL 桌面版: WSLg 的 WAYLAND_DISPLAY 会让 x11vnc 直接退出
+        env -u WAYLAND_DISPLAY x11vnc -display :99 -forever -nopw -shared -localhost \
             -rfbport ${VNC_PORT:-5999} \
             -bg -o /tmp/x11vnc.log 2>/dev/null || true
     fi
@@ -280,9 +281,11 @@ main() {
             echo ""
             echo -e "${G}  ✅ 所有服务已启动${NC}"
             echo -e "  Version : ${C}$(cd /opt/litecode && python3 -m lib.version 2>/dev/null || echo unknown)${NC}"
-            echo -e "  Server  : ${C}http://0.0.0.0:${SERVER_PORT:-18789}${NC}"
-            echo -e "  Web UI  : ${C}http://0.0.0.0:${WEB_PORT:-18790}${NC}"
-            echo -e "  远程桌面: ${C}http://0.0.0.0:${WEB_PORT:-18790}/vnc/${NC} (登录 Web UI 后)"
+            # LITECODE_BIND_HOST: Windows 桌面版设为 127.0.0.1 只对本机开放; 服务器版不设, 监听 0.0.0.0
+            local bind="${LITECODE_BIND_HOST:-0.0.0.0}"
+            echo -e "  Server  : ${C}http://${bind}:${SERVER_PORT:-18789}${NC}"
+            echo -e "  Web UI  : ${C}http://${bind}:${WEB_PORT:-18790}${NC}"
+            echo -e "  远程桌面: ${C}http://${bind}:${WEB_PORT:-18790}/vnc/${NC} (登录 Web UI 后)"
             echo ""
 
             # 前台 wait — 任一进程退出则自动重拉

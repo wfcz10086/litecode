@@ -3,13 +3,14 @@ lib/transport.py — vLLM/OpenAI 后端流式调用（带重试 + 指数退避 +
 
 [#68] 重试策略统一走 lib/retry.py (LLM_POLICY: base=1s, factor=2, jitter=±0.3, cap=20s)
 """
-import json, re
+import asyncio, json, re, time
 from typing import AsyncGenerator, Optional
 import httpx
 from .config import BACKEND_URL, API_KEY, MODEL_ID, MAX_TOKENS, ENABLE_THINKING, THINKING_BUDGET, log, _LIVE, find_vision_fallback, wire_model_name
 from .thinking_adapter import inject_params as _thinking_inject
 from .retry import sleep_backoff, LLM_POLICY
 from . import llm_watchdog as _wd
+from . import usage_ledger as _ul
 
 # ── 重试配置 ──────────────────────────────────────────────────
 MAX_RETRIES       = 3
@@ -241,7 +242,29 @@ def _sanitize_tool_message_chain(messages: list) -> list:
                 am["content"] = ""
     return cleaned
 
-async def vllm_stream(
+async def vllm_stream(messages: list, tools: list, *, usage_source: str = "", **kw) -> AsyncGenerator[dict, None]:
+    """[usage-ledger 2026-10-22] 记账外壳: 每次调用记一行账 (lib/usage_ledger.py)。
+    上游回报的 usage 优先; 没回报 / 中途断 → 按字符估算, 标 estimated。参数见 _vllm_stream_impl。"""
+    meter = _ul.Meter(kw.get("model") or _LIVE["model_id"], messages, tools, source=usage_source)
+    try:
+        async for chunk in _vllm_stream_impl(messages, tools, _meter=meter, **kw):
+            meter.feed(chunk)
+            yield chunk
+    except (GeneratorExit, asyncio.CancelledError):
+        raise                      # 调用方主动停 (中断 / 断流检测) 不算失败
+    except BaseException:
+        meter.fail()
+        raise
+    finally:
+        meter.close()
+
+
+def subagent_stream(messages: list, tools: list, **kw):
+    """子代理用: 同 vllm_stream, 账记在来源 subagent (DAG 步骤下仍归 dag)。"""
+    return vllm_stream(messages, tools, usage_source="subagent", **kw)
+
+
+async def _vllm_stream_impl(
     messages: list,
     tools: list,
     *,
@@ -250,6 +273,8 @@ async def vllm_stream(
     api_key: Optional[str] = None,
     max_retries: int = MAX_RETRIES,
     max_tokens_override: Optional[int] = None,
+    no_thinking: bool = False,
+    _meter=None,
 ) -> AsyncGenerator[dict, None]:
     """
     流式调用 vLLM /v1/chat/completions。
@@ -266,6 +291,8 @@ async def vllm_stream(
 
     # [vision-route 2026-05-26] 优先检测 — 当前模型不支持 vision + 含图 → 临时切 fallback
     _model, _url, _key, _route_msg = _route_to_vision_fallback_if_needed(_model, _url, _key, messages)
+    if _meter is not None:
+        _meter.model = _model
 
     # [DeepSeek-compat 2026-05-23 / 2026-05-25 分版本分流]
     # DeepSeek 两套模型规则**完全相反** (官方文档自己矛盾):
@@ -316,7 +343,7 @@ async def vllm_stream(
         body["tools"] = tools
         body["tool_choice"] = "auto"
     #  由 thinking_adapter 按 backend_type 注入正确参数
-    _thinking_inject(body)
+    _thinking_inject(body, force_disable=no_thinking)
 
     headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
     last_err = None
@@ -329,6 +356,10 @@ async def vllm_stream(
         if _switched:
             body["model"] = wire_model_name(_model)
             headers["Authorization"] = f"Bearer {_key}"
+            if _meter is not None:
+                _meter.model = _model
+            # [trace 2026-10-22] 无 choices 的说明帧: 上层 llm_call 转成 SSE notice, 其余调用方 (无 choices 即跳过) 不受影响
+            yield {"_lc_notice": f"主模型暂不可用, 已自动改用备用模型 {_model}", "_lc_kind": "failover"}
         try:
             timeout = httpx.Timeout(STREAM_TIMEOUT, connect=CONNECT_TIMEOUT)
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -343,6 +374,8 @@ async def vllm_stream(
                         # [#68] 统一走 lib.retry: exp backoff + jitter, cap 20s
                         log.warning(f"[transport] {resp.status_code} on attempt {attempt+1}, "
                                     f"retrying (exp backoff): {body_text[:200]}")
+                        yield {"_lc_notice": f"模型服务返回 {resp.status_code}, 已自动重试 {attempt+1}/{max_retries}",
+                               "_lc_kind": "retry"}
                         await sleep_backoff(attempt, LLM_POLICY)
                         continue
 
@@ -374,6 +407,7 @@ async def vllm_stream(
             last_err = e
             if attempt < max_retries:
                 log.warning(f"[transport] connect failed (attempt {attempt+1}), retrying (exp backoff): {e}")
+                yield {"_lc_notice": f"连不上模型服务, 已自动重试 {attempt+1}/{max_retries}", "_lc_kind": "retry"}
                 await sleep_backoff(attempt, LLM_POLICY)
             else:
                 raise RuntimeError(f"vLLM unreachable after {max_retries+1} attempts: {e}")
@@ -386,6 +420,7 @@ async def vllm_stream(
                 raise RuntimeError(WD_RESTARTING_MSG)
             if attempt < max_retries:
                 log.warning(f"[transport] read timeout (attempt {attempt+1}), retrying (exp backoff): {e}")
+                yield {"_lc_notice": f"模型服务响应超时, 已自动重试 {attempt+1}/{max_retries}", "_lc_kind": "retry"}
                 await sleep_backoff(attempt, LLM_POLICY)
             else:
                 raise RuntimeError(f"vLLM read timeout after {max_retries+1} attempts")
@@ -448,6 +483,7 @@ async def vllm_call(
         body["tools"] = tools
         body["tool_choice"] = "auto"
     headers = {"Authorization": f"Bearer {_key}", "Content-Type": "application/json"}
+    _t0 = time.time()
 
     for attempt in range(max_retries + 1):
         _model, _url, _key, _switched = _failover(_model, _url, _key)
@@ -466,9 +502,12 @@ async def vllm_call(
                     await sleep_backoff(attempt, LLM_POLICY)
                     continue
                 if r.status_code != 200:
+                    _ul.record_http("", _model, body, None, _t0)
                     raise RuntimeError(f"vLLM {r.status_code}: {r.text[:200]}")
                 _wd.note_ok(_url)
-                return r.json()
+                data = r.json()
+                _ul.record_http("", _model, body, data, _t0)   # [usage-ledger] 来源沿用作用域
+                return data
         except (httpx.ConnectError, httpx.ReadTimeout) as e:
             if isinstance(e, httpx.ReadTimeout) and _busy_check(0, b"", _url, timeout=True) \
                     and not _wd.fallback_for(_url):

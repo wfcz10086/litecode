@@ -4,6 +4,7 @@ description: >
   长文本处理技能：文档切片→逐段翻译/摘要/改写→合并输出。适用于超长文档（>5000字）
   的翻译、摘要、格式转换、内容改写等逐段处理任务。
   触发词：翻译文档、总结长文、文档切片、逐段翻译、长文本处理、批量处理、改写文档。
+aliases: ["长文本", "总结长文", "提炼总结", "翻译文档", "翻译长文", "逐段翻译", "批量翻译", "文档切片", "改写文档", "translate document", "summarize long", "摘要"]
 ---
 
 # LongText Processing Skill
@@ -23,11 +24,13 @@ description: >
 **严格按这个流程执行，不要跳步：**
 
 ```
-1. read_file 读取源文档
-2. 用 Python 脚本切片（句子边界对齐）
-3. spawn_agent(parallel_tasks) 并行处理各切片
-4. 按序合并所有结果 → write_file 输出
+1. 先量大小: wc -c / wc -l (不要 read_file 整篇读进上下文, 只用 read_file lines='1:50' 看开头格式)
+2. 用 Python 脚本切片（句子边界对齐）, 切片落盘到 workspace/chunks/
+3. spawn_agent(parallel_tasks) 并行处理: 任务里只给切片文件路径 + 输出路径, 不内联切片正文
+4. 按序合并所有结果文件 → 脚本写最终输出, 回复里只给摘要和路径
 ```
+
+> 文档本身是几十 MB 以上的日志/表格而不是"文章"时, 改用 `large-file-handling` 技能 (搜索/脚本统计), 不要切片逐段读。
 
 ## 实现步骤
 
@@ -69,17 +72,20 @@ def split_text(text, chunk_size=3000):
     
     return [c for c in chunks if c.strip()]
 
-# 读取文档
-text = open(sys.argv[1], 'r', encoding='utf-8').read()
+# 读取文档 (脚本里读, 不经过模型上下文)
+import os
+OUT = "/tmp/litecode_workspace/chunks"
+os.makedirs(OUT, exist_ok=True)
+text = open(sys.argv[1], 'r', encoding='utf-8', errors='replace').read()
 chunks = split_text(text, chunk_size=3000)
 
 # 保存切片信息
 meta = {"total": len(chunks), "source": sys.argv[1]}
 for i, chunk in enumerate(chunks):
-    open(f"/tmp/chunk_{i:03d}.txt", "w", encoding="utf-8").write(chunk)
+    open(f"{OUT}/chunk_{i:03d}.txt", "w", encoding="utf-8").write(chunk)
     meta[f"chunk_{i}"] = len(chunk)
 
-json.dump(meta, open("/tmp/chunks_meta.json", "w"), ensure_ascii=False)
+json.dump(meta, open(f"{OUT}/chunks_meta.json", "w"), ensure_ascii=False)
 print(f"切片完成: {len(chunks)} 个片段，总长度 {len(text)} 字符")
 ```
 
@@ -91,18 +97,18 @@ python3 split_document.py /path/to/source.txt
 ### Step 2: 并行处理（翻译示例）
 
 ```python
-# 用 spawn_agent 并行处理
-# 每个 agent 处理一个切片
-
+# 用 spawn_agent 并行处理, 每个 agent 处理一个切片文件 (只传路径, 正文由子代理自己 read_file)
 spawn_agent(
     parallel_tasks=[
         {
-            "task": "翻译以下中文为英文，保持格式不变：\n" + chunk_0_content,
+            "task": "read_file /tmp/litecode_workspace/chunks/chunk_000.txt, 翻译为英文且保持格式, "
+                    "write_file 写到 /tmp/litecode_workspace/chunks/result_000.txt, 只回复 '完成+字数'",
             "agent_type": "writer",
             "label": "翻译-第1段"
         },
         {
-            "task": "翻译以下中文为英文，保持格式不变：\n" + chunk_1_content,
+            "task": "read_file /tmp/litecode_workspace/chunks/chunk_001.txt, 翻译为英文且保持格式, "
+                    "write_file 写到 /tmp/litecode_workspace/chunks/result_001.txt, 只回复 '完成+字数'",
             "agent_type": "writer",
             "label": "翻译-第2段"
         },
@@ -120,7 +126,7 @@ spawn_agent(
 import glob
 
 results = []
-for f in sorted(glob.glob("/tmp/result_*.txt")):
+for f in sorted(glob.glob("/tmp/litecode_workspace/chunks/result_*.txt")):
     results.append(open(f, encoding="utf-8").read())
 
 final = "\n\n".join(results)

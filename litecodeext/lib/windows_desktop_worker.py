@@ -43,6 +43,41 @@ def desktop_ready():
         user.CloseDesktop(ctypes.c_void_p(handle))
 
 
+WTS_STATES = {0: 'active', 1: 'connected', 2: 'connect_query', 3: 'shadow', 4: 'disconnected',
+              5: 'idle', 6: 'listen', 7: 'reset', 8: 'down', 9: 'init'}
+
+
+def session_state():
+    """本进程所在会话的连接状态 (WTSConnectState)。取不到返回 'unknown'。"""
+    try:
+        wts = ctypes.windll.wtsapi32
+        session = ctypes.c_ulong()
+        if not ctypes.windll.kernel32.ProcessIdToSessionId(os.getpid(), ctypes.byref(session)):
+            return 'unknown', None
+        buffer, size = ctypes.c_void_p(), ctypes.c_ulong()
+        if not wts.WTSQuerySessionInformationW(None, session.value, 8, ctypes.byref(buffer), ctypes.byref(size)):
+            return 'unknown', session.value
+        try:
+            value = ctypes.cast(buffer, ctypes.POINTER(ctypes.c_int)).contents.value
+        finally:
+            wts.WTSFreeMemory(buffer)
+        return WTS_STATES.get(value, 'unknown'), session.value
+    except Exception:
+        return 'unknown', None
+
+
+def unavailable_result():
+    """[2026-10-21] 真机: 远程桌面断开 (query user 显示 Disc) 也报"桌面锁定", 模型只会让用户去解锁。
+    断开与锁屏的处理不同, 分开报。"""
+    state, session = session_state()
+    result = {'ok': False, 'state': 'desktop_unavailable', 'session_state': state, 'session_id': session,
+              'error': '桌面锁定或未登录，请先解锁 Windows'}
+    if state == 'disconnected':
+        result['error'] = ('远程桌面会话已断开（没有显示器输出，桌面不可操作）。用户重新连上远程桌面即可；'
+                           f'或由管理员以 SYSTEM 身份执行 tscon {session} /dest:console 把会话接回控制台（无需密码，不注销）')
+    return result
+
+
 def classify(texts):
     """只按明确界面证据报告登录状态，未知界面不猜成功。"""
     text = "\n".join(texts)
@@ -97,7 +132,7 @@ SYSTEM_ACTIONS = ('system_info', 'processes', 'kill_process', 'services', 'run_p
 FILE_ACTIONS = ('list_dir', 'download', 'upload')
 DESKTOP_GENERIC = ('open_url', 'hotkey', 'type_text', 'windows', 'focus_window', 'close_window',
                    'scroll', 'click', 'drag', 'clipboard', 'right_click', 'hover',
-                   'launch_app', 'window_state', 'double_click')
+                   'launch_app', 'window_state', 'double_click', 'ui_tree', 'click_element')
 
 
 def run(action, folder, args=None):
@@ -109,7 +144,7 @@ def run(action, folder, args=None):
         from windows_file_actions import perform
         return perform(action, folder, args)
     if not desktop_ready():
-        return {'ok': False, 'state': 'desktop_unavailable', 'error': '桌面锁定或未登录，请先解锁 Windows'}
+        return unavailable_result()
     if action in ('ocr', 'click_text'):
         from windows_desktop_ocr import perform
         return perform(action, folder, args)

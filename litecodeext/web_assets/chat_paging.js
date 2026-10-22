@@ -32,8 +32,11 @@ function _lcRenderBlocks(msgs, base, before, keepReal = 0) {
   const blocks = _mergeConsecutiveAssistants(msgs, base);
   blocks.forEach((m, k) => {
     const r = addMsg(m.role, m.content, m.tools || [], false, m.diffs || [], m.usage, m.source || '', m.wx_user || '',
-      m.reasoning || '', m._tool_results || [], m.desktop_steps || []);
+      m.reasoning || '', m._tool_results || [], m.desktop_steps || [],
+      {trace_steps: m.trace_steps || [], turn_error: m.turn_error || null});  /* [trace] 调用链路/错误卡片重绘 */
     const w = r.wrap;
+    if (m.steer && typeof _lcMarkSteer === 'function') _lcMarkSteer(w, m.urgent);
+    if (m.meta && m.meta.skills && window.LCSkills) LCSkills.tagMsg(w, m.meta.skills);
     w.dataset.midx = m._i0; w.dataset.midxEnd = m._i1; w.dataset.mkey = m._key;
     if (k < blocks.length - keepReal) w.classList.add('lc-cv');
     if (before) el.insertBefore(w, before);

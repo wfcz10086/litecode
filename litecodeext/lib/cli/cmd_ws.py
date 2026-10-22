@@ -49,12 +49,9 @@ def ws_cat(path: str):
 @click.argument("path")
 @click.option("-o", "--output", default=None)
 def ws_download(path: str, output: Optional[str]):
-    r = _req("GET", "/api/workspace/download", params={"path": path})
-    if r.status_code != 200:
-        _err(f"HTTP {r.status_code}")
-    out = output or Path(path).name
-    Path(out).write_bytes(r.content)
-    _ok(f"已下载 {len(r.content)} bytes → {out}")
+    # [large-file 2026-10-21] 原来 r.content 整份进内存; 改走流式 + .part 原子改名
+    from .cmd_files import _fetch_to
+    _fetch_to("/api/workspace/download", {"path": path}, path, Path(path).name, output)
 
 
 # ── preview (绝对路径文件) ──────────────────────────────────

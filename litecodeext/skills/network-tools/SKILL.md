@@ -14,6 +14,7 @@ description: >
 带宽 bandwidth iperf 防火墙 iptables ufw firewall ssl 证书 tls
 curl wget 代理 proxy vpn tcpdump 抓包 wireshark
 连不上 超时 timeout refused 拒绝连接 网络不通 丢包
+aliases: ["网络诊断", "ping", "traceroute", "nmap", "端口扫描", "防火墙", "iptables", "tcpdump", "抓包", "ssl证书", "dns", "网络不通"]
 ---
 
 # Network Tools Skill

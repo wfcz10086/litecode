@@ -55,6 +55,9 @@ class StepSpec:
     #   !contains:<sid>:<keyword>  前步 sid.output 不含 keyword
     #   !success:<sid> / !failure:<sid> 取反
     when: List[str] = field(default_factory=list)
+    # [P0-3 2026-10-21] 步骤级断言 (全部满足才算成功, 见 orchestrator/step_judge.py):
+    #   "关键字" 必须包含 / "!关键字" 不能包含 / "re:正则" 必须匹配
+    expect: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -70,6 +73,7 @@ class StepResult:
     elapsed: float = 0.0
     attempts: int = 1
     error_stack: List[str] = field(default_factory=list)  # 每次重试的错误记录
+    restored: bool = False           # [P0-4] 从 checkpoint 恢复 (output 为当时保存的真实输出)
 
 
 @dataclass
