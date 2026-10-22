@@ -217,6 +217,10 @@ class WeChatBridgeManager:
         self.bots[bot_id] = bot
         result = await bot.login()
         self._save_bots_state()   # 持久化
+        # 加了微信就是要用: 顺手打开总开关, 否则服务重启时 startup() 因 enabled=false 不恢复 (2026-10-22 用户机:
+        # 升级后配置是新生成的, 开关默认关, 扫码登录的机器人重启后就不见了)
+        if not _wx_cfg().get("enabled", False):
+            self.update_config({"enabled": True})
         return {"bot_id": bot_id, **result}
 
     async def remove_bot(self, bot_id: str) -> dict:

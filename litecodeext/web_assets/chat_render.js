@@ -367,3 +367,25 @@ function addMsg(role,content,tools=[],scroll=true,diffs=[],usage=null,source='',
   _lcOptimizeImgs(bubble);  /* [perf] 兜底: 本气泡里所有 <img> 补 lazy/async + 上传图换缩略图 (同步执行, 早于取图) */
   wrap.appendChild(bubble);el.appendChild(wrap);if(scroll)sbot();return{wrap,bubble};
 }
+
+/* [2026-10-22] 侧边栏自动刷新: 微信/企微/后台任务新建或更新的会话, 网页不用手动刷新就能看到;
+ * 正在看的会话 (自己没在流式输出时) 有新消息也自动重载。页面在后台时不轮询。 */
+let _slSig='';
+function _sessSig(list){return (list||[]).map(s=>s.id+':'+(s.last_used||0)+':'+(s.count||0)+':'+(s.name||'')).join('|');}
+async function _pollSessList(){
+  if(document.hidden)return;
+  try{
+    const r=await fetch('/api/sessions'); if(!r.ok)return;
+    const list=await r.json(); const sig=_sessSig(list);
+    if(!_slSig)_slSig=_sessSig(sess);   /* 基线 = 页面已渲染的列表 */
+    if(sig===_slSig)return;
+    const before=(sess||[]).find(x=>x.id===cur);
+    _slSig=sig; sess=list; renderSL();
+    const after=list.find(x=>x.id===cur);
+    if(cur&&!streaming&&before&&after&&(after.count!==before.count||after.last_used!==before.last_used)){
+      const c=cur; cur=null; await swS(c);
+    }
+  }catch(e){}
+}
+setInterval(_pollSessList, 8000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)_pollSessList();});

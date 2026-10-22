@@ -5,6 +5,9 @@ param([Parameter(Mandatory=$true)][string]$Server, [Parameter(Mandatory=$true)][
       [string]$KeyFingerprint = '', [string]$SshPublicKey = '')
 $ErrorActionPreference = 'Stop'
 $offlineDir = Join-Path $env:LOCALAPPDATA 'LiteCode\payload\offline'   # 桌面版安装包自带的离线组件 (没有就联网)
+# 2026-10-22 用户机: 从已装节点代理里 (它的进程环境带 PYTHONHOME 指向代理自带的运行时) 重跑本脚本时,
+# 新建 venv 的 python 一启动就退出 1, pip 被误判为"版本不匹配"。先清掉这些继承来的 Python 环境变量。
+foreach ($v in 'PYTHONHOME','PYTHONPATH','PYTHONSTARTUP','PYTHONUSERBASE','VIRTUAL_ENV') { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 # [2026-10-20] PowerShell 5.1 的 Invoke-WebRequest 进度条会把下载拖慢几十倍 (真机装 Python 卡在"正在写入 Web 请求")
 $ProgressPreference = 'SilentlyContinue'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12

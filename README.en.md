@@ -434,9 +434,14 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Version history
 
-### v2.0.8 "Desktop" (上桌) (2026-10-22)
+### v2.0.9 "Desktop" (上桌) (2026-10-22)
 
 > Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
+
+**v2.0.9**
+- 🔄 **Sidebar auto-refresh**: chats created or updated from WeChat, WeCom or background jobs appear without reloading; the open chat updates when new messages arrive.
+- 💬 **Adding a WeChat bot turns WeChat on**, so bots come back after a restart.
+- 🪟 **Steadier PC control**: bundled OpenSSH first (Windows Update only as a time-limited fallback); Python and agent dependencies ship with the installer; inherited Python env vars are cleared; domestic mirrors by default in the distro.
 
 **v2.0.8**
 - 🪟 **Fixed Windows install failing with a localhost proxy on** ("invalid character 'w'"): WSL's proxy notice no longer leaks into the config and version the installer reads; when a localhost proxy is detected the installer switches WSL to mirrored networking so the distro can use it too (an existing `networkingMode` is left alone).
