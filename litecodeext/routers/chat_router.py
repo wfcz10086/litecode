@@ -251,6 +251,17 @@ def _forced_skills(raw) -> list:
     return out[:5]
 
 
+def _provider_refs(raw) -> list:
+    """chat body `providers`: 接入 id 列表 → [{id, name, kind}] (查不到的丢掉)。"""
+    if not isinstance(raw, list) or not raw:
+        return []
+    try:
+        from lib.providers import ref_meta
+        return ref_meta([x for x in raw if isinstance(x, str)])
+    except Exception:
+        return []
+
+
 def start_chat_turn(sid: str, message: str, body=None):
     """Web 与定时任务共用入口；同步检查并登记轮次，保持同会话串行。"""
     body = body or {}
@@ -265,6 +276,9 @@ def start_chat_turn(sid: str, message: str, body=None):
     umsg = {"role": "user", "content": message, "ts": ts}
     if _forced_skills(body.get("skills")):
         umsg["skills"] = _forced_skills(body.get("skills"))
+    pv_refs = _provider_refs(body.get("providers"))
+    if pv_refs:   # `@` 引用的能力接入: 气泡里显示标题 chip, 明文随本轮上下文发给 agent
+        umsg["providers"] = pv_refs
     session["messages"].append(umsg)
     session["last_used"] = ts
     if len(session["messages"]) == 1:
@@ -291,6 +305,8 @@ def start_chat_turn(sid: str, message: str, body=None):
     forced = _forced_skills(body.get("skills"))
     if forced:   # 用户用 `/` 选择器指定的技能: 本轮全文注入, 不做关键词匹配 (lib/skill_turn.py)
         payload["skills"] = forced
+    if pv_refs:   # 引用的接入: server 端 lib/turn_sources.providers_ref 把完整明文挂进本轮上下文
+        payload["providers"] = [r["id"] for r in pv_refs]
     url = f"{w.SERVER_URL}/v1/chat/completions"
     if "__TRIGGER_EMPTY_RESPONSE__" in message:   # [P46 测试模式] 走 server 空响应路径
         url += "?__test_empty=1"

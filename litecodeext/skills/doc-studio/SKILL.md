@@ -55,6 +55,7 @@ ppt pptx 幻灯片 演示文稿 路演 汇报 课件 报告 文档 word docx pdf
   - 署名位: 图片所在 figure 里放 `<span data-credit></span>`, 或页脚放 `<span data-credit-page></span>`;
     末页/文末放 `<div class="credits" data-credits></div>` 列出全部图片来源 (CC BY / BY-SA 要求署名, 必须有)。
   - 图表类型: bar / barh / line / area / pie / donut; 多系列给多个 series。图表 = 透明 PNG, 跟页面配色。
+  - 流程图 / 架构图 / 时序图 / 思维导图 / 时间线这类**示意图**: 先用 `diagram` 技能把 Mermaid 或 Graphviz 源码渲染成 SVG (深色页加 `--theme dark --bg transparent`), 再用普通 `<img src="…svg">` 放进页面; 不要用 AI 生图画流程图 (文字会乱)。
 
 ### 3. 配图
 ```bash

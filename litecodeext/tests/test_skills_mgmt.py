@@ -80,7 +80,7 @@ def test_installed_skill_joins_index_and_builtin_wins(tmp_path):
 def test_local_search_scoring():
     items = reg.list_skills()
     top = [i["name"] for i in search(items, "小说", 5)]
-    assert top[0] == "novel-writing" and all("novel" in n for n in top)
+    assert top[0] == "novel-writing" and all("novel" in n for n in top[:3])   # 第 4~5 名可以是 long-translate 这类"能处理小说"的技能
     assert search(items, "pdf", 1)[0]["name"] == "pdf"
     assert search(items, "word", 1)[0]["name"] == "docx"                  # 别名命中
     assert [i["name"] for i in search(items, "word")][:2] == ["docx", "xlsx"] or len(search(items, "word")) <= 3

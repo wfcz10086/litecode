@@ -22,6 +22,7 @@ from .research_defs import RESEARCH_DEFS
 from .tool_group_defs import TOOL_GROUP_DEFS
 from .settings_defs import SETTINGS_DEFS
 from .kb_defs import KB_DEFS
+from .provider_defs import PROVIDER_DEFS
 
 TOOL_DEFS = (
     SHELL_DEFS
@@ -44,6 +45,7 @@ TOOL_DEFS = (
     + TOOL_GROUP_DEFS   # 2026-10-21: enable_tools (低频工具组按需暴露, lib/tool_groups.py)
     + SETTINGS_DEFS   # 2026-10-22: text_to_speech / manage_models (按需组 voice / settings, 不进常驻前缀)
     + KB_DEFS   # 2026-10-22: kb_search (内置知识库, 按需组 kb)
+    + PROVIDER_DEFS   # 2026-10-23: 能力接入 6 个工具 (按需组 providers, 不进常驻前缀)
 )
 
 __all__ = [
@@ -52,4 +54,5 @@ __all__ = [
     "AGENT_DEFS", "WORKFLOW_DEFS", "PROJECT_DEFS", "REMOTE_DEFS",
     "GIT_DEFS", "SNAPSHOT_DEFS", "TASK_DEFS", "SSH_HOSTS_DEFS", "BROWSER_REF_DEFS", "WINDOWS_DESKTOP_DEFS",
     "WINDOWS_NODES_DEFS", "WINDOWS_SYSTEM_DEFS", "RESEARCH_DEFS", "TOOL_GROUP_DEFS", "SETTINGS_DEFS", "KB_DEFS",
+    "PROVIDER_DEFS",
 ]

@@ -52,6 +52,12 @@ def skills(inp: tc.TurnInput) -> str:
     return head + "".join(fresh) if fresh else ""
 
 
+def providers_ref(inp: tc.TurnInput) -> str:
+    """用户用 `@` 引用的能力接入: 每次引用都给完整明文 (key 可能刚改过), 见 lib/providers.py。"""
+    from . import providers as _pv
+    return _pv.refs_block(_pv.turn_refs())
+
+
 def memory_index(inp: tc.TurnInput) -> str:
     if not HAS_MEMORY_INDEX:
         return ""
@@ -125,6 +131,7 @@ tc.register("project", project, order=5)
 tc.register("delegation", delegation, order=10)
 tc.register("user_profile", user_profile, order=20)
 tc.register("skills", skills, order=30)
+tc.register("providers", providers_ref, order=35)
 tc.register("memory_index", memory_index, order=40)
 tc.register("memory_recall", memory_recall, order=50)
 # 失败经验召回 (lib/agent/failure_loop.py): 相似度过阈值才给, 开关 agent.failure_memory.enabled

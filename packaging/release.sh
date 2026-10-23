@@ -34,6 +34,9 @@ CACHE=/opt/build/litecode-win/cache
 WORK=/opt/build/litecode-win/work/$VER
 export PATH=/home/ubuntu/.local/go/bin:$PATH GOPROXY=https://goproxy.cn,direct
 mkdir -p "$CACHE" "$WORK" "$OUT"
+# 缓存和中间产物都不自动删; 磁盘不够时只提醒, 由人决定删哪些
+FREE_GB=$(df -BG --output=avail /opt/build | tail -1 | tr -dc 0-9)
+[ "${FREE_GB:-99}" -lt 15 ] && echo "⚠ /opt/build 只剩 ${FREE_GB}G, 完整打包要约 10G; 旧缓存在 $CACHE (deps-*.tar.gz 可按时间删老的)"
 T0=$(date +%s)
 step(){ echo; echo "[$(( $(date +%s) - T0 ))s] == $*"; }
 
@@ -42,7 +45,7 @@ step "0. 预检 (能提前发现的问题第一秒就报, 别等打了几分钟�
 for t in go docker python3 curl sha256sum; do command -v $t >/dev/null || { echo "缺工具: $t"; exit 1; }; done
 if [ "$FULL" = "--full" ]; then
   command -v makensis >/dev/null || { echo "缺工具: makensis (apt install nsis)"; exit 1; }
-  docker image inspect litecode:v12-r1 >/dev/null 2>&1 || { echo "缺基础镜像 litecode:v12-r1"; exit 1; }
+  docker image inspect litecode:latest >/dev/null 2>&1 || { echo "缺基础镜像 litecode:latest"; exit 1; }
   (cd "$HERE" && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet ./...) || { echo "托盘程序 go vet 不过"; exit 1; }
   for f in $(grep -oE 'File "[^"$]+"' "$HERE/installer.nsi" | sed -E 's/File "(.*)"/\1/' | tr '\\' '/'); do
     [ -f "$HERE/$f" ] || { echo "安装脚本引用的文件不存在: $f"; exit 1; }
@@ -92,9 +95,10 @@ ls -la "$OUT/litecode-code-$VER.tar.gz" | awk '{printf "  %s  %.1f MB\n", $9, $5
 
 if [ "$FULL" = "--full" ]; then
   step "3. 依赖层 (按指纹缓存)"
-  BASE_ID=$(docker image inspect litecode:v12-r1 --format '{{.Id}}')
+  BASE_ID=$(docker image inspect litecode:latest --format '{{.Id}}')
   # 知识库向量模型 (plugins/kb) 打进依赖层; 来源见 scripts/kb_export_onnx.sh
-  FP=$( (echo "$BASE_ID"; cat "$HERE/Dockerfile.deps" "$HERE"/wsl/*) | sha256sum | cut -c1-12)
+  # 镜像名 v12-r1 → latest 只是改名 (同一个镜像 ID 已计入): 指纹按旧名算, 不让缓存失效、不触发 2GB 完整更新
+  FP=$( (echo "$BASE_ID"; sed 's/litecode:latest/litecode:v12-r1/g' "$HERE/Dockerfile.deps"; cat "$HERE"/wsl/*) | sha256sum | cut -c1-12)
   DEPS=$CACHE/deps-$FP.tar.gz
   if [ -f "$DEPS" ]; then
     echo "  命中缓存 deps-$FP ($(cat $CACHE/deps-$FP.version)), 跳过构建和全量扫描"
@@ -102,7 +106,7 @@ if [ "$FULL" = "--full" ]; then
     echo "  依赖有变化 (指纹 $FP), 构建一次…"
     D=$WORK/deps; rm -rf "$D"; mkdir -p "$D"
     cp "$HERE/Dockerfile.deps" "$D/Dockerfile"; cp "$HERE"/wsl/* "$D/"
-    docker image inspect litecode:v12-r1 --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -v '^$' | sed 's/^/export /' > "$D/litecode.env"
+    docker image inspect litecode:latest --format '{{range .Config.Env}}{{println .}}{{end}}' | grep -v '^$' | sed 's/^/export /' > "$D/litecode.env"
     docker build -q --build-arg ROOTFS_VERSION="$VER" -t litecode-deps:$FP "$D" >/dev/null
     python3 "$HERE/rootfs.py" deps litecode-deps:$FP "$DEPS"
     echo "$VER" > "$CACHE/deps-$FP.version"
@@ -144,7 +148,11 @@ if [ "$FULL" = "--full" ]; then
   mv "$WORK/LiteCode-Setup-$VER.exe" "$OUT/"
   echo "$ROOTFS_VER" > "$OUT/.rootfs_version"
   echo "LiteCode-Setup-$VER.exe" > "$OUT/.installer"
-  rm -f "$WORK/litecode-rootfs-$ROOTFS_VER.tar.gz" "$WORK/code-layer.tar.gz" "$WORK/litecode-code-$VER.tar.gz"; rm -rf "$WORK/offline"
+  # 中间产物不删 (2026-10-23 用户要求: 缓存包/临时包都保留, 下次打包失败时可复用和排查):
+  # 最近一次的系统包和代码层放到 $CACHE/last-build/, 只保留一份, 避免磁盘无限增长
+  mkdir -p "$CACHE/last-build"; rm -f "$CACHE"/last-build/*.tar.gz
+  mv "$WORK/litecode-rootfs-$ROOTFS_VER.tar.gz" "$WORK/code-layer.tar.gz" "$CACHE/last-build/" 2>/dev/null || true
+  echo "  中间产物保留在 $CACHE/last-build/ 和 $WORK/"
 fi
 
 step "5b. 模型包 (本地 TTS + 知识库向量模型; 不进安装包, 托盘后台下载 —— windows/models.go)"

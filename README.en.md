@@ -4,604 +4,438 @@
 
 [中文](README.md) · **English**
 
-**An AI employee that lives on your own machine.** Web, terminal, WeChat and WeCom share one brain. It writes code, researches, makes documents and videos, runs pipelines and scheduled jobs, and can drive your Windows PC and your servers directly. Bring any OpenAI-compatible model (including your own). No credits, no subscription, your data stays home.
+**A self-hosted AI assistant that gets the work done on your own computer or server.**
 
-![MIT](https://img.shields.io/badge/license-MIT-green) ![Windows](https://img.shields.io/badge/Windows-one--click%20install-0078D6) ![Docker](https://img.shields.io/badge/Linux-Docker-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI%20compatible-orange) ![Skills](https://img.shields.io/badge/skills-110-brightgreen) ![Tools](https://img.shields.io/badge/tools-95-yellow)
+Describe a task and it plans the steps, runs commands, writes code, searches the web, and produces documents or videos, then hands you files you can open.
+The web app, the command line, WeChat and WeCom all talk to the same assistant. Bring any OpenAI-compatible model (including ones you host yourself). Free and open source, and your data stays on your machine.
 
-![LiteCode chat](docs/screenshots/v2/01_chat_artifact.jpg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/wfcz10086/litecode?label=download)](https://github.com/wfcz10086/litecode/releases/latest)
+![Windows](https://img.shields.io/badge/Windows-installer-0078D6)
+![Docker](https://img.shields.io/badge/Linux-Docker-blue)
+
+[Download](https://github.com/wfcz10086/litecode/releases/latest) · [Install](#install) · [First steps](#first-steps) · [What it does](#what-it-does) · [FAQ](#faq) · [Changelog](CHANGELOG.en.md)
+
+<img src="docs/screenshots/v2/01_chat_artifact.jpg" alt="LiteCode chat" width="820">
 
 </div>
 
-> The UI and most docs are Chinese-first; an English UI is available under Settings → Language.
+## Install
+
+Pick one:
+
+| Your situation | Choose | Time |
+|---|---|---|
+| A Windows 10/11 PC and you just want it working | **[A: Windows installer](#a-windows-installer-recommended)** | download + ~10 min |
+| A Linux server (cloud or home) that stays on 24/7 | **[B: Linux + Docker](#b-linux--docker)** | ~20 min (first image build) |
+| Windows, but you want the same Docker setup as a server | **[C: Docker inside WSL](#c-docker-inside-wsl)** | ~30 min |
+
+Every option needs a **model endpoint**: an OpenAI-compatible URL and model name (plus an API key if it has one). Self-hosted vLLM / Ollama or a paid API both work, see [Connect a model](#connect-a-model).
 
 ---
 
-## Contents
+### A: Windows installer (recommended)
 
-- [What it is, who it's for](#what-it-is-who-its-for)
-- [Quick start](#quick-start)
-- [Features](#features)
-- [Screenshots](#screenshots)
-- [Compared with OpenClaw / DeepSeek-TUI / WorkBuddy](#compared-with-openclaw--deepseek-tui--workbuddy)
-- [Strengths and weaknesses](#strengths-and-weaknesses)
-- [Build and release it yourself](#build-and-release-it-yourself)
-- [Layout and architecture](#layout-and-architecture)
-- [FAQ](#faq)
-- [Version history](#version-history)
+**Requirements**
 
----
+- Windows 10 2004 (build 19041) or later, or Windows 11, 64-bit.
+- **15 GB** of free disk space.
+- Virtualization enabled in the BIOS (on by default on most PCs; Task Manager → Performance → CPU should say "Virtualization: Enabled").
+- An administrator Windows account.
 
-## What it is, who it's for
+**Steps**
 
-LiteCode is a **self-hosted AI agent platform**. It doesn't just chat: it breaks a job into steps, calls tools, runs commands, reads and writes files, checks the result, and hands you something you can open — a file, a chart, a video, a report.
+1. Download `LiteCode-Setup-<version>.exe` (about 1.9 GB) from the [Releases page](https://github.com/wfcz10086/litecode/releases/latest). It is an **offline installer**; installing needs no network.
+2. Run it. If Windows shows "Windows protected your PC", click "More info" → "Run anyway" (the installer is not code-signed).
+3. Click through. It asks for three things:
+   - **Model URL**, e.g. `http://192.168.1.10:8000/v1`
+   - **Model name**, e.g. `Qwen3.6-35B-A3B`
+   - **API key**, leave empty if there is none
+4. If WSL has **never been enabled** on this PC, the installer asks for admin rights once to turn it on and then asks you to reboot. After the reboot it continues on its own.
+5. The last step, "Local control", asks for admin rights again. It installs OpenSSH (set to start with Windows) and a desktop agent so LiteCode can open apps, take screenshots and click on this PC. Click "No" to skip; you can add it later from the tray menu.
+6. A **LiteCode** icon appears on the desktop and in the tray, and it starts with Windows. Double-click the icon to open the window.
 
-| Good fit | Not a great fit |
-|---|---|
-| You want an assistant **you control**: data on your machine, your choice of model | Quick questions on your phone (a vendor app is easier) |
-| You run a model (vLLM / Ollama) or buy an API and want it to do real work | Multi-tenant organisations with role management (LiteCode is single-user / small-team) |
-| You need it to **drive a real Windows PC**, manage servers, run scheduled jobs | You have no LLM endpoint at all |
-| Content work: documents, slides, voice-over, short videos, image and video generation | |
+**Sign in**: the window is `http://127.0.0.1:18790` and **only this PC can reach it**. The default password is `admin`; change it under Settings → Change password.
 
----
+**Updates**: the tray checks once a day and asks before updating. An update downloads, verifies and swaps the code in about a minute, keeping your chats and settings, and rolls back automatically if the new version fails to start. Code updates come from GitHub first and fall back to a mirror. To check now: right-click the tray icon → Check for updates.
 
-## Quick start
-
-### A. Windows desktop edition: one-click install
-
-No Docker, no command line.
-
-1. **Requirements**: Windows 10 2004+ or Windows 11, 64-bit; virtualization enabled in BIOS (on by default on most PCs); about 10 GB free disk.
-2. **Download** `LiteCode-Setup-<version>.exe` from [Releases](https://github.com/wfcz10086/litecode/releases) (an offline package of about 1.9 GB; nothing is downloaded during install). If Releases has no installer yet, build one with a single command — see [Build and release it yourself](#build-and-release-it-yourself).
-3. **Double-click** → Next → enter your model URL, model name and API key (local models can leave it empty) → done.
-   - If WSL has never been enabled, the installer asks for admin rights once to enable it and may need one reboot; it continues automatically afterwards.
-   - The last step asks for admin rights once to "connect this PC" (installs OpenSSH set to start on boot, plus a desktop agent) so LiteCode can open programs, take screenshots and click on your PC. Click "No" to skip; you can do it later from the tray menu.
-4. **Use it**: an icon on the desktop and Start menu, a tray icon, starts on boot. The window is `http://127.0.0.1:18790` and **only listens on this PC**. Default password `admin` — change it under Settings → Change password.
-5. **Updates**: the tray checks daily and asks before updating. Code updates are about 9 MB and take a minute; chats and settings are kept; if the new version fails to start it rolls back. The local voice and knowledge-base models (about 900 MB) download in the background, resumable.
+**Uninstall**: Settings → Apps → LiteCode. ⚠️ Uninstalling deletes the LiteCode subsystem together with the chats and files inside it, so export anything you want to keep first.
 
 <details>
-<summary>Silent / batch install flags</summary>
+<summary><b>What does the installer set up? What is WSL?</b></summary>
+
+LiteCode itself is a Linux program. Instead of making you install Docker Desktop, the Windows edition uses **WSL**, the built-in Windows feature for running Linux:
+
+- The installer contains a packaged Linux system (a root filesystem) and imports it as a WSL distro called **`LiteCode`**. All programs, dependencies and the browser live inside it, separate from any other Linux setup on your PC.
+- The tray app `LiteCode.exe` starts, stops and updates that distro and opens the window.
+- Data folder: `%LOCALAPPDATA%\LiteCode` (distro disk, logs, download cache).
+- The model pack for local voice-over and the knowledge base (about 900 MB) is not in the installer; the tray downloads it in the background with resume support.
+
+Check on it from cmd:
 
 ```
-LiteCode-Setup-<version>.exe /S                    silent unpack
-LiteCode.exe --setup --unattended --password <pw> --model-url <url> --model-name <model> --model-key <key> --no-tray
-LiteCode.exe --selftest                            write WSL / distro / version / service status to selftest.txt
-LiteCode.exe --local-control                       only connect this PC
-LiteCode.exe --setup --no-local-control            install without connecting this PC
+wsl -l -v
 ```
 
-Exit code `3010` means a reboot is needed (it resumes after reboot); `2` means failure (see `%LOCALAPPDATA%\LiteCode\launcher.log`). Internals and troubleshooting: [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md).
+`LiteCode   Running   2` means it is running. Open a shell inside:
+
+```
+wsl -d LiteCode
+```
+
+Stop it completely (the tray starts it again when needed):
+
+```
+wsl --terminate LiteCode
+```
 
 </details>
 
-### B. Linux server: Docker
+<details>
+<summary><b>The install failed</b></summary>
 
-You need a Linux machine and Docker with docker compose.
+Check the log first: `%LOCALAPPDATA%\LiteCode\launcher.log` (paste the path into the Explorer address bar). Known issues:
 
-```bash
-git clone https://github.com/wfcz10086/litecode && cd litecode
-./start.sh            # first run: creates config.json and builds the image (10–15 min); later starts take seconds
+| Symptom | Cause | Fix |
+|---|---|---|
+| `读默认配置失败: invalid character 'w'` | A local proxy (Clash and the like) makes WSL print a proxy warning that got mixed into the installer's output | Fixed in current installers. With an old one, run the three commands below in cmd and rerun the installer |
+| Virtualization / WSL will not start | Virtualization is off in the BIOS | Reboot into the BIOS and enable Intel VT-x or AMD SVM |
+| Stuck at "Local control" for a long time | OpenSSH and Python dependencies were being prepared | Current installers bundle them. A failure here does not affect the main app; retry later from the tray |
+| `Could not establish trust relationship for the SSL/TLS secure channel` | Outdated certificate store | Run Windows Update and retry |
+| Model error `Illegal header value b'Bearer '` | Old versions with an empty API key | Fixed (an empty key is treated as `EMPTY`) |
+
+Turn on mirrored networking for WSL when using a local proxy (one command at a time in cmd):
+
+```
+echo [wsl2]> "%USERPROFILE%\.wslconfig"
 ```
 
-The first run creates `config.json` from `config.example.json` and asks you to edit it. Then:
-
-```bash
-./start.sh --restart  # apply the config
+```
+echo networkingMode=mirrored>> "%USERPROFILE%\.wslconfig"
 ```
 
-Open `http://<your-ip>:18790`. Other `start.sh` options: `--build`, `--down`, `--logs`, `--status`, `--shell`.
+```
+wsl --shutdown
+```
 
-| Optional | How | Notes |
-|---|---|---|
-| SearXNG search | starts with compose | open-source metasearch on `127.0.0.1:18888`; a random secret is generated on first start |
-| Knowledge base | `bash scripts/kb_setup.sh` | PostgreSQL + pgvector on localhost with random passwords, writes `config.json`; export the embedding model with `scripts/kb_export_onnx.sh`. See [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
-| CLI | `sudo ln -sf $(pwd)/litecodeext/litecli /usr/local/bin/litecli` | then `litecli login`, `litecli` |
+Details: [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md) (Chinese).
 
-### C. Connect your model
+</details>
 
-In `config.json`, under `model`, set:
+<details>
+<summary><b>Silent / batch install</b></summary>
 
-- `backend_url`: an OpenAI-style endpoint such as `http://host:8000/v1` — vLLM, Ollama, SGLang or any API relay.
-- `api_key`: the key, or `EMPTY` for a local model without one.
+```
+LiteCode-Setup-<version>.exe /S
+LiteCode.exe --setup --unattended --password <pw> --model-url <url> --model-name <model> --model-key <key> --no-tray
+LiteCode.exe --selftest
+LiteCode.exe --local-control
+LiteCode.exe --setup --no-local-control
+```
 
-Or just say in chat "add a model at … named …" and it adds it, tests it and makes it the default. Every model in Settings has a **Test** button; the model button next to the input box switches the model for **this conversation only**.
+In order: silent unpack; unattended setup; write environment checks to `selftest.txt`; local control only; set up without local control. Exit code `3010` means a reboot is needed (setup resumes after it), `2` means failure.
 
-> Models with reliable tool calling work best. GLM-5.3-Flash, Qwen3.6/3.8 and DeepSeek-V4 complete long tasks reliably in our tests. If the main model can't see images, screenshot checks and OCR go to the vision model you configure.
-
-### D. Login and ports
-
-| Entry | Address | Auth |
-|---|---|---|
-| Web | `:18790` | one password: `web_ui.auth.password` in `config.json` (replace `CHANGE_ME_PASSWORD`) |
-| API gateway | `:18789` | `Authorization: Bearer <server.token>` (replace `CHANGE_ME_TOKEN`) |
-| CLI | `litecli login` | same password as the web |
-| Remote desktop (noVNC) | `/vnc/` after web login | no separate port |
-
-> ⚠️ Replace both `CHANGE_ME` values before exposing the server. The desktop edition only listens on 127.0.0.1.
-
-### E. CLI and API
-
-- **CLI**: `litecli` — shows diffs, runs commands, reports token usage; `litecli passwd` changes the password.
-- **API**: the gateway is a standard OpenAI Chat Completions endpoint. Point any client (ChatBox, Dify, LangChain, translation plugins…) at `http://<host>:18789/v1` and the model behind it gains tools, search, memory and every skill. Send a fixed `user` value and it remembers that user.
-- Add `disabled_tools: ["web"]` to a request to disable a tool group for that request (offline mode, fair benchmarks).
+</details>
 
 ---
 
-## Features
+### B: Linux + Docker
 
-Every item below maps to code in this repository; tool or skill names are in parentheses.
+For a server that stays on: scheduled tasks and the WeChat bot keep running when your own PC is off.
 
-### 1. Agent core
+**Requirements**: 64-bit Linux (mostly tested on Ubuntu 22.04 / 24.04), 4 cores and 8 GB RAM or more, 30 GB of disk.
 
-| Feature | Details |
+**1. Install Docker** (skip if `docker` and `docker compose` already work)
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER      # log out and back in so you don't need sudo
+docker compose version             # prints a version when it works
+```
+
+In mainland China add `-s -- --mirror Aliyun` after `sudo sh`.
+
+**2. Get the code**
+
+```bash
+git clone https://github.com/wfcz10086/litecode.git
+cd litecode
+```
+
+**3. First start**
+
+```bash
+./start.sh
+```
+
+The first run creates `config.json` from `config.example.json`, generates a random secret for the SearXNG search engine, and builds the image `litecode:latest`, also tagged with the version number (e.g. `litecode:v2.0.13`) (**10–15 minutes**).
+
+**4. Edit the config** (required)
+
+```bash
+nano config.json
+```
+
+Change at least these four (all placeholders are `CHANGE_ME` in the example):
+
+| Key | Set it to |
 |---|---|
-| Autonomous execution | plan (`task_create/update/done`) → call tools → check → verify → deliver; deliveries carry evidence and say "verified / not verified" |
-| Steer mid-task | send messages while it works: Enter = add a note, **⚡ Now** = redirect within a second without ending the turn |
-| Stop means stop | takes effect within a second; the conversation's background processes stop too |
-| Keeps running when you close the page | turns run in the background; come back and it reconnects |
-| Thinking level | switch thinking strength next to the input; if thinking loops it is cut and the next step acts directly |
-| Strategist mode | **🎭** asks "who released this, who benefits, who's on the other side" before concluding |
-| Loop guards | repeated identical calls are blocked; read-only streaks get a nudge; timeouts return the last output |
-| Call timeline | every step with a readable name, status and duration, expandable; errors are classified cards with "continue from the failed step" |
-| Sub-agents | `spawn_agent` with 9 roles (coder, researcher, tester, writer, reviewer, vision, operator…); coding helpers work in separate worktrees in parallel and merge after review |
-| Sub-agent tree | see each helper's steps and result, open it live, send instructions, stop it |
+| `model.backend_url` | Your model endpoint, like `http://x.x.x.x:8000/v1` |
+| `model.api_key` | The model's key, or `EMPTY` |
+| `web_ui.auth.password` | Web sign-in password |
+| `server.token` | API gateway token, any random string (`openssl rand -hex 16`) |
 
-### 2. Skills (110)
+Apply it:
 
-| Feature | Details |
+```bash
+./start.sh --restart
+```
+
+**5. Open it**
+
+Browse to `http://SERVER_IP:18790`; a sign-in page means it works. If not, check on the server:
+
+```bash
+./start.sh --status
+curl -s http://127.0.0.1:18789/health
+```
+
+If it works locally but not from outside, open port `18790` in the firewall or cloud security group.
+
+> ⚠️ Change the default password and token before exposing it to the internet, and preferably put HTTPS in front (nginx / Caddy).
+
+**Everyday commands**
+
+| Command | Does |
 |---|---|
-| `/` picker | type `/` in the input to search and pick skills (multi-select) |
-| Skill manager | browse by group, enable/disable, view, export; safety scan before install |
-| Skill market | search and install from Anthropic Skills, ClawHub (OpenClaw ecosystem), SkillHub and GitHub |
-| Create from chat | "turn what we just did into a skill" → `create_skill` drafts it |
-| Groups | office docs, image/audio/video, novel writing (26 genres), programming, research, ops, planning, desktop/browser, investing, personas |
+| `./start.sh --logs` | Follow logs |
+| `./start.sh --restart` | Restart after config changes |
+| `./start.sh --down` | Stop |
+| `./start.sh --build` | Rebuild the image when dependencies change |
+| `./start.sh --shell` | Shell into the container |
+| `git pull && ./start.sh --restart` | Upgrade |
 
-### 3. Search and research
+**Optional parts**
 
-| Feature | Details |
-|---|---|
-| Layered search | SearXNG (primary) → optional Volcano Doubao search → parallel engines → real browser; Chinese queries use the zh-CN region |
-| Reads the page | `web_fetch` and `deep_search` open results and read the text before answering, with citation checks |
-| Developer search | `github_search`, `github_repo`, `package_search`, `stackoverflow_search`, `search_code_error` |
-| Live quotes | `stock_quote`: A-share, HK and US stocks, indices and ETFs |
-| Browser | `browser_*`: open, click, fill forms, keep logins, hand captchas to you, watch live over noVNC |
-
-### 4. Documents and office
-
-| Feature | Details |
-|---|---|
-| Word / Excel / PPT / PDF | `docx` `xlsx` `pptx` `pdf` skills: create, read, edit; Excel formulas recalculated and checked |
-| Document studio | `doc-studio`: HTML-first layout with openly licensed photos, charts and illustrations; export PDF / editable PPTX / DOCX / long image; screenshot QA at the end |
-| Deep reports | `deep-report`: 5,000–20,000 characters, search while writing, citation density checks, review loop |
-| Scans and OCR | `pdf-ocr-pipeline`, `image-ocr`, `vision_ocr` |
-| Artifacts | file paths in replies become login-protected preview/download cards; an Artifacts page collects them |
-| Sharing | read-only links (1/7/30 days, revocable) |
-
-### 5. Image, audio, video
-
-| Feature | Details |
-|---|---|
-| ComfyUI images | `comfyui-image`: give it `host:port` and it probes GPUs, models and workflows; ships Qwen-Image 2.1 text-to-image / edit / multi-image templates; internal hosts via SSH jump host, reused for the same subnet |
-| ComfyUI video | `comfyui-video`: ships MiniMax H3 in four modes (text-to-video, image-to-video, first/last frame, reference-to-video, with audio) and can use other saved workflows |
-| Local TTS (CPU only) | `text_to_speech`: sherpa-onnx + Kokoro, no GPU, no network; edge-tts and cloud TTS as fallbacks |
-| Voice-over video | `video-studio`: script → voice → subtitles aligned to real speech → visuals → music ducked under speech → final video, checked for A/V sync |
-| Music | `bgm-music`: royalty-free BGM generated locally (8 moods) or CC-licensed tracks with attribution |
-| Douyin toolkit | `douyin-toolkit`: parse share links, download without watermark, transcribe + read key frames, local watermark removal |
-| One-line short videos | `douyin-explainer-video`: topic → script → voice → animation → music → vertical video + cover + post text, with fact, layout and frame checks |
-| Vision | `vision_ocr` falls back to a vision model when the main model can't see images |
-
-### 6. Knowledge base and memory
-
-| Feature | Details |
-|---|---|
-| Knowledge base | upload in the 📚 panel; PostgreSQL + pgvector, files stored locally, local Chinese embedding model; `kb_search` returns sources |
-| Four-layer memory | L0 recent turns → L1 resident profile → L2 categorised notes → L3 full-text index; preferences and identity follow you across chats |
-| Learns from corrections | say "use a domestic mirror" once and it remembers next time |
-| Inspectable | view and delete memories; external content can't write global memory |
-| Crash-safe | write-ahead log replay; snapshots before big changes, with rollback |
-
-### 7. Pipelines and schedules
-
-| Feature | Details |
-|---|---|
-| DAG pipelines | visual editor: 9 agent node types, tool nodes, decision branches, sub-pipelines; `when` conditions, passing values between steps; parallel layers, retry with reflection, content-hash checkpoints, resume |
-| AI-generated pipelines | describe it in a sentence, then tweak |
-| Build history | Jenkins-style builds with per-step output and artifacts |
-| Scheduled jobs | "every day at 9, check BTC and send it to WeCom" → `create_timer`; history kept; runs on the server, **even when your PC is off** |
-
-### 8. Controlling PCs and servers
-
-| Feature | Details |
-|---|---|
-| Windows GUI | `windows_desktop`: screenshots, OCR, click by control name (UI Automation), type, scroll, right-click, drag, clipboard, launch apps, open URLs, manage windows |
-| Windows command line | `windows_system`: PowerShell, processes, services, system info, install software, files, transfers between PC and server (chunked, sha256-checked); shell access is off by default and only you can turn it on per PC |
-| Desktop edition controls this PC | command line first, screenshots only to verify; files go straight to your Desktop / Documents / Downloads |
-| Remote PCs | "Add Windows" generates one command to paste in an admin terminal; the PC connects out, no open ports; auto-updates when idle, restarts after crashes |
-| Lock / disconnect diagnosis | when screenshots fail it reports the real session state (disconnected / locked / RDP minimised) and how to fix it |
-| SSH ops | `ssh_exec`, `ssh_read_file`, `ssh_write_file`, `ssh_sync_files`, host book; remote Docker inspect and recreate |
-| Local Docker | list containers, read logs, restart from chat |
-| Linux desktop | a Linux desktop inside the container (watch via noVNC), driven with `desktop_*` |
-
-### 9. Channels
-
-| Feature | Details |
-|---|---|
-| Web | 7 themes, Chinese / English UI, works on phones; grouped chats, projects, search |
-| CLI | `litecli`: diffs, commands, token stats |
-| WeChat | personal WeChat bot via QR login; handles files, voice and images |
-| WeCom | WeCom smart bot with true streaming replies |
-| OpenAI-compatible API | for any client |
-
-### 10. Usage, security, operations
-
-| Feature | Details |
-|---|---|
-| Usage dashboard | **📊**: total tokens, cache hits, thinking, calls, hourly usage, active hours, per skill and tool; export CSV and an offline HTML report |
-| Prompt-injection defense | web pages, search results, screenshot text and remote output are marked as external data; after injection patterns, sending messages, paying, exfiltrating, writing memory or creating schedules need your approval |
-| Public upload gate | files can't go to public file hosts or image hosts unless you asked to share publicly |
-| Secret masking | keys masked in config and model lists; memory writes are scrubbed |
-| Full trace | every iteration, tool call and pipeline step is logged; silent failures are surfaced |
-| Large files | 1 GB streamed uploads, resumable downloads, chunked reads of any size |
-| Screen recording | **⏺** records each turn to mp4 with step captions |
+| Part | How | Notes |
+|---|---|---|
+| SearXNG search | Starts with compose by default | Open-source metasearch, listens on `127.0.0.1:18888` only |
+| Knowledge base | `bash scripts/kb_setup.sh` | PostgreSQL + pgvector (local only, random password), writes the config for you; see [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
+| `litecli` | `sudo ln -sf $(pwd)/litecodeext/litecli /usr/local/bin/litecli` | Then `litecli login` and `litecli` |
 
 ---
 
-## Screenshots
+### C: Docker inside WSL
 
-**Transparent execution** — every step, how long it took, expandable; artifacts preview inline.
+To run exactly the server setup on Windows (for example to hack on the code), follow option B inside an Ubuntu WSL distro.
 
-![Call timeline](docs/screenshots/v2/02_chat_steps.jpg)
+1. Open cmd **as administrator** and install Ubuntu (reboot if asked, then set a Linux user name and password):
 
-**Sub-agent tree** — two helpers write the Python and Go versions in parallel, both pass their tests, the main agent re-checks and summarises.
+   ```
+   wsl --install -d Ubuntu-24.04
+   ```
+
+2. Open "Ubuntu 24.04" from the Start menu and run everything below in that window.
+3. Follow steps 1–4 of [option B](#b-linux--docker).
+4. Open `http://localhost:18790` in your Windows browser.
+
+> Options A and C can be installed side by side, but both use port 18790, so don't run them at the same time.
+
+---
+
+## Connect a model
+
+LiteCode does not ship a model; it works through the endpoint you give it.
+
+- **URL**: OpenAI format ending in `/v1`. Self-hosted vLLM / SGLang / Ollama (`http://IP:11434/v1`), cloud APIs and relays all work.
+- **Model name**: exactly as the endpoint names it.
+- **Key**: `EMPTY` if there is none.
+
+You can also just say in chat "add a model, URL …, name …"; it adds it, tests it, and switches to it. Every model under Settings → Models has a Test button.
+
+> Models with reliable tool calling work best. GLM-5.3-Flash, Qwen3.6 / 3.8 and the DeepSeek-V4 family finish long tasks reliably in our tests; very small models tend to go in circles. If the main model cannot read images, screenshots and OCR go to the vision model you configure.
+
+## First steps
+
+After signing in, try:
+
+```text
+Write a Python command-line expense tracker with tests and make them pass
+```
+
+```text
+Summarize today's stock market in a table and make a Word report
+```
+
+```text
+Every morning at 9, check the BTC price and send it to my WeChat
+```
+
+Each step shows up as it runs (which tool, how long, expandable details). Finished files preview and download right in the reply. You can steer while it works: Enter adds a note, "⚡ Now" interrupts and redirects.
+
+**Other ways in**
+
+| Channel | How |
+|---|---|
+| WeChat | Toolbox → WeChat → scan the QR code. A WeChat account can be bound to one LiteCode at a time; the latest scan wins |
+| WeCom | Toolbox → WeCom, enter the bot details |
+| Command line | `litecli` shows diffs before editing and reports token usage |
+| API | `http://HOST:18789/v1` is a standard OpenAI Chat Completions endpoint with `Authorization: Bearer <server.token>`. Point ChatBox, Dify, LangChain or any client at it to get tools, search, memory and all skills behind your model |
+| Control another Windows PC | Toolbox → Windows → Add generates a command; paste it into an admin terminal on that PC. It installs OpenSSH, creates and authorizes a dedicated key (key-only, no password), and the PC connects out to LiteCode, so no inbound port is needed |
+
+## What it does
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**💻 Code**
+Reads the repo, edits, runs tests and only delivers once they pass; sub-agents work in parallel in separate worktrees, reviewed before merging.
+
+**🔍 Research**
+SearXNG metasearch first, several engines in parallel, a real browser as fallback; reads pages and cites sources. Also GitHub, package, Stack Overflow search and live quotes for China A-shares, Hong Kong and US stocks.
+
+**📄 Documents**
+Create, read and edit Word, Excel, PPT and PDF; 5,000–20,000-word research reports; OCR for scans.
+
+**🎬 Audio and video**
+CPU-only local voice-over; script → voice → subtitles → visuals → music into a finished video; Douyin link parsing, watermark-free download and remixing; ComfyUI image and video generation.
+
+</td>
+<td width="50%" valign="top">
+
+**🖥️ Computer control**
+On Windows: open apps, screenshot, OCR, click controls by name, type, run PowerShell, transfer files; explains why when the screen is locked or disconnected.
+
+**🛠️ Servers**
+Run commands over SSH, read, write and sync files, inspect and recreate remote Docker containers.
+
+**⏰ Automation**
+Scheduled tasks (the server edition runs them with your PC off); a visual DAG pipeline editor with conditions, sub-pipelines and resume.
+
+**🧠 Memory and knowledge base**
+Remembers your preferences after one correction; upload documents into a knowledge base with cited retrieval; memory can be viewed and deleted.
+
+</td>
+</tr>
+</table>
+
+Also: 110 built-in skills (type `/` in the input box; install more from the skill market), a usage dashboard, read-only share links, per-turn screen recordings, and prompt-injection defense (instructions found in web pages or search results are never followed, and sensitive actions need your confirmation).
+
+<details>
+<summary><b>Screenshots</b></summary>
+
+**Every step and how long it took, one click to expand**
+
+![Steps](docs/screenshots/v2/02_chat_steps.jpg)
+
+**Two sub-agents write Python and Go versions in parallel; the main agent reviews and merges**
 
 ![Sub-agents](docs/screenshots/v2/03_subagents.jpg)
 
 <table>
 <tr>
-<td align="center" width="50%"><b>Type / to pick skills</b><br><img src="docs/screenshots/v2/04_skill_picker.jpg" width="100%"></td>
-<td align="center" width="50%"><b>Skill manager + market</b><br><img src="docs/screenshots/v2/05_skills.jpg" width="100%"></td>
+<td align="center" width="50%"><b>Skill picker</b><br><img src="docs/screenshots/v2/04_skill_picker.jpg" width="100%"></td>
+<td align="center" width="50%"><b>Skills and market</b><br><img src="docs/screenshots/v2/05_skills.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>Usage dashboard (HTML report export)</b><br><img src="docs/screenshots/v2/06_dashboard.jpg" width="100%"></td>
-<td align="center"><b>Settings: models, themes, language</b><br><img src="docs/screenshots/v2/07_settings.jpg" width="100%"></td>
+<td align="center"><b>Usage dashboard</b><br><img src="docs/screenshots/v2/06_dashboard.jpg" width="100%"></td>
+<td align="center"><b>Settings</b><br><img src="docs/screenshots/v2/07_settings.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>Toolbox: memory, KB, schedules, DAG, WeChat, Windows…</b><br><img src="docs/screenshots/v2/08_toolbox.jpg" width="100%"></td>
-<td align="center"><b>DAG pipeline editor</b><br><img src="docs/screenshots/v2/09_dag.jpg" width="100%"></td>
+<td align="center"><b>Toolbox</b><br><img src="docs/screenshots/v2/08_toolbox.jpg" width="100%"></td>
+<td align="center"><b>DAG pipelines</b><br><img src="docs/screenshots/v2/09_dag.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>Position sizing with live quotes</b><br><img src="docs/screenshots/v2/10_caishenye.jpg" width="100%"></td>
-<td align="center"><b>CLI</b><br><img src="docs/screenshots/02_cli.jpg" width="100%"></td>
-</tr>
-<tr>
-<td align="center"><b>Windows desktop edition: one-click update</b><br><img src="docs/screenshots/v2/11_win_update.jpg" width="100%"></td>
-<td align="center"><b>WeChat bot</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
+<td align="center"><b>Windows tray update</b><br><img src="docs/screenshots/v2/11_win_update.jpg" width="100%"></td>
+<td align="center"><b>WeChat</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
 </tr>
 </table>
 
-**A Douyin remake from one request**: find a video → download without watermark → extract the script → Qwen-Image 2.1 reference image → MiniMax H3 image-to-video → local voice-over + subtitles + music → final cut (frames below; all visuals AI-generated, script rewritten).
+**A Douyin remix from one sentence** (frames from the result; all visuals AI-generated)
 
-![Douyin remake](docs/screenshots/v2/12_douyin_remake.jpg)
+![Douyin remix](docs/screenshots/v2/12_douyin_remake.jpg)
 
----
+</details>
 
-## Compared with OpenClaw / DeepSeek-TUI / WorkBuddy
+## Compared with similar tools
 
-> Compiled in October 2026 from each project's official repository and public material; details change between versions. The LiteCode column reflects this repository. Different products aim at different things — this is not a score card.
+> As of 2026-10, from each project's official repository and public material; details may change between versions.
 
-| | **LiteCode** | **OpenClaw** | **DeepSeek-TUI** (now Codewhale) | **Tencent WorkBuddy** |
+| | LiteCode | OpenClaw | DeepSeek-TUI (Codewhale) | Tencent WorkBuddy |
 |---|---|---|---|---|
-| Form | self-hosted platform: web + CLI + bots + API | self-hosted personal assistant used from chat apps | terminal coding agent (plus a web UI) | commercial desktop app + cloud |
-| License / price | MIT, free | MIT, free | MIT, free | closed source, credit subscription |
-| Models | any OpenAI-compatible incl. self-hosted vLLM/Ollama, per-chat switching | cloud models + Ollama | 40+ providers, DeepSeek by default | Hunyuan/DeepSeek/GLM/Kimi/MiniMax; free tier can't choose |
-| Windows install | **offline installer**, tray, autostart, auto-update | WSL2 + Node | single binary | installer |
-| Chinese chat apps | **WeChat and WeCom built in** | mostly global channels (WhatsApp/Telegram/Slack…) | none | WeCom/QQ/Feishu/DingTalk |
-| Web UI | **full**: chats, artifact previews, dashboard, settings, admin panels | chat-channel first | yes (`codewhale web`) | yes |
-| Windows desktop control | **yes**: control clicks + OCR + PowerShell, lock/disconnect diagnosis | host actions | macOS only, experimental | macOS only, experimental |
-| Server ops (SSH/Docker) | **yes** | via shell | via shell | no |
-| Visual pipelines | **DAG editor** with conditions, branches, sub-pipelines, resume | no | no | no |
-| Scheduled jobs | yes, on the server, run while your PC is off | yes (Heartbeat) | no | yes, stop when the PC is off |
-| Sub-agents | 9 roles, parallel worktrees, visual task tree | not a focus | yes, parallel sub-tasks | expert teams |
-| Skill ecosystem | 110 built in + market (installs ClawHub/Anthropic/SkillHub/GitHub skills) | **ClawHub, the largest** | MCP | SkillHub, large |
-| Knowledge base | built in (pgvector) | local Markdown memory | no | yes |
-| Local CPU TTS | **yes** | voice via companion apps | no | not seen |
-| Image / video generation | ComfyUI at any address + plugins | via skills | no | yes (cloud) |
-| Douyin parse / de-watermark / remake | **native** | via skills | no | third-party skills |
-| Usage & cost dashboard | **yes**, exportable | not seen | not seen | credit deductions |
-| Mobile app | no (web works on phones) | **iOS / Android** | no | **yes** |
-| macOS | via Docker | **native** | **native** | **native** |
-| Community | small | **largest** (390k+ GitHub stars) | large (40k+ stars) | huge user base |
-| Sandbox | injection defense + approvals + snapshots + shell switch | configurable sandbox | **OS-level sandbox** (Seatbelt / bubblewrap) | sandbox + permission cards |
+| What it is | Self-hosted all-round assistant: web + CLI + bots + API | Self-hosted personal assistant used from chat apps | Coding agent in the terminal | Commercial desktop app + cloud |
+| License / price | MIT, free | MIT, free | MIT, free | Closed source, credit-based |
+| Models | Any OpenAI-compatible, including self-hosted | Several cloud providers + Ollama | 40+ providers, DeepSeek by default | A fixed set |
+| Windows | Offline installer, tray, auto-update | Needs WSL2 + Node | Single executable | Installer |
+| WeChat / WeCom | ✅ built in | Mostly non-Chinese channels | ❌ | WeCom / QQ / Feishu / DingTalk |
+| Windows desktop control | ✅ | Runs actions on the host | macOS only, experimental | macOS only, experimental |
+| Visual pipelines | ✅ DAG | ❌ | ❌ | ❌ |
+| Scheduled tasks with PC off | ✅ (server edition) | ✅ | ❌ | ❌ |
+| Mobile app | ❌ (web works on phones) | ✅ | ❌ | ✅ |
+| Native macOS | ❌ (Docker) | ✅ | ✅ | ✅ |
+| OS-level sandbox | ❌ (confirmations + permission switches) | Configurable | ✅ | ✅ |
+| Community | Small | Largest | Large | Large user base |
 
-### Where LiteCode is ahead
-
-1. **vs OpenClaw**: works out of the box in China — WeChat and WeCom built in, SearXNG plus domestic engines, domestic mirrors for downloads; a full web workspace (artifact previews, usage dashboard, DAG pipelines, knowledge base) rather than chat-only; an offline Windows installer instead of setting up WSL and Node yourself; Windows desktop control and server ops. It can also install ClawHub skills.
-2. **vs DeepSeek-TUI**: that is a coding terminal; LiteCode is an all-round assistant — besides code it does documents, slides, voice, video, knowledge base, schedules, bots and PC control, with visual pipelines and a sub-agent tree, and isn't tied to one model vendor.
-3. **vs WorkBuddy**: open source and free with no credits; your data and models stay with you, including self-hosted models at zero marginal cost; schedules run on the server even when your PC is off; Windows desktop control works (their computer-use is macOS-only and experimental); SSH ops and visual pipelines; Douyin parsing, voice-over and video assembly are native.
-
-### Where LiteCode is behind
-
-1. **Ecosystem and community**: OpenClaw and WorkBuddy are far larger.
-2. **Reach**: no mobile app; no QQ, Feishu, DingTalk, Telegram or WhatsApp.
-3. **Platforms**: no native macOS app (Docker only); the Windows installer is large (~1.9 GB + a 900 MB model pack).
-4. **Sandbox**: no OS-level sandbox like DeepSeek-TUI; safety relies on approvals and permission switches.
-5. **Teams**: single-user / small-team; no members or org roles.
-
----
-
-## Strengths and weaknesses
-
-**Strengths**
-
-- **One brain, four doors**: web, CLI, WeChat / WeCom and the API share memory and skills.
-- **Actually does the work**: plans, runs, verifies, delivers with evidence; you can steer mid-task.
-- **Broad**: coding, office docs, research, knowledge base, voice and video, image and video generation, schedules, pipelines, PC control, server ops.
-- **Private**: self-hosted, any model, data stays home; the desktop edition listens on localhost only.
-- **Extensible**: a tool is one plugin file, a skill is one `SKILL.md`, external projects mount in and unplug with one env var.
-- **Observable**: call timeline, sub-agent tree, usage dashboard, full traces.
-- **Engineered**: 1,800+ automated tests that must pass before release; a privacy self-check on the public package; desktop updates roll back on failure.
-
-**Weaknesses**
-
-- Quality depends on the model's tool calling; small models tend to loop.
-- Docs and UI are Chinese-first.
-- The Windows desktop edition is new; edge cases (multiple monitors, RDP reconnects) are still being polished.
-- No voice input on the web; no mobile app.
-- Designed for one user, not an organisation.
-
----
-
-## Build and release it yourself
-
-### Server image
-
-```bash
-./start.sh --build                     # builds litecode:v12-r1 from the Dockerfile and starts it
-```
-
-The `Dockerfile` installs system libraries, Python dependencies, Playwright browsers, noVNC and sherpa-onnx. Code directories are bind-mounted in `docker-compose.yml`, so code changes only need `./start.sh --restart`.
-
-### Windows installer
-
-On a Linux build machine with Docker, Go 1.26+ and `makensis` (8 GB free disk):
-
-```bash
-./start.sh --build                                         # base image litecode:v12-r1
-LITECODE_DIST_DIR=$PWD/dist/win \
-LITECODE_UPDATE_URL=https://your-download-dir/ \
-LITECODE_NO_PUSH=1 \
-bash packaging/release.sh 2.0.6 --full                     # offline installer + code update + latest.json
-```
-
-- Output in `LITECODE_DIST_DIR`: `LiteCode-Setup-<version>.exe`, `litecode-code-<version>.tar.gz`, `latest.json` (and `litecode-models-*.tar` when model sources are present).
-- `LITECODE_UPDATE_URL` is where the tray checks for updates and downloads models; put those files in that directory on any static file server.
-- Drop `--full` when only code changed: a ~9 MB code update in 1–2 minutes, offered to desktop users by the tray.
-- The script runs the full test suite first (`scripts/run_release_tests.sh`) and stops on any failure; `lib/version.py` must match the release number.
-
-### Tests
-
-```bash
-cd litecodeext && python3 -m pytest -q tests/
-bash tests/smoke.sh
-cd packaging/windows && go test ./... && go vet ./...
-```
-
----
-
-## Layout and architecture
-
-```
-   WeChat / WeCom bots ┐
-   CLI litecli         ├──▶  gateway :18789 (OpenAI compatible; agent loop, tools, memory)
-   Browser ────────────┘            ▲
-                                    │
-                     Web UI :18790 (chats, artifacts, dashboard, DAG, schedules, KB, skills, settings)
-                                    │
-         ┌────────────┬─────────────┼──────────────┬───────────────┐
-      SearXNG      KB Postgres   Windows nodes     SSH hosts      ComfyUI / model servers
-```
-
-| Path | Contents |
-|---|---|
-| `litecodeext/litecode_server.py` | gateway and agent loop entry |
-| `litecodeext/web_ui.py` + `routers/` | web server and API routes |
-| `litecodeext/web_assets/` | front end (plain JS, no build step) |
-| `litecodeext/lib/` | agent loop, memory, tool groups, Windows nodes, security |
-| `litecodeext/core/` | tool dispatch, search, TTS, memory storage |
-| `litecodeext/plugins/` | plugins: tools, knowledge base, image generation — one file per tool |
-| `litecodeext/skills/` | 110 skills (`SKILL.md` + scripts) |
-| `packaging/` | Windows desktop edition (Go tray + NSIS installer + WSL rootfs) and release scripts |
-| `docs/` | architecture, desktop edition, knowledge base, versioning |
-
-More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
-
----
+**Pick LiteCode** if you work in China (WeChat, domestic mirrors and search engines out of the box), want a full web workspace, need to control Windows or manage servers, and want models and data under your control.
+**Look elsewhere** if you need a mobile app, native macOS, an OS-level sandbox, or a big community.
 
 ## FAQ
 
-**No GPU?** Fine. Use any API for the model; local TTS and the KB embedding model run on CPU.
+**Does it need a GPU?**
+No. Use any API for the model; local voice-over and the knowledge base's embedding model run on CPU.
 
-**Does data leave my machine?** Not on its own. Chats, memory and files stay local; only your model endpoint and the sites you ask it to search or open receive requests. It can't upload files to public hosts unless you ask.
+**Does it upload my data?**
+Not on its own. Chats, memory and files stay on your machine; only the model endpoint you configure and the sites you ask it to visit receive requests. It will not upload files to public hosts without your explicit consent.
 
-**Does the desktop edition run schedules when the PC is off?** No — it starts on boot, but it stops with the PC. Use the server edition for always-on jobs.
+**Desktop or server edition?**
+Desktop for one personal PC; server if it must be online 24/7 (scheduled tasks, WeChat bot). You can run both.
 
-**Can it work while the screen is locked?** Command-line work (files, processes, installs) continues; GUI actions report why they can't proceed and how to fix it (e.g. `tscon` an RDP session back to the console).
+**Can it use Claude / GPT?**
+Yes, through any OpenAI-compatible endpoint or gateway.
 
-**Claude / GPT?** Yes, through any OpenAI-compatible endpoint or gateway.
+**Can it control the PC while the screen is locked?**
+Command-line work (files, processes, installs) yes. Anything that needs the screen reports why it can't and how to fix it.
 
-**Upgrading?** Server: `git pull && ./start.sh --restart` (`--build` if dependencies changed). Desktop: tray → Check for updates.
+**How do I build it or make the Windows installer?**
+See [docs/BUILD.md](docs/BUILD.md) (Chinese).
 
----
+## Project layout
 
-## Version history
+```
+ WeChat / WeCom ┐
+ litecli        ├──▶ Gateway :18789 (OpenAI-compatible; agent loop, tools, memory)
+ Browser ───────┘          ▲
+                    Web :18790 (chat, artifacts, dashboard, pipelines, settings)
+                           │
+       SearXNG · knowledge base · Windows nodes · SSH hosts · ComfyUI
+```
 
-### v2.0.12 "Desktop" (上桌) (2026-10-23)
-
-> Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
-
-**v2.0.12**
-- 🧹 **Pages close when done**: search and page reads close their page right away, and the browser exits when nothing is open.
-- 🐳 **Clear message without Docker**: the desktop container panel no longer shows `ConnectError: [Errno 2]`; it says there is no local Docker and how to manage remote containers.
-- ⬆️ **Tray code updates prefer GitHub**: reads `latest.json` from GitHub and downloads the tagged source tarball, falling back to the mirror if GitHub is unreachable.
-
-**v2.0.11**
-- 🔍 **Remote SearXNG**: set `search.searxng_url` in `config.json` (a token path works) so desktop installs without a local SearXNG still get the primary search engine.
-
-**v2.0.10**
-- 🌐 **Web fetch works behind a local proxy**: fake-IP addresses (198.18.x) and IPv6-mapped public addresses are no longer blocked as internal; real private ranges still are.
-
-**v2.0.9**
-- 🔄 **Sidebar auto-refresh**: chats created or updated from WeChat, WeCom or background jobs appear without reloading; the open chat updates when new messages arrive.
-- 💬 **Adding a WeChat bot turns WeChat on**, so bots come back after a restart.
-- 🪟 **Steadier PC control**: bundled OpenSSH first (Windows Update only as a time-limited fallback); Python and agent dependencies ship with the installer; inherited Python env vars are cleared; domestic mirrors by default in the distro.
-
-**v2.0.8**
-- 🪟 **Fixed Windows install failing with a localhost proxy on** ("invalid character 'w'"): WSL's proxy notice no longer leaks into the config and version the installer reads; when a localhost proxy is detected the installer switches WSL to mirrored networking so the distro can use it too (an existing `networkingMode` is left alone).
-
-**v2.0.7**
-- 💬 **WeChat bridge SDK 0.3.0**: when login asks for a pairing code, an input box appears in the WeChat panel; already-bound bots reuse their login; online/offline is reported to the server.
-- 🔄 **Desktop updates straight from GitHub**: releasing means pushing a tag; the tray reads `latest.json` in the repo and installs that tag's source archive.
-
-**v2.0.6**
-- ⚙️ **Settings**: model-reference fields, search mode and log level are dropdowns; the current model's id/URL follow the model list; DAG tool steps offer tool and sub-DAG names in a dropdown.
-- 📦 **Open-source build works out of the box**: the public repo ships noVNC and the SearXNG config; `./start.sh` creates the config on first run; the Windows installer's update URL is set with `LITECODE_UPDATE_URL`.
-
-**v2.0.5**
-- 🪟 **Full installer refresh**: tray fixes (model-pack import, working directory) are in the installer; the displayed version matches the release and is enforced at release time.
-
-**v2.0.4**
-- 🔍 **5× faster desktop search**: without SearXNG, Chinese queries go to bing / sogou first and failing engines cool down — ~45 s down to ~8 s.
-- 🖥️ **Lock / disconnect diagnosis** when screenshots fail, with `tscon` for locked RDP sessions.
-- 🖱️ **Coordinate system inferred** when a click doesn't say whether it uses screenshot or screen pixels.
-- 🗣️ **Video voice-overs use the local CPU engine first**, online voices as fallback.
-- 🧠 No reasoning leaking into replies on no-think turns; follow-up requests no longer get nagged to re-plan.
-- 🎨 **ComfyUI reuses a remembered SSH jump host for the same subnet.**
-
-**v2.0.3**
-- 🧩 **Skill management**: `/` picker, skill manager (groups, toggles, safety scan, install), market (Anthropic / ClawHub / SkillHub / GitHub), create skills from chat.
-- 📊 **Usage dashboard**: token ledger by hour / skill / tool, CSV and offline HTML export.
-- 🔗 **Call timeline + friendly errors** with "continue from the failed step".
-- 🔍 **Search**: pinned SearXNG, optional Doubao search, weak engines disabled; `stock_quote` live quotes.
-- 🗣️ **Local CPU TTS** (sherpa-onnx + Kokoro) with pluggable engines; add, test and switch models from chat (`manage_models`).
-- 🎨 **ComfyUI image / video skills**: give `host:port`; Qwen-Image 2.1 and all four MiniMax H3 modes verified.
-- 📚 **Knowledge base**: PostgreSQL + pgvector + local Chinese embeddings, sources cited.
-- 📄 **Document studio**: HTML-first with real photos and charts, exported to PDF / editable PPTX / DOCX / long image with QA.
-- 🤖 **Sub-agent tree**: observable, enterable, steerable; worktree branches reviewed before merge.
-- 💰 **Position-sizing persona** for A/HK/US stocks and Binance USDⓈ-M futures (leverage, liquidation estimate).
-- 🖥️ **Desktop edition controls this PC**: OpenSSH installed and started on boot, local node `this-pc`; "this computer" always means Windows; programs it opens for you run unelevated.
-- 🛡️ **Public upload gate**: no uploads to public file hosts unless you asked to share publicly.
-- 📦 **Separate model pack** keeps the installer under 2 GB; voice and KB models download in the background.
-
-<details>
-<summary>v2.0.0 – v2.0.2 "Desktop" (2026-10-21)</summary>
-
-> On your desktop: double-click to install on Windows, and steer it mid-task without starting over.
-
-- 🗣️ **Steer while it works**: Enter = add on, **⚡ Now** = redirect; notes appear in the step timeline.
-- ⏹️ **Stop actually stops** within a second, including background processes.
-- 🧠 **Correct it once, it remembers.**
-- 🔍 **Search before downloading**; domestic mirrors; big downloads in the background.
-- 📎 **Previews for delivered files.**
-- 🪟 **Windows desktop edition**: offline installer with WSL, tray, autostart; ~10 MB code updates with automatic rollback.
-- 🎬 **Screen recording** of each turn with captions.
-- 🔗 **Sharing & stats**: read-only links; token usage and duration per turn.
-- 🤔 **No more endless thinking**: cut off and act.
-- 👁️ **Vision fallback** to a model that can see images.
-- 🎨 **Redesign**: warm-white theme, unified input, grouped chats, collapsed tool steps, settings drawer, mobile-friendly.
-- 🧠 **Human-like memory**: global profile, overwrites, paraphrase recall, inspectable and deletable.
-- 🖱️ **Steadier remote control**: control-name clicks, window following, settle waits, final checklist; queueing; 1 GB transfers with sha256.
-- 📦 **Large files**: 1 GB streamed uploads, resumable downloads, chunked reads.
-- 🎬 **Douyin and audio/video**: link parsing, no-watermark download, script analysis, multi-track voice-over videos, music.
-- 🛡️ **More reliable**; 💰 **half the tokens** (fixed prompt ~49k → ~25k); 🪟 **sturdier desktop edition**.
-
-</details>
-
-<details>
-<summary>v1.10.16.91 "Gatekeeper" (2026-10-19)</summary>
-
-- 🔑 Change the login password (Settings or `litecli passwd`).
-- 🤖 Per-conversation model switching (`/model name`, `/model default`), test button per model.
-- 🛡️ Prompt-injection defense: external content is data only; sensitive actions need approval.
-- 🚪 Nothing without logging in: noVNC behind the web login, gateway stats need a token, share links up to 30 days.
-- 🧹 Hardening: HTML sanitising, key masking, sandboxed SVG/HTML previews, path traversal fixes.
-
-</details>
-
-<details>
-<summary>v1.10.16.90 "Brisk" (2026-10-19)</summary>
-
-- 👥 Background helpers with a web panel; parallel coding in separate worktrees with automatic merge; evidence required.
-- ⏱️ No idle waiting, no spinning: explicit completion signals, real timeouts with last output.
-- 🎬 Richer videos: 8 script styles, script checks, sentence-level narration, subtitles timed to real speech.
-- 🪟 Safer Windows control: read-back checks, shell switch as a real permission boundary, signed components, auto rollback of agent updates.
-- ⚡ Smoother long chats.
-
-</details>
-
-<details>
-<summary>v1.10.16.89 "Errand Runner" (2026-10-16)</summary>
-
-- 🪟 One-command Windows onboarding; the PC connects out, no open ports; one-click full uninstall.
-- 🤖 General desktop operation: WeChat, QQ, Chrome, live rooms — click, type, scroll, copy, read the clipboard.
-- 🔄 PC agents auto-update and self-heal.
-- 🛡️ Safer messaging: asks when several contacts match; never clears your draft; checks the window title.
-
-</details>
-
-<details>
-<summary>v1.10.16.88 / v2026.10.16 "Night Shift" (2026-10-16)</summary>
-
-- 🎬 One-line Douyin videos with fact, layout and frame checks.
-- 🔌 Turns keep running when you close the page.
-- 🧯 Quieter, more accurate system nudges.
-- 🛡️ `disabled_tools` per request.
-- 📏 SWE-bench Verified harness, offline by default with network-use detection.
-
-</details>
-
-<details>
-<summary>v1.3 – v1.10 (2026-05 – 2026-10)</summary>
-
-| Version | Theme |
+| Folder | Contents |
 |---|---|
-| v1.3 | consistency, timers, telemetry, autonomy |
-| v1.4 | tools & intelligence: memory, MCP, RAG, plan-then-act, projects |
-| v1.5 | DAG orchestration, permissions, hooks, web E2E, complex scenarios |
-| v1.6 | browser, LSP, skill governance, desktop |
-| v1.7 | autonomy, SWE-bench, marketing |
-| v1.8 | backtesting, telemetry, audit, three-client alignment |
-| v1.9 | stability, performance, web E2E, domestic builds |
-| v1.10 | router split, plugin mounts, DAG editor, memory panel, Windows nodes, ChatGPT-level web UX |
+| `litecodeext/` | The app: gateway `litecode_server.py`, web `web_ui.py`, core `lib/`, tool plugins `plugins/`, `skills/`, front end `web_assets/` |
+| `packaging/` | Windows edition (Go tray + NSIS installer + WSL system image) and release scripts |
+| `docs/` | Architecture, desktop edition, knowledge base, build notes |
 
-</details>
+A tool is a single plugin file and a skill is a `SKILL.md` plus scripts, so both are easy to add. More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-<details>
-<summary>v1.1 / v1.1.1 long-form writing (2026-04-18)</summary>
+## Latest release
 
-- 21 novel-genre skills, `long-novel` (million-character projects), `outline-generation`, `longtext-processing`.
-- `deep-report` (5,000–20,000 characters with citation checks) and `anti-ai-tell-audit`.
+### v2.0.13 "Desktop" (上桌) (2026-10-23)
 
-</details>
+- 🔌 **Integrations**: a new top-left panel to connect image, video, TTS/ASR, music, search and notification services; titles on the left, plain-text usage on the right, one-click test and defaults; type `@` in the input box to attach a service's full details to a message. 29 presets.
+- 🧭 **11 decision-making skills**: premortem, decision matrix, red team, second-order effects, calibrated forecasts, bias check, after-action review, priority triage and more.
+- 🌐 **Million-word translation** `long-translate`: glossary, concurrency, resume, keeps Word/Markdown/EPUB/subtitle formatting, QA report.
+- 📐 **Diagram skill** `diagram`: renders Mermaid / Graphviz flowcharts, architecture and sequence diagrams locally; PlantUML on demand; used for decks and documents.
+- 👁️ **Vision modes**: tables, UI mockups, reverse-engineered image prompts from references, chart reading, error screenshots; shared "transcribe faithfully" rules.
+- 📖 **README rewritten**: step-by-step guides for all three ways to install (Windows installer / Linux Docker / Docker inside WSL) with troubleshooting tables; version history moved to [CHANGELOG.en.md](CHANGELOG.en.md); added the MIT LICENSE file and build notes in [docs/BUILD.md](docs/BUILD.md).
+- 🏷️ **Image tags follow releases**: the Docker image is now `litecode:latest` plus `litecode:<version>` instead of a fixed `v12-r1`; an existing old image is retagged on start, no rebuild needed.
+- 🪟 **New full installer**: tray code updates prefer GitHub; the start banner no longer shows a wrong default password.
 
-<details>
-<summary>v12.x early internal builds (2026-04)</summary>
+**v2.0.12**: pages and the browser close when done; a clear message when the desktop has no Docker; tray code updates prefer GitHub.
 
-- v12.9: sub-agent interrupt propagation and live streaming; direct data sources for crypto / stocks / weather; front end split into local static assets.
-- v12.7: "sub-task" keywords route to sub-agents.
-- v12.6: three-layer zombie-process defense, self-learning loop, skill safety, prompt rewrite, real loop detection.
-- v12.5: reasoning compatibility across backends, WeChat latency fix, reasoning shown in the web UI.
-- v12.2: fixes from a 73-task end-to-end run (tool dispatch, multi-agent orchestration, memory compression).
-- v12.1: server split; automatic reasoning-parameter adaptation for vLLM / OpenAI / Anthropic / Ollama / DeepSeek.
-
-</details>
-
----
-
-<div align="center">
-
-If it helps you, a ⭐ means a lot. Questions and ideas welcome in [issues](https://github.com/wfcz10086/litecode/issues).
-
-</div>
+Full history in [CHANGELOG.en.md](CHANGELOG.en.md).
 
 ## License
 
-MIT
+[MIT](LICENSE). A ⭐ helps; issues are welcome [here](https://github.com/wfcz10086/litecode/issues).

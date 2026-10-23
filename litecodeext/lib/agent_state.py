@@ -166,6 +166,7 @@ class TurnContext:
     tool_groups_scanned: int = 0           # lib/tool_groups.tools_for 已扫描到的 messages 下标
     forced_skills: tuple = ()   # 用户本轮强制使用的技能 (chat body `skills`), 全文注入且跳过关键词匹配
     turn_skills: set = field(default_factory=set)   # 本轮实际用到的技能 (自动匹配/load_skill/强制), lib/skill_turn.py
+    forced_providers: tuple = ()   # 用户本轮 `@` 引用的接入 id (chat body `providers`), 完整明文挂进本轮上下文 (lib/providers.py)
 
 
 @dataclass

@@ -1,6 +1,6 @@
-# LiteCode 依赖层: 复用 litecode:v12-r1 的系统库/浏览器/Python 包, 清掉私有代码和状态, 加 WSL 启动配置。
+# LiteCode 依赖层: 复用 litecode:latest 的系统库/浏览器/Python 包, 清掉私有代码和状态, 加 WSL 启动配置。
 # 不含 /opt/litecode (代码层每次发布单独打, rootfs.py 导出时也会剔除)。
-FROM litecode:v12-r1
+FROM litecode:latest
 RUN rm -rf /opt/litecode /root/.ssh /root/.litecode /root/.wechatbot /root/.npm /root/.pip /root/.bash_history \
            /root/go/pkg /tmp/* /var/tmp/* \
  && mkdir -p /root/.ssh /root/.litecode/web_sessions /root/.litecode/wechat_media /root/.wechatbot \

@@ -4,629 +4,438 @@
 
 **中文** · [English](README.en.md)
 
-**住进你自己机器里的 AI 员工。** 网页、命令行、微信、企业微信用同一个大脑；能写代码、查资料、做文档、做视频、跑流水线、按点干活，还能直接操控你的 Windows 电脑和服务器。接任意 OpenAI 兼容模型(包括你自己部署的)，没有积分、没有订阅，数据不出门。
+**装在你自己电脑或服务器上的 AI 助手，会自己动手把活干完。**
 
-![MIT](https://img.shields.io/badge/license-MIT-green) ![Windows](https://img.shields.io/badge/Windows-%E4%B8%80%E9%94%AE%E5%AE%89%E8%A3%85-0078D6) ![Docker](https://img.shields.io/badge/Linux-Docker%20%E4%B8%80%E9%94%AE%E5%90%AF%E5%8A%A8-blue) ![OpenAI](https://img.shields.io/badge/API-OpenAI%20%E5%85%BC%E5%AE%B9-orange) ![Skills](https://img.shields.io/badge/%E6%8A%80%E8%83%BD-110-brightgreen) ![Tools](https://img.shields.io/badge/%E5%B7%A5%E5%85%B7-95-yellow)
+你说一句话，它自己拆任务、跑命令、写代码、查资料、做文档和视频，做完把能打开的成品交给你。
+网页、命令行、微信、企业微信用的是同一个助手。模型随你接（任意 OpenAI 兼容接口，包括你自己部署的），开源免费，数据留在你自己的机器上。
 
-![LiteCode 对话界面](docs/screenshots/v2/01_chat_artifact.jpg)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/wfcz10086/litecode?label=%E4%B8%8B%E8%BD%BD)](https://github.com/wfcz10086/litecode/releases/latest)
+![Windows](https://img.shields.io/badge/Windows-%E5%8F%8C%E5%87%BB%E5%AE%89%E8%A3%85-0078D6)
+![Docker](https://img.shields.io/badge/Linux-Docker-blue)
+
+[下载](https://github.com/wfcz10086/litecode/releases/latest) · [安装](#安装) · [第一次使用](#第一次使用) · [能做什么](#能做什么) · [常见问题](#常见问题) · [更新日志](CHANGELOG.md)
+
+<img src="docs/screenshots/v2/01_chat_artifact.jpg" alt="LiteCode 对话界面" width="820">
 
 </div>
 
----
+## 安装
 
-## 目录
+先选一种装法：
 
-- [它是什么、适合谁](#它是什么适合谁)
-- [快速开始](#快速开始)
-  - [A. Windows 桌面版：一键安装](#a-windows-桌面版一键安装)
-  - [B. Linux 服务器：Docker 一键启动](#b-linux-服务器docker-一键启动)
-  - [C. 接上你的模型](#c-接上你的模型)
-  - [D. 登录与端口](#d-登录与端口)
-  - [E. 命令行与 API](#e-命令行与-api)
-- [功能全景](#功能全景)
-- [截图](#截图)
-- [和同类比：OpenClaw / DeepSeek-TUI / WorkBuddy](#和同类比openclaw--deepseek-tui--workbuddy)
-- [优点与不足](#优点与不足)
-- [自己编译与发布](#自己编译与发布)
-- [目录结构与架构](#目录结构与架构)
-- [常见问题](#常见问题)
-- [版本历史](#版本历史)
+| 你的情况 | 选哪个 | 要多久 |
+|---|---|---|
+| 一台 Windows 10/11 电脑，只想赶紧用上 | **[方式 A：Windows 安装包](#方式-awindows-安装包推荐)** | 下载 + 约 10 分钟 |
+| 有一台 Linux 服务器（云主机、家里的机器），想 24 小时开着 | **[方式 B：Linux + Docker](#方式-blinux--docker)** | 约 20 分钟（第一次要构建镜像） |
+| Windows 电脑，但想跑和服务器一样的 Docker 版 | **[方式 C：Windows 里的 WSL + Docker](#方式-cwindows-里的-wsl--docker)** | 约 30 分钟 |
+
+不管哪种方式，都需要一个**大模型接口**：OpenAI 兼容的地址 + 模型名（+ API Key）。自己用 vLLM / Ollama 部署的、买的 API 都行，见[接上模型](#接上模型)。
 
 ---
 
-## 它是什么、适合谁
+### 方式 A：Windows 安装包（推荐）
 
-LiteCode 是一个**自托管的 AI 智能体平台**。不只是聊天：它会自己拆任务、调工具、跑命令、读写文件、验证结果，做完交给你一个能打开的成品(文件、图表、视频、报告)。
+**准备**
 
-| 适合 | 不太适合 |
-|---|---|
-| 想要一个**自己说了算**的 AI 助手：数据在自己机器上、模型自己选 | 只想在手机上随便问两句(直接用各家 App 更省事) |
-| 有自建模型(vLLM / Ollama)或者买了 API，想把它变成"能干活的员工" | 需要多人多租户、组织权限管理的企业平台(LiteCode 是单人/小团队定位) |
-| 需要它**操控真实的 Windows 电脑**、管服务器、跑定时任务 | 没有任何可用的大模型接口 |
-| 做内容：文档、PPT、配音、抖音短视频、生图生视频 | |
+- Windows 10 2004（19041）及以上，或 Windows 11，64 位。
+- 磁盘留 **15 GB** 空闲。
+- BIOS 里开着虚拟化（大多数电脑默认开着；任务管理器 →「性能」→「CPU」里看到「虚拟化：已启用」就行）。
+- 安装用的 Windows 账户是管理员。
 
----
+**步骤**
 
-## 快速开始
+1. 打开 [Releases 下载页](https://github.com/wfcz10086/litecode/releases/latest)，下载 `LiteCode-Setup-<版本号>.exe`（约 1.9 GB，**离线安装包**，装的时候不用联网）。
+2. 双击运行。Windows 弹出「已保护你的电脑」时，点「更多信息」→「仍要运行」（安装包没有购买代码签名证书）。
+3. 一路「下一步」。中间会让你填三项：
+   - **模型地址**：例如 `http://192.168.1.10:8000/v1`
+   - **模型名称**：例如 `Qwen3.6-35B-A3B`
+   - **API Key**：没有就留空
+4. 电脑**从没开过 WSL** 的话，安装包会请求一次管理员权限去开启，然后提示重启。重启后它会自己接着装，不用再点。
+5. 最后一步「接入本机操控」会再请求一次管理员权限：安装 OpenSSH 并设为开机自启，再装一个桌面代理，让 LiteCode 能在这台电脑上开软件、截图、点按钮。不想要就点「否」，以后托盘菜单里随时能补。
+6. 装完桌面会出现 **LiteCode** 图标，右下角托盘常驻，开机自启。双击图标打开窗口。
 
-### A. Windows 桌面版：一键安装
+**登录**：窗口地址是 `http://127.0.0.1:18790`，**只有这台电脑自己能访问**。默认密码 `admin`，进去后到「设置 → 修改密码」改掉。
 
-不用装 Docker，不用懂命令行。
+**更新**：托盘每天检查一次。有新版会弹窗问你，点「是」就自动下载、校验、替换，大约 1 分钟，对话和设置都保留；新版起不来会自动回滚。代码更新优先从 GitHub 下载，GitHub 连不上时换备用源。手动检查：托盘右键 →「检查更新」。
 
-1. **准备**：Windows 10 2004 及以上或 Windows 11，64 位；BIOS 里开着虚拟化(大多数电脑默认开)；建议留出 10 GB 磁盘。
-2. **下载**：到 [Releases](https://github.com/wfcz10086/litecode/releases) 下载 `LiteCode-Setup-<版本>.exe`(约 1.9 GB 的离线包，装的过程不联网)。Releases 里暂时没有安装包的话，按「[自己编译与发布](#自己编译与发布)」一条命令打出来。
-3. **双击安装** →「下一步」→ 填你的模型地址、模型名、API Key(本地模型可留空) → 完成。
-   - 电脑从没开过 WSL 时，安装包会请求一次管理员权限开启，可能要重启一次，重启后自动继续。
-   - 最后一步会请求一次管理员权限"接入本机操控"(装 OpenSSH 并设开机自启、装桌面代理)，让它能在你的电脑上开软件、截图、点按钮。点「否」就跳过，以后托盘菜单里随时能补。
-4. **用起来**：桌面和开始菜单出现 LiteCode 图标，右下角托盘常驻，开机自启。窗口地址 `http://127.0.0.1:18790`，**只对本机开放**。默认密码 `admin`，登录后在「设置 → 修改密码」改掉。
-5. **更新**：托盘每天查一次新版本，弹窗点「是」，代码更新约 9 MB、1 分钟装完，对话和设置都保留；新版起不来自动回滚。本地配音和知识库用的模型包(约 900 MB)在后台断点续传下载。
+**卸载**：「设置 → 应用」里找到 LiteCode 卸载。⚠️ 卸载会删掉 LiteCode 子系统，里面的对话和文件一起删掉，有要留的先导出。
 
 <details>
-<summary>批量部署 / 无人值守安装参数</summary>
+<summary><b>安装包装了什么？WSL 是什么？</b></summary>
+
+LiteCode 本体是 Linux 程序。Windows 版没有让你装 Docker Desktop，而是用 Windows 自带的 **WSL**（Windows 里跑 Linux 的官方功能）：
+
+- 安装包里有一个打包好的 Linux 系统（根文件系统），安装时导入成一个名叫 **`LiteCode`** 的 WSL 子系统，所有程序、依赖、浏览器都在里面，跟你电脑上别的 Linux 环境互不干扰。
+- 托盘程序 `LiteCode.exe` 负责启动、停止、更新这个子系统，以及弹出窗口。
+- 数据目录：`%LOCALAPPDATA%\LiteCode`（子系统磁盘、日志、下载缓存都在这）。
+- 本地配音和知识库用的模型包（约 900 MB）不在安装包里，装好后托盘在后台断点续传下载。
+
+在 cmd 里可以这样看它：
 
 ```
-LiteCode-Setup-<版本>.exe /S                       静默解包
-LiteCode.exe --setup --unattended --password <密码> --model-url <地址> --model-name <模型> --model-key <key> --no-tray
-LiteCode.exe --selftest                            把 WSL / 子系统 / 版本 / 服务状态写到 selftest.txt
-LiteCode.exe --local-control                       只做本机操控接入
-LiteCode.exe --setup --no-local-control            安装时不接入本机操控
+wsl -l -v
 ```
 
-退出码 `3010` 表示需要重启(已登记重启后自动继续)，`2` 表示失败(看 `%LOCALAPPDATA%\LiteCode\launcher.log`)。原理和排障见 [docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md)。
+能看到 `LiteCode   Running   2` 就说明正在运行。进去看看：
+
+```
+wsl -d LiteCode
+```
+
+彻底停掉（托盘会在需要时再拉起）：
+
+```
+wsl --terminate LiteCode
+```
 
 </details>
 
-### B. Linux 服务器：Docker 一键启动
+<details>
+<summary><b>安装出错了怎么办</b></summary>
 
-需要：一台 Linux 机器(家里服务器、云主机、旧电脑都行) + Docker 和 docker compose。
+先看日志：`%LOCALAPPDATA%\LiteCode\launcher.log`（把这个路径粘到资源管理器地址栏回车就能打开）。下面是踩过的坑：
 
-```bash
-git clone https://github.com/wfcz10086/litecode && cd litecode
-./start.sh            # 第一次: 自动生成 config.json 并构建镜像(10~15 分钟), 之后几秒启动
+| 现象 | 原因 | 怎么办 |
+|---|---|---|
+| `读默认配置失败: invalid character 'w'` | 你开着本机代理（Clash 之类），WSL 输出了一段代理警告，混进了安装程序读的结果 | 新安装包已修复。用旧包时：在 cmd 里依次执行下面三条，再重新运行安装包 |
+| 提示要开启虚拟化 / WSL 起不来 | BIOS 里没开虚拟化 | 重启进 BIOS，打开 Intel VT-x 或 AMD SVM |
+| 卡在「接入本机操控」很久 | 首次要准备 OpenSSH 和 Python 依赖 | 新安装包已自带，不再联网下载；失败也不影响主程序，之后托盘里「重新接入本机操控」 |
+| `未能为 SSL/TLS 安全通道建立信任关系` | 系统证书库太旧 | 运行一次 Windows 更新再试 |
+| 模型报 `Illegal header value b'Bearer '` | 老版本 API Key 留空的问题 | 新版已修复（留空自动当成 `EMPTY`） |
+
+开着本机代理时给 WSL 打开镜像网络（cmd 里一条一条执行）：
+
+```
+echo [wsl2]> "%USERPROFILE%\.wslconfig"
 ```
 
-第一次运行会从 `config.example.json` 生成 `config.json` 并提示你修改，改完再：
-
-```bash
-./start.sh --restart  # 让配置生效
+```
+echo networkingMode=mirrored>> "%USERPROFILE%\.wslconfig"
 ```
 
-浏览器打开 `http://你机器的IP:18790`，看到登录页就成功了。
+```
+wsl --shutdown
+```
 
-`start.sh` 的其他用法：`--build` 强制重建镜像、`--down` 停止、`--logs` 看日志、`--status` 看状态、`--shell` 进容器。
+更多原理和排障：[docs/DESKTOP_WINDOWS.md](docs/DESKTOP_WINDOWS.md)。
 
-可选组件：
+</details>
+
+<details>
+<summary><b>批量部署 / 无人值守安装</b></summary>
+
+```
+LiteCode-Setup-<版本>.exe /S
+LiteCode.exe --setup --unattended --password <密码> --model-url <地址> --model-name <模型> --model-key <key> --no-tray
+LiteCode.exe --selftest
+LiteCode.exe --local-control
+LiteCode.exe --setup --no-local-control
+```
+
+依次是：静默解包；无人值守配置；把环境检查结果写到 `selftest.txt`；只做本机操控接入；安装时不接入本机操控。退出码 `3010` = 需要重启（已登记重启后自动继续），`2` = 失败。
+
+</details>
+
+---
+
+### 方式 B：Linux + Docker
+
+适合一直开着的服务器：关掉自己的电脑，定时任务和微信机器人照样跑。
+
+**准备**：64 位 Linux（Ubuntu 22.04 / 24.04 测得最多），4 核 8 GB 内存以上，磁盘留 30 GB。
+
+**1. 装 Docker**（已经有 Docker 和 `docker compose` 的跳过）
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh -s -- --mirror Aliyun
+sudo usermod -aG docker $USER      # 之后退出重新登录一次, 就不用每条命令都带 sudo
+docker compose version             # 能打印版本号就说明装好了
+```
+
+**2. 下载代码**
+
+```bash
+git clone https://github.com/wfcz10086/litecode.git
+cd litecode
+```
+
+GitHub 慢的话，到 Releases 下载 `Source code (tar.gz)` 再解压也一样。
+
+**3. 第一次启动**
+
+```bash
+./start.sh
+```
+
+第一次会做三件事：用 `config.example.json` 生成 `config.json`；给搜索引擎 SearXNG 生成随机密钥；构建镜像 `litecode:latest`，同时打上版本号标签（如 `litecode:v2.0.13`），约 **10~15 分钟**，已经换成国内源。
+
+**4. 改配置**（必须）
+
+```bash
+nano config.json
+```
+
+至少改这四处（示例里都是占位的 `CHANGE_ME`）：
+
+| 位置 | 改成什么 |
+|---|---|
+| `model.backend_url` | 你的模型接口，形如 `http://x.x.x.x:8000/v1` |
+| `model.api_key` | 模型的 key，没有就写 `EMPTY` |
+| `web_ui.auth.password` | 网页登录密码（把 `CHANGE_ME` 换掉） |
+| `server.token` | API 网关口令（把 `CHANGE_ME` 换成一串随机字符，可用 `openssl rand -hex 16` 生成） |
+
+改完让配置生效：
+
+```bash
+./start.sh --restart
+```
+
+**5. 打开**
+
+浏览器访问 `http://服务器IP:18790`，看到登录页就成功了。打不开先在服务器上自查：
+
+```bash
+./start.sh --status
+curl -s http://127.0.0.1:18789/health
+```
+
+本机能通、外面打不开，就是防火墙或云主机安全组没放行 `18790` 端口。
+
+> ⚠️ 放到公网前一定改掉默认密码和 token；最好再套一层 HTTPS（nginx / Caddy 反向代理）。
+
+**常用命令**
+
+| 命令 | 作用 |
+|---|---|
+| `./start.sh --logs` | 看实时日志 |
+| `./start.sh --restart` | 改完配置后重启 |
+| `./start.sh --down` | 停止 |
+| `./start.sh --build` | 依赖变了时重建镜像 |
+| `./start.sh --shell` | 进到容器里 |
+| `git pull && ./start.sh --restart` | 升级到最新版 |
+
+**可选组件**
 
 | 组件 | 怎么开 | 说明 |
 |---|---|---|
-| SearXNG 搜索 | 默认随 compose 启动 | 开源元搜索，本机 `127.0.0.1:18888`，首次启动自动生成随机密钥 |
-| 知识库 | `bash scripts/kb_setup.sh` | 起 PostgreSQL + pgvector(只监听本机)，随机密码，自动写好 `config.json`；向量模型用 `scripts/kb_export_onnx.sh` 导出。详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
-| 命令行 | `sudo ln -sf $(pwd)/litecodeext/litecli /usr/local/bin/litecli` | 之后 `litecli login`、`litecli` 进入对话 |
-
-### C. 接上你的模型
-
-打开 `config.json`，找到 `model` 段填两项：
-
-- `backend_url`：OpenAI 格式的接口地址，形如 `http://xxx:8000/v1`。自建 vLLM、Ollama、SGLang，或者买的 API 中转都行。
-- `api_key`：模型的 key，自建的没设 key 就填 `EMPTY`。
-
-也可以不改文件：登录后在对话里说"帮我加一个模型，地址是…，名字是…"，它会自己添加、测试连通性，再切成默认。「设置」里每个模型都有「测试」按钮；输入框旁的模型按钮只切换**当前对话**用的模型。
-
-> 工具调用越稳的模型效果越好。实测 GLM-5.3-Flash、Qwen3.6/3.8、DeepSeek-V4 系列都能稳定跑完长任务。主模型不能看图时，截图核对和 OCR 会自动转给你配好的识图模型。
-
-### D. 登录与端口
-
-| 入口 | 地址 | 认证 |
-|---|---|---|
-| 网页 | `:18790` | 一个密码：`config.json` 的 `web_ui.auth.password`(把 `CHANGE_ME_PASSWORD` 改掉) |
-| API 网关 | `:18789` | 请求头 `Authorization: Bearer <server.token>`(把 `CHANGE_ME_TOKEN` 改掉) |
-| 命令行 | `litecli login` | 和网页同一个密码 |
-| 远程桌面(noVNC) | 网页登录后打开 `/vnc/` | 跟着网页登录走，不单独开端口 |
-
-> ⚠️ 启动前一定把两个 `CHANGE_ME` 改掉，别用默认值暴露在公网。桌面版只监听 127.0.0.1。
-
-### E. 命令行与 API
-
-- **命令行**：`litecli` 进入对话，写文件给你看 diff、跑命令、报 token 用量；`litecli passwd` 改密码。
-- **API**：网关就是标准的 OpenAI Chat Completions 接口。翻译插件、ChatBox、Dify、LangChain……把地址改成 `http://你的机器:18789/v1`，背后的模型就有了工具、搜索、记忆和全部技能。`user` 字段传固定值，它就记得这个用户聊过什么。
-- 单次请求可以带 `disabled_tools: ["web"]` 关掉某类工具，做离线模式或公平评测。
+| SearXNG 搜索 | 默认已随 compose 启动 | 开源元搜索，只监听本机 `127.0.0.1:18888` |
+| 知识库 | `bash scripts/kb_setup.sh` | 起 PostgreSQL + pgvector（只监听本机、随机密码），自动写好配置；详见 [docs/KNOWLEDGE_BASE.md](docs/KNOWLEDGE_BASE.md) |
+| 命令行 `litecli` | `sudo ln -sf $(pwd)/litecodeext/litecli /usr/local/bin/litecli` | 然后 `litecli login`，再输 `litecli` 进入对话 |
 
 ---
 
-## 功能全景
+### 方式 C：Windows 里的 WSL + Docker
 
-下面每一项都在代码里有对应实现，括号里是工具名或技能名。
+想在 Windows 上跑和服务器**完全一样**的 Docker 版（比如要自己改代码），就在 WSL 的 Ubuntu 里走方式 B。
 
-### 1. 智能体核心
+1. 用**管理员**身份打开 cmd，装一个 Ubuntu（装完按提示重启，再设置 Linux 用户名和密码）：
 
-| 功能 | 说明 |
-|---|---|
-| 自主执行 | 拆任务(`task_create/update/done`) → 调工具 → 看结果 → 验证 → 交付；交付必须带证据，标明"已验证 / 未验证" |
-| 运行中插话 | 任务跑着也能发消息：回车是"补充"，「⚡ 立即」是"打断调整"，1 秒内生效，这一轮不结束 |
-| 停止真的停 | 点停止 1 秒内生效，本会话的后台进程一并停掉 |
-| 关网页照跑 | 对话在后台跑，刷新、关浏览器、断网都不影响，回来自动接上进度 |
-| 思考强度 | 输入框旁一键切换思考强度；思考绕圈被截断后自动关思考直接动手 |
-| 推演模式 | 「🎭 推演」：先问"谁放的消息、谁得利、对手盘是谁"，正反推演再下结论 |
-| 防空转 / 防死循环 | 同参数重复调用拦截、只读空转提醒、超时带回最后输出、不把正常轮询当死循环 |
-| 调用链路时间线 | 每一步中文名、状态、用时，可展开看参数和输出；报错是分类过的友好卡片，可"从失败处继续" |
-| 9 种子代理 + 并行 | `spawn_agent` 派后台帮手(编码员/调研员/测试员/写作/评审/视觉/操作员…)；写代码的帮手各用独立工作树并行改，先审再合并 |
-| 子代理任务树 | 网页上看每个子代理的步骤、进度、结果，可"进入"看实时过程、补充指令、叫停 |
+   ```
+   wsl --install -d Ubuntu-24.04
+   ```
 
-### 2. 技能系统(110 个)
+2. 开始菜单里打开「Ubuntu 24.04」，接下来的命令都在这个窗口里执行。
+3. 按[方式 B](#方式-blinux--docker) 的第 1~4 步装 Docker、下载代码、启动、改配置。
+4. Windows 浏览器打开 `http://localhost:18790`。
 
-| 功能 | 说明 |
-|---|---|
-| `/` 选技能 | 输入框打 `/` 弹出技能选择器，可搜索、可多选 |
-| 技能管理 | 「技能」面板：按分组看、启停、查看、导出；本地检索；安装前做安全扫描 |
-| 技能市场 | 在线索引，可从 Anthropic Skills、ClawHub(OpenClaw 生态)、SkillHub、GitHub 搜索和安装 |
-| 对话里建技能 | "把刚才的流程做成一个技能" → `create_skill` 生成草稿，用过再转正 |
-| 分组 | 办公文档、图像音视频、小说写作(26 个题材)、编程开发、研究分析、运维系统、规划协作、桌面浏览器、投资理财、人物视角 |
-
-### 3. 搜索与资料
-
-| 功能 | 说明 |
-|---|---|
-| 多层搜索 | SearXNG(开源元搜索，主力) → 可选火山豆包搜索 → 多引擎并行 → 真浏览器兜底；中文查询按中文区搜索并过滤日文页 |
-| 读正文 | `web_fetch`、`deep_search` 会点进去读正文再回答，有引用密度检查 |
-| 开发者搜索 | `github_search`、`github_repo`、`package_search`、`stackoverflow_search`、`search_code_error`(按报错搜解法) |
-| 实时行情 | `stock_quote`：A 股 / 港股 / 美股的个股、指数、ETF |
-| 浏览器 | `browser_*`：真浏览器打开、点击、填表、登录态保存、验证码转人工，noVNC 里全程围观 |
-
-### 4. 文档与办公
-
-| 功能 | 说明 |
-|---|---|
-| Word / Excel / PPT / PDF | `docx` `xlsx` `pptx` `pdf` 技能：生成、读取、修改；Excel 公式重算核对 |
-| 文档工坊 | `doc-studio`：HTML 优先排版，配开放授权的真实照片、图表、插画，导出 PDF / 可编辑 PPTX / DOCX / 长图，最后截图质检 |
-| 深度报告 | `deep-report`：5000~20000 字，边写边搜、引用密度检查、评审回炉 |
-| 扫描件与 OCR | `pdf-ocr-pipeline`、`image-ocr`、`vision_ocr` |
-| 产物预览 | 回复里写出文件路径就出带登录的预览和下载卡片；「产出物」页集中管理 |
-| 分享 | 「🔗 分享」生成只读链接(1/7/30 天，可撤销) |
-
-### 5. 图像、音频、视频
-
-| 功能 | 说明 |
-|---|---|
-| ComfyUI 生图 | `comfyui-image`：只给 `地址:端口`，自动探测显卡、模型、可用工作流；自带 Qwen-Image 2.1 文生图 / 编辑 / 多图融合模板；内网机器可走 SSH 跳板，同网段自动复用 |
-| ComfyUI 生视频 | `comfyui-video`：自带 MiniMax H3 四种模式(文生视频 / 图生视频 / 首尾帧 / 参考生视频，带音轨)，也能用服务器上已保存的其他视频工作流 |
-| 本地配音(纯 CPU) | `text_to_speech`：sherpa-onnx + Kokoro，不要显卡、不联网；在线 edge-tts 和云端 TTS 作备选，按顺序自动兜底 |
-| 配音成片 | `video-studio`：文案 → 配音 → 字幕(按真实人声时间对齐) → 画面 → 配乐(人声出现自动压低) → 成片，合成后自动校验音画同步 |
-| 配乐 | `bgm-music`：本地程序生成无版权 BGM(8 种情绪)，或检索可商用的 CC 曲并自动写署名 |
-| 抖音工具箱 | `douyin-toolkit`：分享链接解析、无水印下载、口播转文字 + 关键帧识图的文案解读、本地去水印 |
-| 一句话出短视频 | `douyin-explainer-video`：选题 → 口播 → 配音 → 动画 → 配乐 → 竖版成片 + 封面 + 发布文案，出片前过事实核对、版面自检、抽帧终检三道关 |
-| 识图 | `vision_ocr`：主模型不能看图时自动转给识图模型 |
-
-### 6. 知识库与记忆
-
-| 功能 | 说明 |
-|---|---|
-| 知识库 | 「📚 知识库」面板上传文档；PostgreSQL + pgvector，文件存本地，本地中文向量模型；`kb_search` 检索结果带出处 |
-| 四层记忆 | L0 近期原文 → L1 常驻档案 → L2 分类笔记 → L3 全文索引；偏好、身份写进全局档案，换个对话也记得 |
-| 纠正一次就记住 | 你中途说"用国内源"，它当场照做并记下，下次同类任务不用再说 |
-| 记忆可查可删 | 「记忆」面板查看、删除；外部内容写不进全局记忆 |
-| 崩溃不丢 | 会话有预写日志，进程崩了重放恢复；大改动前自动快照，可回滚 |
-
-### 7. 流水线与定时任务
-
-| 功能 | 说明 |
-|---|---|
-| DAG 流水线 | 「DAG 编排」可视化编辑：9 种 agent 节点、工具节点、决策分支、子流水线；条件 `when`、步骤间传值；同层并行、失败带错误反思重跑、按步骤内容做 checkpoint、断了能续 |
-| AI 生成流水线 | 一句话描述需求，AI 生成 DAG，再手动微调 |
-| 构建记录 | 像 Jenkins 一样看每次构建、每一步的输出和产物 |
-| 定时任务 | "每天 9 点查一下 BTC 发我企微" → `create_timer`；执行历史可查；跑在服务器上，**你的电脑关机也照跑** |
-
-### 8. 操控电脑与服务器
-
-| 功能 | 说明 |
-|---|---|
-| 操控 Windows | `windows_desktop`：截图、OCR、按控件名点击(UI Automation)、输入、滚动、右键、拖拽、读剪贴板、开软件、开网址、窗口管理 |
-| Windows 命令行 | `windows_system`：PowerShell、查进程/服务/系统信息、装软件、读写文件、电脑与服务器之间传文件(分块 + sha256 校验)；命令行权限默认关闭，只能由你在面板里为某台电脑打开 |
-| 桌面版操控本机 | 桌面版安装时接入本机：命令行优先，截图/OCR 只做核对；文件直接放到你的桌面 / 文档 / 下载 |
-| 远程电脑接入 | 「添加 Windows」生成一条命令，在那台电脑管理员终端粘贴回车即可；电脑主动回连、不开端口；空闲时自动更新、崩溃自动重启 |
-| 锁屏 / 断线诊断 | 截图失败时报出会话真实状态(断开 / 锁屏 / 远程桌面最小化)并给出处理办法 |
-| SSH 运维 | `ssh_exec`、`ssh_read_file`、`ssh_write_file`、`ssh_sync_files`、主机库；远程 Docker 查看与重建 |
-| 本机 Docker | 聊天里看容器、看日志、重启 |
-| Linux 桌面 | 容器内自带 Linux 桌面(noVNC 围观)，`desktop_*` 工具操作 |
-
-### 9. 渠道
-
-| 功能 | 说明 |
-|---|---|
-| 网页 | 暖白 / 暗黑等 7 套主题，中英文界面，手机可用；会话分组、项目归组、搜索 |
-| 命令行 | `litecli`：diff 预览、命令执行、token 统计 |
-| 微信 | 扫码接入个人微信机器人；能收文件、语音、图片，自动解析后回复结果 |
-| 企业微信 | 企业微信智能机器人，真流式回复 |
-| OpenAI 兼容 API | 任意客户端接入 |
-
-### 10. 统计、安全与运维
-
-| 功能 | 说明 |
-|---|---|
-| 用量看板 | 左上角「📊 看板」：总 token、缓存命中、思考、调用次数、按小时用量、活跃时段、按技能和工具统计；导出 CSV 和离线 HTML 报告 |
-| 防提示注入 | 网页、搜索结果、截图文字、远程输出一律标为"外部内容"；识别到注入话术后，发消息、付款、往外发数据、写记忆、建定时任务都要你确认 |
-| 公网上传闸 | 你没要求公开分享时，禁止把文件传到公网文件站和图床 |
-| 密钥脱敏 | 配置和模型列表里的密钥一律打码；记忆写入自动脱敏 |
-| 全程可查 | 每轮迭代、每次工具调用、每步流水线都有记录；静默失败会被显式暴露 |
-| 大文件 | 上传 1 GB 流式落盘；下载断点续传；任意大小文件分段读 |
-| 录屏 | 「⏺ 录屏」：每轮自动录成带步骤字幕的 mp4，可回放下载 |
+> 方式 A 和方式 C 可以同时装，但两者都用 18790 端口，不要同时运行。
 
 ---
 
-## 截图
+## 接上模型
 
-**执行过程透明**：每一步做了什么、用了多久，展开就能看；产物直接预览。
+LiteCode 本身不带大模型，它用你提供的模型接口干活。
+
+- **地址**：OpenAI 格式，以 `/v1` 结尾。自己部署的 vLLM / SGLang / Ollama（`http://IP:11434/v1`）、各家云 API、中转都可以。
+- **模型名**：和接口里的名字一字不差。
+- **Key**：没有就填 `EMPTY`。
+
+不想改文件也行：登录后直接在对话里说「帮我加一个模型，地址是…，名字是…」，它会自己添加、测试连通再切过去。「设置 → 模型」里每个模型都有「测试」按钮。
+
+> 工具调用越稳的模型效果越好。GLM-5.3-Flash、Qwen3.6 / 3.8、DeepSeek-V4 系列都实测能稳定跑完长任务；太小的模型容易绕圈。主模型不能看图时，截图核对和 OCR 会转给你配好的识图模型。
+
+## 第一次使用
+
+登录后，在输入框里试试这几句：
+
+```text
+帮我写一个 Python 命令行记账工具，带测试，跑通给我
+```
+
+```text
+查一下今天的 A 股大盘，用表格总结，生成一份 Word 报告
+```
+
+```text
+每天早上 9 点查一下 BTC 价格发到我微信
+```
+
+它会边做边显示每一步（调用了什么工具、花了多久，点开能看细节）。做完的文件在回复里直接预览、下载。跑的过程中可以随时插话纠正：回车是「补充」，点「⚡ 立即」是「打断并调整」。
+
+**其他入口**
+
+| 入口 | 怎么用 |
+|---|---|
+| 微信 | 工具箱 →「微信」→ 扫码绑定。注意一个微信号同一时间只能绑一个 LiteCode，最后扫码的生效 |
+| 企业微信 | 工具箱 →「企业微信」，填机器人信息 |
+| 命令行 | `litecli`：改代码前给你看 diff，统计 token 用量 |
+| API | `http://地址:18789/v1` 是标准 OpenAI Chat Completions 接口，请求头带 `Authorization: Bearer <server.token>`。ChatBox、Dify、LangChain 等任何客户端接上，背后就有了工具、搜索、记忆和全部技能 |
+| 操控另一台 Windows | 工具箱 →「Windows」→「添加」生成一条命令，在那台电脑的管理员终端粘贴执行。会自动装 OpenSSH、生成并授权专用密钥（只用密钥、不用密码），由那台电脑主动连回来，不用开端口 |
+
+## 能做什么
+
+<table>
+<tr>
+<td width="50%" valign="top">
+
+**💻 写代码**
+读仓库、改代码、跑测试，验证通过才交付；几个子代理分别在独立的工作副本里并行写，先审再合并。
+
+**🔍 查资料**
+SearXNG 元搜索为主，多引擎并行、真浏览器兜底；会点进网页读正文，回答带出处。另有 GitHub、包管理、Stack Overflow 搜索和 A 股 / 港股 / 美股实时行情。
+
+**📄 做文档**
+Word、Excel、PPT、PDF 的生成、读取和修改；5000~20000 字的深度报告；扫描件 OCR。
+
+**🎬 做音视频**
+本地纯 CPU 配音；文案→配音→字幕→画面→配乐一条龙出片；抖音链接解析、无水印下载、文案提取和二创；接 ComfyUI 生图生视频。
+
+</td>
+<td width="50%" valign="top">
+
+**🖥️ 操控电脑**
+在 Windows 上开软件、截图、OCR、按控件名点击、输入、跑 PowerShell、传文件；锁屏或断线时会说明原因和解决办法。
+
+**🛠️ 管服务器**
+SSH 执行命令、读写和同步文件，查看和重建远程 Docker 容器。
+
+**⏰ 自动化**
+定时任务（服务器版关了电脑也照跑）；可视化 DAG 流水线，支持条件分支、子流水线和断点续跑。
+
+**🧠 记忆和知识库**
+记得你的偏好，纠正一次就记住；上传文档建知识库，检索结果带出处；记忆随时可查可删。
+
+</td>
+</tr>
+</table>
+
+另外：110 个内置技能（输入框打 `/` 选择，可以从技能市场装更多）、用量看板、只读分享链接、每轮自动录屏、防提示注入（网页和搜索结果里的“指令”一律不执行，敏感操作要你确认）。
+
+<details>
+<summary><b>截图</b></summary>
+
+**每一步做了什么、用了多久，展开就能看**
 
 ![调用链路](docs/screenshots/v2/02_chat_steps.jpg)
 
-**子代理任务树**：两个帮手并行写 Python 和 Go 版本，各自跑通测试，主代理复核后汇总。
+**两个子代理并行写 Python 和 Go 版本，主代理复核后汇总**
 
 ![子代理](docs/screenshots/v2/03_subagents.jpg)
 
 <table>
 <tr>
-<td align="center" width="50%"><b>输入 / 选技能</b><br><img src="docs/screenshots/v2/04_skill_picker.jpg" width="100%"></td>
-<td align="center" width="50%"><b>技能管理 + 技能市场</b><br><img src="docs/screenshots/v2/05_skills.jpg" width="100%"></td>
+<td align="center" width="50%"><b>选技能</b><br><img src="docs/screenshots/v2/04_skill_picker.jpg" width="100%"></td>
+<td align="center" width="50%"><b>技能管理和技能市场</b><br><img src="docs/screenshots/v2/05_skills.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>用量看板(可导出 HTML 报告)</b><br><img src="docs/screenshots/v2/06_dashboard.jpg" width="100%"></td>
-<td align="center"><b>设置：模型管理、主题、语言</b><br><img src="docs/screenshots/v2/07_settings.jpg" width="100%"></td>
+<td align="center"><b>用量看板</b><br><img src="docs/screenshots/v2/06_dashboard.jpg" width="100%"></td>
+<td align="center"><b>设置</b><br><img src="docs/screenshots/v2/07_settings.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>工具箱：记忆、知识库、定时任务、DAG、微信、Windows…</b><br><img src="docs/screenshots/v2/08_toolbox.jpg" width="100%"></td>
-<td align="center"><b>DAG 流水线编辑器</b><br><img src="docs/screenshots/v2/09_dag.jpg" width="100%"></td>
+<td align="center"><b>工具箱</b><br><img src="docs/screenshots/v2/08_toolbox.jpg" width="100%"></td>
+<td align="center"><b>DAG 流水线</b><br><img src="docs/screenshots/v2/09_dag.jpg" width="100%"></td>
 </tr>
 <tr>
-<td align="center"><b>财神爷：仓位计算(实时行情 + 风控纪律)</b><br><img src="docs/screenshots/v2/10_caishenye.jpg" width="100%"></td>
-<td align="center"><b>命令行</b><br><img src="docs/screenshots/02_cli.jpg" width="100%"></td>
-</tr>
-<tr>
-<td align="center"><b>Windows 桌面版：托盘一键更新</b><br><img src="docs/screenshots/v2/11_win_update.jpg" width="100%"></td>
-<td align="center"><b>微信机器人接入</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
+<td align="center"><b>Windows 托盘一键更新</b><br><img src="docs/screenshots/v2/11_win_update.jpg" width="100%"></td>
+<td align="center"><b>微信接入</b><br><img src="docs/screenshots/04_wechat.jpg" width="100%"></td>
 </tr>
 </table>
 
-**一句话做抖音二创**：自己找视频 → 无水印下载 → 提取文案 → Qwen-Image 2.1 出参考图 → MiniMax H3 图生视频 → 本地配音 + 字幕 + 配乐 → 成片(下图为成片抽帧，画面全部 AI 生成，文案为改写)。
+**一句话做抖音二创**（成片抽帧，画面全部由 AI 生成）
 
 ![抖音二创](docs/screenshots/v2/12_douyin_remake.jpg)
 
----
+</details>
 
-## 和同类比：OpenClaw / DeepSeek-TUI / WorkBuddy
+## 和同类工具比
 
-> 整理于 2026-10。对方信息来自各自官方仓库和公开资料，可能随版本变化；LiteCode 一侧以本仓库代码为准。不是打分表，各家定位不同。
+> 整理于 2026-10，对方信息来自官方仓库和公开资料，可能随版本变化。
 
-| | **LiteCode** | **OpenClaw**("小龙虾") | **DeepSeek-TUI**(现名 Codewhale) | **腾讯 WorkBuddy** |
+| | LiteCode | OpenClaw | DeepSeek-TUI（Codewhale） | 腾讯 WorkBuddy |
 |---|---|---|---|---|
-| 形态 | 自托管平台：网页 + 命令行 + 机器人 + API | 自托管个人助手，消息软件里用 | 终端编程助手(另有网页界面) | 商业桌面 App + 云服务 |
-| 开源 / 收费 | MIT，免费 | MIT，免费 | MIT，免费 | 闭源，积分制订阅 |
-| 模型 | 任意 OpenAI 兼容，含自建 vLLM/Ollama，可按对话切换 | 多家云模型 + Ollama | 40+ 提供方，默认 DeepSeek | 混元/DeepSeek/GLM/Kimi/MiniMax，免费版不能自选 |
-| Windows 安装 | **离线安装包一键装**，托盘、自启、自动更新 | 需 WSL2 + Node 环境 | 单个可执行文件 | 安装包 |
-| 中国聊天软件 | **微信、企业微信内置** | 以海外渠道为主(WhatsApp/Telegram/Slack…) | 无 | 企微/QQ/飞书/钉钉 |
-| 网页界面 | **完整**：会话、产物预览、看板、设置、各管理面板 | 以消息渠道为主 | 有(`codewhale web`) | 有 |
-| 操控 Windows 桌面 | **有**：控件点击 + OCR + PowerShell，锁屏/断线诊断 | 主机上执行动作 | 仅 macOS，实验 | 仅 macOS，实验 |
-| 服务器运维 (SSH/Docker) | **有** | 靠 shell | 靠 shell | 无 |
-| 可视化流水线 | **DAG 编辑器**，条件/分支/子流水线/续跑 | 无 | 无 | 无 |
-| 定时任务 | 有，跑在服务器上，关机照跑 | 有(Heartbeat) | 无 | 有，电脑关机就停 |
-| 子代理 | 9 种角色，并行工作树，任务树可视化 | 未见重点 | 有，并行子任务 | 专家团 |
-| 技能生态 | 110 个内置 + 市场(可装 ClawHub/Anthropic/SkillHub/GitHub 技能) | **ClawHub，生态最大** | MCP | SkillHub，数量多 |
-| 知识库 | 内置(pgvector) | 本地 Markdown 记忆 | 无 | 有 |
-| 本地纯 CPU 配音 | **有** | 语音靠伴侣 App | 无 | 未见 |
-| 生图 / 生视频 | ComfyUI 任意地址 + 插件 | 靠技能 | 无 | 有(云端) |
-| 抖音解析 / 去水印 / 二创 | **原生** | 靠技能 | 无 | 靠第三方技能 |
-| 用量与成本看板 | **有**，可导出报告 | 未见 | 未见 | 按积分扣费 |
-| 手机 App | 无(网页手机可用) | **iOS / Android** | 无 | **有** |
-| macOS | 走 Docker | **原生** | **原生** | **原生** |
-| 社区规模 | 小 | **最大**(GitHub 39 万+ star) | 大(4 万+ star) | 用户量大(日活千万级) |
-| 沙箱 | 防注入 + 敏感操作确认 + 快照回滚 + 命令行开关 | 可配置沙箱 | **系统级沙箱**(Seatbelt / bubblewrap) | 沙箱 + 权限卡片 |
+| 是什么 | 自托管的全能助手：网页 + 命令行 + 机器人 + API | 自托管个人助手，在聊天软件里用 | 终端里的编程助手 | 商业桌面 App + 云服务 |
+| 开源 / 收费 | MIT，免费 | MIT，免费 | MIT，免费 | 闭源，按积分收费 |
+| 模型 | 任意 OpenAI 兼容，含自建 | 多家云模型 + Ollama | 40+ 家，默认 DeepSeek | 指定的几家 |
+| Windows | 离线安装包，托盘 + 自动更新 | 要 WSL2 + Node | 单个可执行文件 | 安装包 |
+| 微信 / 企业微信 | ✅ 内置 | 以海外渠道为主 | ❌ | 企微 / QQ / 飞书 / 钉钉 |
+| 操控 Windows 桌面 | ✅ | 在主机上执行 | 仅 macOS，实验 | 仅 macOS，实验 |
+| 可视化流水线 | ✅ DAG | ❌ | ❌ | ❌ |
+| 定时任务关机照跑 | ✅（服务器版） | ✅ | ❌ | ❌ |
+| 手机 App | ❌（网页手机可用） | ✅ | ❌ | ✅ |
+| macOS 原生 | ❌（走 Docker） | ✅ | ✅ | ✅ |
+| 系统级沙箱 | ❌（靠确认 + 权限开关） | 可配置 | ✅ | ✅ |
+| 社区规模 | 小 | 最大 | 大 | 用户量大 |
 
-### LiteCode 比它们强在哪
+**选 LiteCode 的理由**：在国内开箱即用（微信、国内源、国内搜索），有完整网页工作台，能操控 Windows 和管服务器，模型和数据都在自己手里。
+**不选的理由**：要手机 App、要 macOS 原生、要系统级沙箱，或者看重社区规模。
 
-1. **比 OpenClaw**：在中国环境开箱即用——微信、企业微信内置，搜索走 SearXNG + 国内引擎，下载走国内源；有完整网页工作台(产物预览、用量看板、DAG 流水线、知识库)，而不是只在聊天软件里对话；Windows 是离线安装包，不用自己配 WSL 和 Node；能操控 Windows 桌面、做服务器运维。还能直接安装 ClawHub 的技能。
-2. **比 DeepSeek-TUI**：它是写代码的终端工具，LiteCode 是全场景助手——除了写代码，还做文档、PPT、配音、视频、知识库、定时任务、机器人、操控电脑；有可视化流水线和子代理任务树；不绑定任何一家模型。
-3. **比 WorkBuddy**：开源免费、没有积分焦虑；数据和模型在自己手里，可以接自建模型，成本可以是零；定时任务跑在服务器上，关机照跑；Windows 桌面操控可用(对方 computer-use 只支持 macOS 且是实验功能)；有 SSH 运维和可视化流水线；抖音解析、配音、成片是原生能力。
+## 常见问题
 
-### LiteCode 不如它们的地方
+**没有显卡能用吗？**
+能。模型用 API 就行；本地配音和知识库的向量模型都是纯 CPU。
 
-1. **生态和社区**：OpenClaw、WorkBuddy 的技能和用户规模远大于我们。
-2. **触达渠道**：没有手机 App；没有 QQ、飞书、钉钉、Telegram、WhatsApp。
-3. **平台**：没有 macOS 原生版(只能跑 Docker)；Windows 安装包偏大(约 1.9 GB + 900 MB 模型包)。
-4. **沙箱**：没有 DeepSeek-TUI 那样的操作系统级沙箱，安全主要靠确认机制和权限开关。
-5. **团队协作**：单人 / 小团队定位，没有多成员、组织权限。
+**数据会上传吗？**
+不会主动上传。对话、记忆、文件都在你的机器上；只有你配置的模型接口，以及你让它搜索、访问的网站会收到请求。没经你明确同意，它不会把文件传到公网。
 
----
+**桌面版和服务器版选哪个？**
+自己一台电脑用，选桌面版。要 24 小时在线（定时任务、微信机器人），选服务器版。两个都装也可以。
 
-## 优点与不足
+**能用 Claude / GPT 吗？**
+能，只要是 OpenAI 兼容接口，或者经兼容网关转发。
 
-**优点**
+**锁屏了还能操控电脑吗？**
+文件、进程、装软件这类命令行操作可以。要看屏幕的操作，锁屏时会告诉你原因和解决办法。
 
-- **一个大脑，四个入口**：网页、命令行、微信 / 企微、API 共用一套记忆和技能。
-- **真能干活**：自己拆任务、跑命令、验证结果；交付带证据；中途能插话纠正。
-- **全场景**：编程、办公文档、搜索调研、知识库、配音视频、生图生视频、定时任务、流水线、操控电脑、服务器运维。
-- **私有化**：自托管，模型任选，数据不出门；桌面版只对本机开放。
-- **好扩展**：工具是插件(一个文件)，技能是一个 `SKILL.md`，外部项目靠挂载接入，拔掉环境变量即卸载。
-- **可观察**：调用链路、子代理任务树、用量看板、完整执行记录。
-- **工程化**：1800+ 自动化测试，发布前必须全过；公开包有隐私自检；桌面版更新失败自动回滚。
+**怎么自己编译 / 打 Windows 安装包？**
+见 [docs/BUILD.md](docs/BUILD.md)。
 
-**不足**
-
-- 效果依赖模型的工具调用能力，太小的模型容易绕圈。
-- 文档和界面以中文为主，英文文档没那么全。
-- Windows 桌面版较新，复杂情况(多显示器、远程桌面断开后重连)还在持续打磨。
-- 网页端没有语音输入；没有手机 App。
-- 单用户设计，不适合直接给一个组织多人共用。
-
----
-
-## 自己编译与发布
-
-### 服务器镜像
-
-```bash
-./start.sh --build                     # 用仓库里的 Dockerfile 构建 litecode:v12-r1 并启动
-```
-
-`Dockerfile` 把系统库、Python 依赖、Playwright 浏览器、noVNC、sherpa-onnx 都装好；代码目录在 `docker-compose.yml` 里按目录挂载，改代码不用重建镜像，`./start.sh --restart` 即可。
-
-### Windows 安装包
-
-在 Linux 构建机上(需要 Docker、Go 1.26+、`makensis`，磁盘留 8 GB)：
-
-```bash
-./start.sh --build                                         # 先有基础镜像 litecode:v12-r1
-LITECODE_DIST_DIR=$PWD/dist/win \
-LITECODE_UPDATE_URL=https://你的下载目录/ \
-LITECODE_NO_PUSH=1 \
-bash packaging/release.sh 2.0.6 --full                     # 出完整离线安装包 + 代码更新包 + latest.json
-```
-
-- 产物在 `LITECODE_DIST_DIR`：`LiteCode-Setup-<版本>.exe`、`litecode-code-<版本>.tar.gz`、`latest.json`(以及有模型源时的 `litecode-models-*.tar`)。
-- `LITECODE_UPDATE_URL` 是托盘检查更新、下载模型的地址：把上面这些文件放到这个目录即可(任何静态文件服务器都行)。
-- 只改了代码时去掉 `--full`，1~2 分钟出一个约 9 MB 的代码更新包，桌面用户托盘会提示更新。
-- 脚本会先跑全部测试(`scripts/run_release_tests.sh`)，任何失败都停止；`lib/version.py` 的版本号必须和发布号一致。
-
-### 测试
-
-```bash
-cd litecodeext && python3 -m pytest -q tests/     # 单元与集成测试
-bash tests/smoke.sh                               # 冒烟测试
-cd packaging/windows && go test ./... && go vet ./...
-```
-
----
-
-## 目录结构与架构
+## 项目结构
 
 ```
-   微信 / 企微机器人 ┐
-   命令行 litecli    ├──▶  网关 :18789 (OpenAI 兼容; 智能体循环、工具、记忆都在这)
-   浏览器 ──────────┘             ▲
-                                  │
-                    Web UI :18790 (对话、产物、看板、DAG、定时任务、知识库、技能、设置)
-                                  │
-         ┌───────────┬────────────┼─────────────┬──────────────┐
-      SearXNG     知识库 PG      Windows 节点     SSH 主机      ComfyUI / 模型服务
+ 微信 / 企微 ┐
+ 命令行      ├──▶ 网关 :18789（OpenAI 兼容；智能体循环、工具、记忆）
+ 浏览器 ─────┘           ▲
+                  网页 :18790（对话、产物、看板、流水线、设置）
+                         │
+      SearXNG · 知识库 · Windows 节点 · SSH 主机 · ComfyUI
 ```
 
 | 目录 | 内容 |
 |---|---|
-| `litecodeext/litecode_server.py` | 网关与智能体主循环入口 |
-| `litecodeext/web_ui.py` + `routers/` | Web 服务与各 API 路由 |
-| `litecodeext/web_assets/` | 前端(原生 JS，无构建步骤) |
-| `litecodeext/lib/` | 智能体循环、记忆、工具分组、Windows 节点、安全等核心库 |
-| `litecodeext/core/` | 工具分派、搜索、TTS、记忆存储 |
-| `litecodeext/plugins/` | 插件：工具、知识库、生图等，丢一个文件就多一个工具 |
-| `litecodeext/skills/` | 110 个技能(`SKILL.md` + 脚本) |
-| `packaging/` | Windows 桌面版(Go 托盘 + NSIS 安装包 + WSL 系统包)与发布脚本 |
-| `docs/` | 架构、桌面版、知识库、版本约定等文档 |
+| `litecodeext/` | 主程序：网关 `litecode_server.py`、网页 `web_ui.py`、`lib/` 核心库、`plugins/` 工具插件、`skills/` 技能、`web_assets/` 前端 |
+| `packaging/` | Windows 桌面版（Go 托盘 + NSIS 安装包 + WSL 系统包）和发布脚本 |
+| `docs/` | 架构、桌面版、知识库、编译说明 |
 
-更深入的说明见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+工具是插件（一个文件），技能是一个 `SKILL.md` 加脚本，都可以自己加。架构细节见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
 
----
+## 最新版本
 
-## 常见问题
+### v2.0.13 「上桌」 (2026-10-23)
 
-**Q：没有显卡能用吗？**
-能。模型可以用任何 API；本地配音是纯 CPU；知识库向量模型也是 CPU 跑的 ONNX。
+- 🔌 **能力接入**：左上角新入口，统一接入生图、视频、语音合成/识别、音乐、搜索、通知等外部服务；左侧列表、右侧明文用法，一键测试、设默认；输入框打 `@` 引用某个服务，完整明文随消息带给 LiteCode。预设 29 个常用服务模板。
+- 🧭 **决策思考技能 11 个**：事前验尸、决策矩阵、红队反驳、二阶后果、概率校准、偏差检查、复盘、优先级分诊等。
+- 🌐 **百万字长文翻译** `long-translate`：术语表、并发、断点续跑、保留 Word/Markdown/EPUB/字幕格式、质检报告。
+- 📐 **画图技能** `diagram`：Mermaid / Graphviz 本地渲染流程图、架构图、时序图，PlantUML 按需安装；PPT 和文档里的示意图都用它。
+- 👁️ **识图场景模式**：表格、UI 原型、参考图反推生图提示词、图表读数、报错截图诊断；统一"如实识别"规则。
+- 📖 **README 重写**：三种装法（Windows 安装包 / Linux Docker / WSL + Docker）按步骤写清楚，附排障表；版本历史挪到 [CHANGELOG.md](CHANGELOG.md)；补上 MIT 许可证文件和编译说明 [docs/BUILD.md](docs/BUILD.md)。
+- 🏷️ **镜像版本号跟着发版走**：Docker 镜像改为 `litecode:latest` + `litecode:<版本号>`，不再固定叫 `v12-r1`；老镜像启动时自动改名接上，不用重建。
+- 🪟 **完整安装包更新**：托盘代码更新优先走 GitHub；启动横幅不再显示错误的默认密码。
 
-**Q：数据会上传到哪里吗？**
-不会主动上传。对话、记忆、文件都在你的机器上。只有你配置的模型接口、你让它搜索或访问的网站会收到对应请求。没有你的明确要求，它不能把文件传到公网文件站。
+**v2.0.12**：查完网页即关浏览器；桌面版没有 Docker 时给出中文提示；托盘代码更新优先走 GitHub。
 
-**Q：Windows 桌面版能开机自启、关机后定时任务还跑吗？**
-桌面版开机自启；但电脑关机时它也停了，需要"关机也跑"的定时任务请用服务器版。
-
-**Q：锁屏了它还能操控电脑吗？**
-命令行类操作(文件、进程、装软件)锁屏也能做；需要看界面的操作在锁屏时会明确告诉你原因和解决办法(比如远程桌面会话可以用 `tscon` 接回控制台)。
-
-**Q：能用 Claude / GPT 吗？**
-能，只要是 OpenAI 兼容接口或经兼容网关转发都行。
-
-**Q：怎么升级？**
-服务器版：`git pull && ./start.sh --restart`(依赖变了用 `--build`)。桌面版：托盘「检查更新」。
-
----
-
-## 版本历史
-
-### v2.0.12 「上桌」 (2026-10-23)
-
-> 桌面版细节打磨：断网也能配音和查知识库，搜索更快，远程操控电脑在锁屏 / 断线时会说清楚原因。
-
-**v2.0.12**
-- 🧹 **查完网页就关**：搜索和读网页结束立即关掉页面，没有页面时整个浏览器退出，不再一直挂着。
-- 🐳 **没有 Docker 时说人话**：桌面版容器面板不再报 `ConnectError: [Errno 2]`，改为提示本机没有 Docker、远程容器怎么管。
-- ⬆️ **托盘代码更新优先走 GitHub**：先读 GitHub 上的 `latest.json` 下载标签源码包，连不上再用备用下载源。
-
-**v2.0.11**
-- 🔍 **可以用远程 SearXNG**：`config.json` 的 `search.searxng_url` 填一个 SearXNG 地址(可带口令路径)，本机没有 SearXNG 的桌面版也能用上主力搜索。
-
-**v2.0.10**
-- 🌐 **开着本机代理也能抓网页**：代理的 fake-ip 地址(198.18.x)和 IPv6 映射的公网地址不再被当成内网拦截，真内网照拦。
-
-**v2.0.9**
-- 🔄 **网页侧边栏自动刷新**：微信、企微或后台新建和更新的对话，不用手动刷新就会出现；正在看的对话有新消息自动更新。
-- 💬 **加了微信机器人就自动打开微信开关**，服务重启后机器人自动恢复。
-- 🪟 **本机操控更稳**：OpenSSH 优先用自带安装包(Windows Update 只作兜底且限时)；Python 和桌面代理依赖随安装包分发；接入脚本清掉继承的 Python 环境变量；子系统默认国内源。
-
-**v2.0.8**
-- 🪟 **修复开着本机代理时 Windows 安装失败**("读默认配置失败: invalid character 'w'")：WSL 的代理提示不再混进安装器读取的配置和版本号；检测到本机代理时，安装器自动把 WSL 切到镜像网络(子系统里也能用这个代理，已有的 `networkingMode` 设置不动)。
-
-**v2.0.7**
-- 💬 **微信桥升级 0.3.0**：扫码后要输配对码时，微信管理面板里直接出现输入框；已绑定的机器人重新扫码时复用登录，上下线会通知服务端。
-- 🔄 **桌面版可以直接从 GitHub 更新**：发版就是推一个标签，托盘按仓库里的 `latest.json` 下载对应的源码包安装。
-
-**v2.0.6**
-- ⚙️ **设置**：高级配置里识图模型等引用模型的字段、搜索模式、日志级别改成下拉；当前模型的 id / 地址等跟着模型列表走、不在这里单改；DAG 工具步的工具名和子 DAG 名可下拉选择。
-- 📦 **开源版可直接构建**：公开仓库附带 noVNC 和 SearXNG 配置，`./start.sh` 第一次运行自动生成配置；Windows 安装包可用 `LITECODE_UPDATE_URL` 指定自己的更新地址。
-
-**v2.0.5**
-- 🪟 **完整安装包更新**：托盘修复(模型包导入、启动目录)进入安装包；网页显示的版本号与发布号一致，发版时强制校验。
-
-**v2.0.4**
-- 🔍 **桌面版搜索快 5 倍**：没有 SearXNG 时中文先走 bing / sogou，失败引擎自动冷却，一次搜索从 45 秒降到 8 秒左右。
-- 🖥️ **锁屏 / 断线诊断**：截图失败时报出本会话真实状态(断开 / 锁屏 / 远程桌面最小化)并给出处理办法；远程桌面锁屏可直接 `tscon` 接回控制台。
-- 🖱️ **坐标自动判断**：点击时没说坐标是按截图还是按屏幕，会自动推断，不再反复报错。
-- 🗣️ **配音成片走本地**：video-studio 配音优先用本地纯 CPU 引擎，失败再用在线语音。
-- 🧠 **关思考那一轮不再把推理写进正文**；追加要求的那一轮不再被催着拆任务。
-- 🎨 **ComfyUI 同网段自动复用已记住的 SSH 跳板**。
-
-**v2.0.3**
-- 🧩 **技能管理**：输入框 `/` 选技能，技能面板(分组、启停、安全扫描、安装)，技能市场(Anthropic / ClawHub / SkillHub / GitHub)，对话里新建技能。
-- 📊 **用量看板**：token 账本、按小时 / 技能 / 工具统计，导出 CSV 和离线 HTML 报告。
-- 🔗 **调用链路时间线 + 友好报错**：每一步中文名、状态、用时；报错分类、给建议、可从失败处继续。
-- 🔍 **搜索**：SearXNG 为主并固定版本，可选火山豆包搜索；停用效果差的引擎；新增 `stock_quote` 实时行情。
-- 🗣️ **本地纯 CPU 配音**：sherpa-onnx + Kokoro，引擎可插拔；对话里就能添加、测试、切换大模型(`manage_models`)。
-- 🎨 **ComfyUI 生图 / 生视频技能**：给 `地址:端口` 就能用，Qwen-Image 2.1 与 MiniMax H3 四种模式实测跑通。
-- 📚 **知识库**：PostgreSQL + pgvector + 本地中文向量模型，文件存本地，检索带出处。
-- 📄 **文档工坊**：HTML 优先，配真实照片和图表，导出 PDF / 可编辑 PPTX / DOCX / 长图并质检。
-- 🤖 **子代理任务树**：可观察、可进入、可补充指令；工作树分支先审再合并。
-- 💰 **财神爷**：仓位控制视角，A 股 / 港股 / 美股 / 币安 U 本位合约(杠杆、强平价估算)。
-- 🖥️ **桌面版操控本机**：默认装 OpenSSH 并开机自启，本机节点 `this-pc`；"这台电脑"一律指 Windows；给你打开的程序以普通权限运行。
-- 🛡️ **公网上传闸**：你没要求公开分享时，禁止把文件传到公网文件站和图床。
-- 📦 **模型包单独发布**：安装包回到 2 GB 以内，本地配音和知识库模型由托盘后台下载。
-
-<details>
-<summary>v2.0.0 ~ v2.0.2 「上桌」 (2026-10-21)</summary>
-
-> 搬上桌面：Windows 双击安装就能用；干活的时候也能插话，看到它走偏随口纠正一句，它马上改，不用停下重来。
-
-- 🗣️ **运行中插话**：回车是「补充」，「⚡ 立即」是「打断调整」，插话显示在步骤时间线里。
-- ⏹️ **停止真的停**：1 秒内生效，本会话的后台进程一并停掉。
-- 🧠 **纠正一次就记住**：中途说"用国内源"，当场照做并记进记忆。
-- 🔍 **部署先搜后下**：模型、镜像、包的确切名字先搜索再下载；一律走国内源，大下载放后台。
-- 📎 **交付文件直接预览**：回复里写出文件路径就出预览和下载卡片。
-- 🪟 **Windows 桌面版**：离线安装包(自带 WSL)，桌面图标、托盘、开机自启；代码更新约 10 MB，起不来自动回滚。
-- 🎬 **录屏**：每一轮自动录成带步骤字幕的 mp4，可回放下载。
-- 🔗 **分享与统计**：只读分享链接(1/7/30 天，可撤销)；每轮显示 token 用量和耗时。
-- 🤔 **想太久不再空等**：思考绕圈被截断后直接动手。
-- 👁️ **识图走能看图的模型**：主模型不能看图时自动转给识图模型。
-- 🎨 **界面改版**：暖白主题、一体化输入框、会话按时间分组、工具过程折叠、设置改右侧抽屉、手机可用。
-- 🧠 **记忆像人一样记**：偏好 / 身份写进全局档案；新值覆盖旧值；改写的问法也能召回；可查可删。
-- 🖱️ **远程操控电脑更稳**：按控件名点击、新窗口自动跟随、等画面稳定再操作、收尾逐条核对；节点忙时自动排队；传输 1 GB 带 sha256 校验。
-- 📦 **大文件**：上传 1 GB 流式落盘；下载断点续传；任意大小文件分段读。
-- 🎬 **抖音与音视频**：分享链接解析、无水印下载、文案解读；配音成片多轨对齐并自动校验；配乐。
-- 🛡️ **更可靠**：技能长文完整加载；"已验证"只认最后一次修改之后的测试；升级备份校验通过才删；测试失败阻止发布。
-- 💰 **省一半 token**：固定提示从约 4.9 万降到 2.5 万(低频工具按需加载)，成功率不变。
-- 🪟 **桌面版更皮实**：升级中途被强杀可自动恢复；服务意外停止半分钟内拉回；不再每次启动都新开窗口。
-
-</details>
-
-<details>
-<summary>v1.10.16.91 「把门」 (2026-10-19)</summary>
-
-> 门有人把着：没登录进不来，外面塞进来的"指令"不算数，密码自己随时能换。
-
-- 🔑 **修改登录密码**：「设置」里改密码，改完其他设备自动退出；命令行 `litecli passwd`。
-- 🤖 **对话里换模型**：只改当前对话用的模型；`/model 名字` 切换，`/model default` 恢复；每个模型有「测试」按钮。
-- 🛡️ **防提示注入**：外部内容一律只当数据；识别到注入话术后，敏感动作都要你确认。
-- 🚪 **没登录进不来**：远程桌面不再单独开端口；网关统计接口必须带 token；分享链接最长 30 天。
-- 🧹 **安全加固**：回复渲染前做 HTML 过滤；密钥打码；预览 SVG / HTML 放进沙箱；修了几处路径穿越。
-
-</details>
-
-<details>
-<summary>v1.10.16.90 「利索」 (2026-10-19)</summary>
-
-> 干活利索，不磨洋工：等东西有数，出错不空转；一个人忙不过来，就叫上帮手一起干。
-
-- 👥 **后台帮手**：一句话派出后台子代理，网页面板看进度、补充指令、叫停；写代码的帮手各用独立工作副本并行改，结束自动合并；交付必须带证据。
-- ⏱️ **不再空等、不再空转**：等后台任务有明确结束信号；超时规则真正生效并带回最后输出；不把正常轮询当死循环。
-- 🎬 **视频更有料**：8 种文案风格、文案检查；配音逐句起伏；字幕按每句真实时间对齐；12 套配色、6 种背景、多角色配音。
-- 🪟 **Windows 更稳更安全**：改完文件回读核对；命令行开关成为真正的权限边界；下发代码签名校验；代理更新坏了自动换回上一版。
-- ⚡ **长对话更顺**：分段渲染、按页加载、图片懒加载。
-
-</details>
-
-<details>
-<summary>v1.10.16.89 「跑腿」 (2026-10-16)</summary>
-
-> 腿脚勤快，心里有数：你说一句，它就在你自己的 Windows 上把事办了——发微信、进直播间发弹幕、翻聊天记录把原文复制给你。
-
-- 🪟 **Windows 一键接入**：「添加 Windows」生成一条命令，在那台电脑管理员终端粘贴回车；电脑只往外连，不开端口；「完全卸载」一键清干净。
-- 🤖 **通用桌面操作**：微信、QQ、Chrome、直播间……看截图自己点、输入、滚动、右键复制、读剪贴板；不写死任何软件流程。
-- 🔄 **电脑端自动更新、自己会好**：服务器更新后空闲时自动跟上；进程崩了自动重启。
-- 🛡️ **发消息更稳**：同名联系人先问你；不清空你的草稿；发之前核对窗口标题。
-
-</details>
-
-<details>
-<summary>v1.10.16.88 「憨包」 / v2026.10.16 「夜班」 (2026-10-16)</summary>
-
-> 你下班了，它还在干活：关掉网页任务照跑，一句话交出一条能发的视频。
-
-- 🎬 **一句话出抖音视频**：写口播、配音、做动画、配乐，交付竖版 mp4、封面、发布包；出片前过事实核对、版面自检、抽帧终检三道关。
-- 🔌 **关网页任务不停**：对话改在后台跑，回来自动接上进度，多标签页实时同步。
-- 🧯 **系统提醒更准、更安静**：批量写文件不再被当成死循环；同一提醒只提醒一次。
-- 🛡️ **单次请求可禁用工具**：`disabled_tools: ["web"]`，做离线模式和公平评测。
-- 📏 **评测**：附带 SWE-bench Verified 官方测评脚本，默认断网并检查模型有没有偷偷上网。
-
-</details>
-
-<details>
-<summary>v1.3 ~ v1.10 (2026-05 ~ 2026-10)</summary>
-
-| 版本 | 主题 |
-|---|---|
-| v1.3 | 一致性、定时器、埋点、自治机制 |
-| v1.4 | 工具与智能：记忆、MCP、RAG、先计划后执行、项目化 |
-| v1.5 | DAG 编排、权限、Hooks、网页端到端测试、6 类复杂场景 |
-| v1.6 | 浏览器、LSP、技能治理、桌面 |
-| v1.7 | 自治、SWE-bench、营销 |
-| v1.8 | 回测、埋点、审计、三端对齐 |
-| v1.9 | 稳定性、性能、网页端到端测试、国内构建 |
-| v1.10 | 路由拆分、插件挂载、DAG 编辑器、记忆面板、Windows 节点、对标 ChatGPT 的网页体验 |
-
-</details>
-
-<details>
-<summary>v1.1 / v1.1.1 长文写作 (2026-04-18)</summary>
-
-- **21 个小说题材技能**：玄幻、修真、武侠、都市、诡异、科幻、言情、历史、架空、末世、电竞、种田、系统流、无限流、穿越、重生、宫斗、悬疑等，每个题材一个专门技能。
-- **长篇架构** `long-novel`：百万字级 / 300+ 章(世界观、人物库、滚动摘要)；`outline-generation` 大纲驱动；`longtext-processing` 超长文档并行分片。
-- **深度报告** `deep-report`：5000~20000 字，边写边搜，引用密度检查，评审回炉。
-- **去 AI 味审计** `anti-ai-tell-audit`：套话、空洞形容词密度打分。
-
-</details>
-
-<details>
-<summary>v12.x 早期内部版本 (2026-04)</summary>
-
-- **v12.9**：子代理中断传播、子代理实时流式输出；加密货币 / A 股 / 港股 / 天气直连数据源；前端拆分为本地静态资源，不依赖 CDN。
-- **v12.7**："子任务"关键词强制路由到子代理。
-- **v12.6**：僵尸进程三层防御、自主学习闭环、技能安全机制、提示词重构、死循环检测真正实现。
-- **v12.5**：推理内容兼容(多家后端)、微信回复延迟从 82 秒降下来、网页显示推理过程。
-- **v12.2**：基于 73 个任务全链路测试修复工具分派、多智能体编排、记忆压缩不触发等问题。
-- **v12.1**：服务端拆分；vLLM / OpenAI / Anthropic / Ollama / DeepSeek 五种后端推理参数自动适配。
-
-</details>
-
----
-
-<div align="center">
-
-觉得有用的话，点个 ⭐ 就是最大的支持。有问题、有想法，欢迎提 [issue](https://github.com/wfcz10086/litecode/issues)。
-
-</div>
+全部版本见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 许可证
 
-MIT
+[MIT](LICENSE)。觉得有用就点个 ⭐；有问题欢迎提 [issue](https://github.com/wfcz10086/litecode/issues)。

@@ -15,13 +15,14 @@ async function send(){
     msg=(msg?msg+'\n':'')+refs;
   }
   _pendFiles.length=0; try{if(window._pendFiles!==_pendFiles) window._pendFiles=_pendFiles;}catch(e){} _renderPendFiles();
-  inp.value='';arx(inp);addMsg('user',msg);
+  const _pv=window.LCProviderRefs?LCProviderRefs.take():[];  /* `@` 引用的能力接入 chip: 明文随本轮上下文发给 agent */
+  inp.value='';arx(inp);const _um=addMsg('user',msg);if(_pv.length&&window.LCProviderRefs)LCProviderRefs.tagMsg(_um&&_um.wrap,_pv);
   if(!cur){const d=await(await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:msg.slice(0,40)+(msg.length>40?'…':'')})})).json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0});renderSL();}
   const s=sess.find(x=>x.id===cur);if(s&&s.name==='New Chat'){s.name=msg.slice(0,30)+(msg.length>30?'…':'');renderSL();}
   document.getElementById('ct').textContent=s?.name||cur;
   const _sk=window.LCSkills?LCSkills.take():[];  /* `/` 选择器选中的技能 chip: 本轮强制使用 */
   const bodyEl=_newAiBubble();
-  await _streamTurn(bodyEl,()=>fetch(`/api/chat/${cur}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg, strategist_mode: !!window._stratMode, skills:_sk})}));
+  await _streamTurn(bodyEl,()=>fetch(`/api/chat/${cur}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:msg, strategist_mode: !!window._stratMode, skills:_sk, providers:_pv.map(p=>p.id)})}));
 }
 /* [chat-runs 2026-10-16] 轮次在后台跑, 本页只是订阅者: 发消息 / 刷新重连 / 切回会话都走 _streamTurn.
  * _streamGen 每次切走 / 中断 +1, 旧订阅的收尾不再动按钮状态, 也不触发自动重连 (见 chat_attach.js) */

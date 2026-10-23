@@ -1,5 +1,5 @@
 # ╔══════════════════════════════════════════════════════════════╗
-# ║  LiteCode v12-r1  docker-compose (host network)             ║
+# ║  LiteCode docker-compose (host network)                     ║
 # ║  配置说明见 .env.example                                     ║
 # ║  [host-mode] 容器直接使用宿主机网络栈：                      ║
 # ║   - 宿主机上占用的端口 = 容器监听的端口, 无需 -p 映射        ║
@@ -16,7 +16,7 @@ services:
       args:
         LITECODE_TAR: litecodeext_v12.tar.gz
 
-    image: litecode:v12-r1
+    image: litecode:latest   # start.sh 构建时另打 litecode:<版本号> 标签
     container_name: litecode
     restart: unless-stopped
     command: all

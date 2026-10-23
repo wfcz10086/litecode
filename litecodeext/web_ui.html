@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="/assets/ui_v2.css">
 <link rel="stylesheet" href="/assets/skills.css">
 <link rel="stylesheet" href="/assets/usage_dashboard.css">
+<link rel="stylesheet" href="/assets/providers.css">
 <!-- [trace 2026-10-22] 调用链路状态/展开 + 友好错误卡片 -->
 <link rel="stylesheet" href="/assets/chat_timeline.css">
 <link rel="stylesheet" href="/assets/kb_panel.css">
@@ -67,7 +68,7 @@
 <div id="ov" onclick="closeSB()"></div>
 <div id="app">
   <div id="sb">
-    <div id="sbh"><div class="logo"><div class="lm">&#x26A1;</div><span>Lite<span class="ld">Code</span></span></div><button class="ud-entry" id="ud-entry" onclick="openUsageDash()" title="token 用量看板">📊 看板</button><button id="ncb" onclick="newChat()" title="新建">+</button></div>
+    <div id="sbh"><div class="logo"><div class="lm">&#x26A1;</div><span>Lite<span class="ld">Code</span></span></div><button class="ud-entry" id="ud-entry" onclick="openUsageDash()" title="token 用量看板">📊 看板</button><button class="ud-entry pv-entry" id="pv-entry" onclick="openProviders()" title="接上生图、视频、语音、搜索等服务, LiteCode 就能直接调用">🔌 能力接入</button><button id="ncb" onclick="newChat()" title="新建">+</button></div>
     <div id="sb-tools" style="padding:6px 8px;border-bottom:1px solid var(--bd)">
       <input id="sess-search" placeholder="搜索会话..." oninput="renderSL()" style="width:100%;padding:4px 6px;font-size:11px;background:var(--bg2);border:1px solid var(--bd);border-radius:4px;color:var(--tx);margin-bottom:4px">
       <select id="sess-sort" onchange="renderSL()" style="width:100%;padding:3px 4px;font-size:10px;background:var(--bg2);border:1px solid var(--bd);border-radius:4px;color:var(--tx);font-family:var(--mono)">
@@ -167,4 +168,6 @@
 <script src="/assets/skills_panel.js"></script>
 <script src="/assets/skill_market.js"></script>
 <script src="/assets/kb_panel.js"></script>
+<script src="/assets/providers_panel.js"></script>
+<script src="/assets/provider_ref.js"></script>
 </body></html>

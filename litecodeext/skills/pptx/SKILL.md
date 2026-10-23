@@ -82,6 +82,8 @@ Choose colors that match your topic — don't default to generic blue. Use these
 
 **Every slide needs a visual element** — image, chart, icon, or shape. Text-only slides are forgettable.
 
+**Flowcharts, architecture, sequence diagrams, mind maps, timelines**: render them with the `diagram` skill (Mermaid or Graphviz → PNG with `--scale 3 --bg transparent`, theme matching the deck) and insert the image; never draw diagrams with an AI image model (the text comes out garbled).
+
 **Layout options:**
 - Two-column (text left, illustration on right)
 - Icon + text rows (icon in colored circle, bold header, description below)

@@ -106,6 +106,8 @@ async def chat_completions(request: Request):
                            disabled_tools=_tf.parse(body.get("disabled_tools")),
                            skills=tuple(str(x) for x in (body.get("skills") or [])
                                         if isinstance(x, str))[:5] if isinstance(body.get("skills"), list) else (),
+                           providers=tuple(str(x) for x in (body.get("providers") or [])
+                                           if isinstance(x, str))[:5] if isinstance(body.get("providers"), list) else (),
                            usage_source=str(body.get("litecode_source") or "")[:16])
     if _sm_entry or _sm_note or _think:
         gen = with_turn_model(gen, _sm_entry, _sm_note, model, thinking=_think)

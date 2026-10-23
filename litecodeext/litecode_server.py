@@ -186,6 +186,7 @@ async def agent_stream(
     strategist: bool = False,   # [2026-09-03] 权谋/多方博弈推演模式 (前端 chip)
     disabled_tools: frozenset = frozenset(),   # [2026-10-13] 本次请求禁用的工具, 见 lib/tool_filter.py
     skills: tuple = (),   # [2026-10-22] 用户本轮强制使用的技能名 (lib/skill_turn.py)
+    providers: tuple = (),   # [2026-10-23] 用户本轮 `@` 引用的接入 id (lib/providers.py, 完整明文进本轮上下文)
     usage_source: str = "",     # [usage-ledger] 账本来源 (web/timer/dag...), 空 = 按会话 id 前缀推
 ) -> AsyncGenerator[str, None]:
     # 同 session 的并发请求串行化：防止两个 client 同时跑 agent loop 导致 LLM 并行/文件竞争
@@ -196,7 +197,8 @@ async def agent_stream(
     # finally 依赖 _ctx.new_msgs / _ctx.base_history / _ctx.sid_tag, 若构造放 try 内
     # 且抛异常, finally 引用 _ctx 会 UnboundLocalError (老 bug 换个形式复活)
     _ctx = TurnContext(sid_tag=session_id[:8] if session_id else "anon", session_id=session_id,
-                       disabled_tools=frozenset(disabled_tools or ()), forced_skills=tuple(skills or ()))
+                       disabled_tools=frozenset(disabled_tools or ()), forced_skills=tuple(skills or ()),
+                       forced_providers=tuple(providers or ()))
     # [usage-ledger 2026-10-22] 本轮记账作用域: turn_id 就是首帧 msg_id; 技能边跑边记进 _ctx.turn_skills
     _turn_id = uuid.uuid4().hex[:12]
     _ledger_tok = _usage_ledger.begin_turn(session_id, _turn_id, source=usage_source, skills=_ctx.turn_skills)

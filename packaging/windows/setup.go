@@ -166,7 +166,7 @@ func runSetup() error {
 	}
 
 	// 1b. 本机代理 → WSL 镜像网络 (否则子系统用不了代理, wsl.exe 还会往输出里打警告)
-	ensureWSLNetworking(say)
+	ensureWSLConfig(say)
 
 	// 2. 子系统: 没有就导入; 已有但系统包版本不同 → 备份数据并校验 → 换新 → 恢复。
 	// 备份在新版服务通过健康检查后才删; 中途失败重跑安装会从备份接着恢复 (见 upgrade 包)。

@@ -15,6 +15,7 @@ _READ_ONLY = (
     "tail_log", "list_skills", "git_status", "git_diff", "git_log",
     "list_bg", "list_timers", "snapshot_list", "task_list", "ssh_list_hosts",
     "github_search", "github_repo", "package_search",
+    "list_providers", "get_provider",
 )
 
 # spawn_agent / update_map 由主循环特殊处理, 不走 execute_tool;

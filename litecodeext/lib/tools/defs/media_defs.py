@@ -22,10 +22,15 @@ MEDIA_DEFS = [
                                    "description": "多张图一起看 (最多 8 张, 按顺序为第 1~N 张): 对比 / 找不同 / 按顺序看一组截图时用; 给了就忽略 path"},
                     "mode": {
                         "type": "string",
-                        "enum": ["auto", "ocr", "describe"],
+                        "enum": ["auto", "ocr", "table", "ui", "image_prompt", "chart", "error", "describe"],
                         "description": (
                             "auto(默认)=模型自己判断文字图还是画面图并选对应输出; "
                             "ocr=强制只逐字提取文字 (明确知道是文档时用, 避免模型跑去描述画面); "
+                            "table=只提取表格, 输出 Markdown 表格 (账单/报表/成绩单); "
+                            "ui=界面原型/设计稿/网页App截图 → 布局、组件、配色、文字, 用来照着写前端; "
+                            "image_prompt=参考图 → 反推中英文生图提示词 (复刻风格/做同款图、短视频配图); "
+                            "chart=图表 → 读出数据表和趋势结论; "
+                            "error=报错/终端截图 → 抄出错误并给原因和修复步骤; "
                             "describe=强制只描述画面 (明确知道是照片/场景图时用)"
                         ),
                     },

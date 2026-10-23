@@ -70,7 +70,7 @@ bash packaging/release.sh 1.10.17.0 --full
 脚本步骤：
 1. `scripts/make_public_release.sh` 导出公开版并自检（无密钥 / 无私人数据 / 无真实主机），不过就停。
 2. 打代码包（`litecode/` + `entrypoint.sh`，来自公开导出）。
-3. `--full` 时：以 `litecode:v12-r1` 为底换上公开版代码 → `docker export | docker import` 压平成单层（底层旧代码/状态不随包带出）→ `privacy_scan.py`（生产 config 里的真实密钥 + 内部 IP/主机名，命中即停）→ 加 WSL 配置导出根文件系统 → NSIS 打离线安装包。
+3. `--full` 时：以 `litecode:latest` 为底换上公开版代码 → `docker export | docker import` 压平成单层（底层旧代码/状态不随包带出）→ `privacy_scan.py`（生产 config 里的真实密钥 + 内部 IP/主机名，命中即停）→ 加 WSL 配置导出根文件系统 → NSIS 打离线安装包。
 4. 上传到发布目录，写 `latest.json`（版本号 + 各文件 sha256 + 大小）。
 
 发布目录由 `packaging/windows/main.go` 的 `BaseURL` 决定（构建时可用 `-ldflags "-X main.BaseURL=..."` 覆盖），建议放在只能按文件名下载、关闭目录列表的静态目录里。

@@ -247,6 +247,9 @@ _GROUP_NAMES = [
     ("规划协作", ("brainstorming", "writing-plans", "executing-plans", "subagent-driven-development",
               "dispatching-parallel-agents", "workflow-runner", "product-manager", "using-superpowers",
               "skill-creator", "writing-skills")),
+    ("决策思考", ("decision-compass", "first-principles", "premortem", "decision-matrix", "red-team",
+              "second-order-thinking", "calibrated-forecast", "bias-check", "after-action-review",
+              "discernment-nudge", "priority-triage")),
     ("人物视角", ("companion", "mao-zedong")),   # 私有人物技能在自己的 SKILL.md 写 group: 人物视角 (名字不进公开代码)
     ("编程开发", ("frontend-design", "api-builder", "go", "python-dev", "mcp-builder", "template-engine",
               "webapp-testing", "e2e-self-test", "bug-localization", "large-project", "dependency-audit",

@@ -288,6 +288,13 @@ def _merge_cached_turn_meta(old_msgs, new_msgs):
     "P/C/T · N轮 · 耗时" 全被抹掉 (只有刚结束的那轮会补挂, 下次重导又没了)。
     按 (第几轮, 用户消息开头) 对齐, 挂到该轮最后一条 assistant 上。"""
     old_t, new_t = _turns(old_msgs), _turns(new_msgs)
+    # [providers 2026-10-23] 用户消息上 `@` 引用的接入 chip (providers) 只存在 web 缓存里, 重导别抹掉
+    old_u = [m for m in old_msgs if m.get("role") == "user"]
+    new_u = [m for m in new_msgs if m.get("role") == "user"]
+    for ou, nu in zip(old_u, new_u):
+        if ou.get("providers") and not nu.get("providers") and \
+                str(ou.get("content") or "")[:40] == str(nu.get("content") or "")[:40]:
+            nu["providers"] = ou["providers"]
     for i, (head, asst) in enumerate(new_t):
         if i >= len(old_t) or old_t[i][0] != head or not asst:
             continue
@@ -538,7 +545,7 @@ _init_state(
     base_dir=BASE,
     workspace=Path(CFG.get("paths", {}).get("workspace_base", "/tmp/litecode_workspace")),
     sessions_dir=SESSIONS_DIR,
-    cfg_path=BASE / "config.json",
+    cfg_path=Path(os.environ.get("LITECODE_CONFIG", "").strip() or BASE / "config.json"),   # 第二实例别写生产配置
     model=MODEL,
     ctx_window=CTX_WIN,
     web_port=WEB_PORT,

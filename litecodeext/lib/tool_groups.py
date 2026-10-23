@@ -94,6 +94,14 @@ GROUPS: dict[str, dict] = {
         "keywords": ("朗读", "配音", "语音合成", "合成语音", "文字转语音", "转语音", "转成语音", "tts", "读出来",
                      "念出来", "念一下", "读一遍", "播报", "音色", "发音人", "的声音读", "语音版"),
     },
+    "providers": {
+        "label": "能力接入: 外部生图/生视频/配乐/通知等服务 (网页「🔌 能力接入」里配置)",
+        "tools": ("list_providers", "get_provider", "generate_image", "generate_video", "generate_music", "send_notify"),
+        "keywords": ("生图", "文生图", "画图", "画一张", "画一幅", "画一只", "画个", "出图", "生成图片", "图片生成", "ai绘画",
+                     "生成视频", "生视频", "文生视频", "图生视频", "视频生成", "配乐", "背景音乐", "bgm", "生成音乐", "做首歌",
+                     "发通知", "群机器人", "webhook", "发邮件", "能力接入", "接入的", "provider", "comfyui",
+                     "seedream", "seedance", "即梦", "可灵", "海螺", "万相", "searxng", "博查", "tavily", "对象存储"),
+    },
     "settings": {
         "label": "大模型配置: 新增/测试/切换默认/删除",
         "tools": ("manage_models",),

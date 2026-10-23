@@ -25,6 +25,6 @@ def register(name: str):
 # side-effect: populate REGISTRY
 from . import (  # noqa: E402,F401
     agent, bg_ops, browser, browser_ref, code_research, code_search, dag, error_search,
-    file_io, git_ops, kb, media, memory_ops, meta, model_admin, remote, skills, snapshot_ops, ssh_hosts, symbol_edit,
+    file_io, git_ops, kb, media, memory_ops, meta, model_admin, providers, remote, skills, snapshot_ops, ssh_hosts, symbol_edit,
     task_ops, timer, tool_groups, tts, windows_desktop, windows_nodes, windows_system,
 )

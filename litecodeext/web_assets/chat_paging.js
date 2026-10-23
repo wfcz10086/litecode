@@ -37,6 +37,7 @@ function _lcRenderBlocks(msgs, base, before, keepReal = 0) {
     const w = r.wrap;
     if (m.steer && typeof _lcMarkSteer === 'function') _lcMarkSteer(w, m.urgent);
     if (m.meta && m.meta.skills && window.LCSkills) LCSkills.tagMsg(w, m.meta.skills);
+    if (m.providers && window.LCProviderRefs) LCProviderRefs.tagMsg(w, m.providers);   /* `@` 引用的能力接入 */
     w.dataset.midx = m._i0; w.dataset.midxEnd = m._i1; w.dataset.mkey = m._key;
     if (k < blocks.length - keepReal) w.classList.add('lc-cv');
     if (before) el.insertBefore(w, before);

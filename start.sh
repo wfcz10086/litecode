@@ -1,11 +1,14 @@
 #!/bin/bash
-# LiteCode v12-r1 一键启动脚本
+# LiteCode 一键启动脚本 (镜像版本号跟 litecodeext/lib/version.py 走)
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yml"
 ENV_FILE="$SCRIPT_DIR/.env"
-IMAGE_TAG="litecode:v12-r1"
+VERSION=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' "$SCRIPT_DIR/litecodeext/lib/version.py" 2>/dev/null)
+VERSION=${VERSION:-dev}
+IMAGE_TAG="litecode:latest"          # compose 和打包脚本都用 latest; 每次构建另打一个版本号标签
+IMAGE_VER_TAG="litecode:$VERSION"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
@@ -17,7 +20,7 @@ die()   { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
 usage() {
 cat << EOF
-${BOLD}LiteCode v12-r1 启动脚本${NC}
+${BOLD}LiteCode $VERSION 启动脚本${NC}
 
   ./start.sh              自动检测，有镜像直接启动，没有则构建
   ./start.sh --build      强制重新构建
@@ -87,6 +90,10 @@ setup_dirs() {
 }
 
 image_exists() {
+    # 老版本构建的镜像叫 litecode:v12-r1: 直接改名接上, 不用重新构建
+    if ! docker image inspect "$IMAGE_TAG" &>/dev/null && docker image inspect litecode:v12-r1 &>/dev/null; then
+        docker tag litecode:v12-r1 "$IMAGE_TAG" && info "沿用已有镜像 litecode:v12-r1 → $IMAGE_TAG"
+    fi
     docker image inspect "$IMAGE_TAG" &>/dev/null 2>&1
 }
 
@@ -94,7 +101,9 @@ do_build() {
     info "构建 $IMAGE_TAG（首次约 10-15 分钟）..."
     cd "$SCRIPT_DIR"
     COMPOSE --env-file "$ENV_FILE" build --progress=plain
-    image_exists && ok "构建成功" || die "构建失败"
+    image_exists || die "构建失败"
+    docker tag "$IMAGE_TAG" "$IMAGE_VER_TAG"
+    ok "构建成功: $IMAGE_TAG ($IMAGE_VER_TAG)"
 }
 
 do_up() {
@@ -114,13 +123,12 @@ do_up() {
 
     echo ""
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
-    echo -e "${GREEN}  LiteCode v12-r1 启动成功${NC}"
+    echo -e "${GREEN}  LiteCode $VERSION 启动成功${NC}"
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
     echo -e "  Web UI  : ${CYAN}http://localhost:${WEB_PORT:-18790}${NC}"
     echo -e "  API     : ${CYAN}http://localhost:${SERVER_PORT:-18789}${NC}"
     echo -e "  远程桌面: ${CYAN}http://localhost:${WEB_PORT:-18790}/vnc/${NC} (登录 Web UI 后)"
-    echo -e "  密码    : ${YELLOW}CHANGE_ME_PASSWORD${NC}"
-    echo -e "  模型    : ${YELLOW}${MODEL_ID:-glm-5}${NC}"
+    echo -e "  密码    : config.json 里的 ${YELLOW}web_ui.auth.password${NC}"
     echo -e "${BOLD}════════════════════════════════════════════${NC}"
     echo -e "  ./start.sh --logs    查看日志"
     echo -e "  ./start.sh --shell   进入容器"

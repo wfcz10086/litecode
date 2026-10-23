@@ -263,7 +263,8 @@ main() {
 
     echo ""
     echo -e "${B}╔══════════════════════════════════════════╗${NC}"
-    echo -e "${B}║  LiteCode v12-r1 + WeChat Bridge         ║${NC}"
+    local ver; ver=$(sed -n 's/^VERSION = "\(.*\)"/\1/p' /opt/litecode/lib/version.py 2>/dev/null)
+    echo -e "${B}║  LiteCode ${ver:-dev} + WeChat Bridge${NC}"
     echo -e "${B}║  Mode: ${G}${mode}${NC}${B}                                ║${NC}"
     echo -e "${B}╚══════════════════════════════════════════╝${NC}"
     echo ""

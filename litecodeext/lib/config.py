@@ -6,7 +6,8 @@ from pathlib import Path
 _log_fmt = "\033[2m%(asctime)s\033[0m %(message)s"
 logging.basicConfig(level=logging.DEBUG, format=_log_fmt, datefmt="%H:%M:%S",
                     stream=sys.stdout, force=True)
-for _n in ("uvicorn.access", "uvicorn.error", "httpx", "httpcore"):
+for _n in ("uvicorn.access", "uvicorn.error", "httpx", "httpcore",
+           "websockets", "PIL", "urllib3", "multipart", "asyncio", "python_multipart"):   # websockets: 远程桌面每帧一行, 日志会爆
     logging.getLogger(_n).setLevel(logging.WARNING)
 
 # [FIX] 过滤 uvicorn "Invalid HTTP request received" — curl -v / 端口扫描会刷屏

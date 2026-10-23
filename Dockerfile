@@ -1,7 +1,7 @@
 # [v1.9] 华为云 swr 镜像加速（国内拉取更快）
 FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/ubuntu:24.04
 
-LABEL maintainer="LiteCode v12-r1 + WeChat Bridge"
+LABEL maintainer="LiteCode + WeChat Bridge"
 LABEL description="LiteCode OpenClaw AI Agent - Ubuntu 24.04 (国内源加速版)"
 LABEL version="v1.10.16.91-gatekeeper"
 

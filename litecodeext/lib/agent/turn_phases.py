@@ -32,6 +32,7 @@ from lib.session import _interrupt_lock
 from lib.session import get_history as _get_history
 from lib.skills import auto_load_skills
 from lib import skill_turn as _skill_turn
+from lib import providers as _providers_turn
 from lib.sse import sse_content
 from lib.sse import sse_done
 from lib.sse import sse_error
@@ -254,6 +255,7 @@ def _turn_setup_context(
 
     _ctx.base_history = _get_history(_ctx.session_id) if _ctx.session_id else []
     _skill_turn.begin(_ctx.turn_skills, _ctx.forced_skills)   # 本轮技能: 强制指定 + 使用记录
+    _providers_turn.turn_begin(getattr(_ctx, "forced_providers", ()))   # 本轮 `@` 引用的接入 (lib/turn_sources.providers_ref)
     # 随消息变化的委派指令/匹配技能/记忆召回挂到本轮 user 消息前, system prompt 逐轮字节不变
     # (lib/turn_context.py + lib/turn_sources.py); 历史里存过的上下文按原样拼回
     _hist_anchor, _ctx.turn_context, _ctx.base_history = _turn_prepare(
