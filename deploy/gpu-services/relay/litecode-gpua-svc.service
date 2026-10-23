@@ -1,0 +1,16 @@
+[Unit]
+Description=LiteCode gpu-a 服务端口转发 (经 38003 反向隧道; 只监听本机 127.0.0.1, 由 nginx 带口令对外)
+After=network-online.target
+
+[Service]
+User=ubuntu
+# 47011 语音识别 SenseVoice / 47012 音乐 ACE-Step / 47013 配音 IndexTTS / 47014 动漫视频 AniSora / 47015 生图 Qwen-Image (ComfyUI) / 47016 视频 MiniMax H3 (ComfyUI)
+ExecStart=/usr/bin/ssh -N -o BatchMode=yes -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:47011:127.0.0.1:18011 -L 127.0.0.1:47012:127.0.0.1:18012 \
+  -L 127.0.0.1:47013:127.0.0.1:18013 -L 127.0.0.1:47014:127.0.0.1:18014 \
+  -L 127.0.0.1:47015:127.0.0.1:8488 -L 127.0.0.1:47016:127.0.0.1:8188 gpu-a
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

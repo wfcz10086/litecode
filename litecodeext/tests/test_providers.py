@@ -363,3 +363,168 @@ def test_reimport_keeps_provider_chips():
     other = [{"role": "user", "content": "别的问题"}]
     ns["_merge_cached_turn_meta"](old, other)
     assert "providers" not in other[0]
+
+
+# ── 2026-10-23 小白化: 明文自动识别 / 自动发现 / 测试失败人话原因 ──
+
+def test_infer_from_plain_text():
+    from lib.provider_infer import infer
+    d = infer({"name": "运营群", "usage": "钉钉运营群机器人 webhook https://oapi.dingtalk.com/robot/send?access_token=tk123456 "
+                                        "加签密钥 SEC0123456789abcdef0123, 日报发这里"})
+    assert d == {"base_url": "https://oapi.dingtalk.com/robot/send?access_token=tk123456", "kind": "notify",
+                 "protocol": "dingtalk_webhook", "extra.secret": "SEC0123456789abcdef0123"}
+    tpl = infer({"usage": "开了加签 LiteCode 会自动计算\ncurl 'https://oapi.dingtalk.com/robot/send?access_token=粘贴你的token'"})
+    assert "base_url" not in tpl and "extra.secret" not in tpl          # 模板占位不当真值
+    fs = infer({"usage": "签名校验密钥: abcSecret99\ncurl -X POST 'https://open.feishu.cn/open-apis/bot/v2/hook/h00k'"})
+    assert fs["protocol"] == "feishu_webhook" and fs["extra.secret"] == "abcSecret99"
+    sf = infer({"usage": f"Key: {KEY}\ncurl -s https://api.siliconflow.cn/v1/images/generations -H 'Authorization: Bearer {{api_key}}' "
+                         "-d '{\"model\": \"Qwen/Qwen-Image\", \"prompt\": \"{prompt}\"}'"})
+    assert sf == {"model": "Qwen/Qwen-Image", "api_key": KEY, "protocol": "openai_images", "kind": "image",
+                  "base_url": "https://api.siliconflow.cn/v1"}
+    mail = infer({"usage": "SMTP 服务器: smtp.qq.com:465\n发件邮箱: me@qq.com\n授权码: abcdabcdabcd\n发给: a@b.com, c@d.com"})
+    assert mail["protocol"] == "smtp" and mail["api_key"] == "abcdabcdabcd" and mail["extra.to"] == "a@b.com, c@d.com"
+    cf = infer({"name": "ComfyUI", "usage": "地址: 10.0.0.5:8188\n做视频用"})
+    assert cf == {"base_url": "10.0.0.5:8188", "protocol": "comfyui", "kind": "video"}
+    assert infer({"usage": "随便写的一段话, 啥也识别不出"}) == {}
+
+
+def test_presets_have_how_and_curl():
+    from lib.provider_infer import curls
+    from lib.provider_presets import PRESETS
+    for p in PRESETS:
+        assert p["how"] and p["usage"], p["key"]
+        if p["verified"] and p["protocol"] not in ("smtp", "s3"):
+            assert curls(p["usage"]), p["key"]
+        assert "{api_key}" not in p["how"]
+    need = {"dingtalk_bot", "feishu_bot", "wecom_bot", "smtp", "siliconflow_image", "ark_seedream", "dashscope_wan_image",
+            "minimax_hailuo", "bocha", "tavily", "comfyui_qwen", "openai_images", "sensevoice_gpu", "acestep_gpu",
+            "indextts2_gpu", "siliconflow_asr"}
+    assert need <= {p["key"] for p in PRESETS}
+
+
+def test_create_infers_and_reinfers_on_edit(cfg):
+    p = P.create({"name": "群", "usage": "钉钉 webhook https://oapi.dingtalk.com/robot/send?access_token=aaa111"})
+    assert p["kind"] == "notify" and p["protocol"] == "dingtalk_webhook" and p["base_url"].endswith("aaa111")
+    assert set(p["inferred"]) >= {"kind", "protocol", "base_url"}
+    q = P.update(p["id"], {"usage": "钉钉 webhook https://oapi.dingtalk.com/robot/send?access_token=bbb222 加签密钥 SEC00112233445566778899"})
+    assert q["base_url"].endswith("bbb222") and q["extra"]["secret"] == "SEC00112233445566778899"
+    r = P.update(p["id"], {"base_url": "https://x/robot/send?access_token=manual",
+                           "usage": "钉钉 https://oapi.dingtalk.com/robot/send?access_token=ccc"})
+    assert r["base_url"].endswith("manual")                      # 手填的高级字段优先, 不被识别覆盖
+    plain = P.create({"name": "说明卡", "usage": "公司内网有个服务, 找张三要地址"})
+    assert plain["kind"] == "other" and plain["protocol"] == "http"   # 识别不出也照样保存
+    old = P.create({"name": "旧卡", "kind": "image", "protocol": "comfyui", "base_url": "1.2.3.4:8188"})
+    assert P.update(old["id"], {"note": "x"})["protocol"] == "comfyui"
+
+
+def test_discover_existing(tmp_path, monkeypatch):
+    from lib import provider_discover as PD
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "comfyui_endpoints.json").write_text(json.dumps({
+        "http://10.0.0.5:8188": {"url": "http://10.0.0.5:8188", "via": "gpu-a", "last_used": "2026-10-22"}}))
+    monkeypatch.setenv("WORKSPACE", str(ws))
+    monkeypatch.delenv("COMFY_ENDPOINTS_FILE", raising=False)
+    monkeypatch.delenv("SEARXNG_URL", raising=False)
+    got = PD.discover({"search": {"searxng_url": "http://sx:8080/"}}, items=[])
+    by = {x["id"]: x for x in got}
+    assert by["auto_searxng"]["base_url"] == "http://sx:8080" and by["auto_searxng"]["readonly"]
+    c = by["auto_comfy_10_0_0_5_8188"]
+    assert c["protocol"] == "comfyui" and c["base_url"] == "10.0.0.5:8188" and c["extra"] == {"via_ssh": "gpu-a"}
+    assert "auto_tts" in by and all(x["auto"] for x in got)
+    mine = [P.normalize({"name": "m", "protocol": "comfyui", "base_url": "http://10.0.0.5:8188"}),
+            P.normalize({"name": "s", "protocol": "searxng", "base_url": "http://sx:8080"})]
+    ids = {x["id"] for x in PD.discover({"search": {"searxng_url": "http://sx:8080"}}, items=mine)}
+    assert "auto_comfy_10_0_0_5_8188" not in ids and "auto_searxng" not in ids   # 用户已手动加过就不重复
+    monkeypatch.setattr(PD, "_tcp_ok", lambda h, p, timeout=0.3: False)
+    assert "auto_searxng" not in {x["id"] for x in PD.discover({}, items=[])}
+
+
+def test_failure_hints(monkeypatch):
+    from lib.provider_hints import explain
+
+    def dd(errcode, errmsg, secret=""):
+        _mock(monkeypatch, lambda req: httpx.Response(200, json={"errcode": errcode, "errmsg": errmsg}))
+        p = P.normalize({"name": "d", "kind": "notify", "protocol": "dingtalk_webhook",
+                         "base_url": "https://oapi.dingtalk.com/robot/send?access_token=t", "extra": {"secret": secret}})
+        return run(provider_probe.test(p))
+    r = dd(310000, "sign not match, more: [https://ding-doc.dingtalk.com]", "SEC1")
+    assert not r["ok"] and r["hint"].startswith("加签不对")
+    assert "没写密钥" in dd(310000, "sign not match")["hint"]
+    assert "关键词" in dd(310000, "keywords not in content")["hint"]
+    assert "白名单" in dd(310000, "ip 1.2.3.4 not in whitelist")["hint"]
+    assert dd(0, "ok")["ok"]
+    _mock(monkeypatch, lambda req: httpx.Response(200, json={"code": 19021, "msg": "sign match fail or timestamp is not within one hour"}))
+    fs = run(provider_probe.test(P.normalize({"name": "f", "kind": "notify", "protocol": "feishu_webhook",
+                                              "base_url": "https://open.feishu.cn/open-apis/bot/v2/hook/x"})))
+    assert "签" in fs["hint"]
+    _mock(monkeypatch, lambda req: httpx.Response(200, json={"errcode": 93000, "errmsg": "invalid webhook url"}))
+    wc = run(provider_probe.test(P.normalize({"name": "w", "kind": "notify", "protocol": "wecom_webhook", "api_key": "K"})))
+    assert "Webhook 地址无效" in wc["hint"]
+    _mock(monkeypatch, lambda req: httpx.Response(401, json={"error": "invalid key"}))
+    k = run(provider_probe.test(P.normalize({"name": "o", "protocol": "openai_images", "base_url": "http://o/v1"})))
+    assert k["hint"].startswith("Key 不对")
+
+    def boom(req):
+        raise httpx.ConnectError("refused")
+    _mock(monkeypatch, boom)
+    c = run(provider_probe.test(P.normalize({"name": "c", "protocol": "comfyui", "base_url": "10.9.9.9:8188"})))
+    assert c["hint"].startswith("地址打不开")
+    tpl = P.normalize({"name": "t", "kind": "notify", "protocol": "dingtalk_webhook",
+                       "usage": "curl 'https://oapi.dingtalk.com/robot/send?access_token=粘贴你的token'"})
+    assert "粘贴" in run(provider_probe.test(tpl))["hint"]
+    assert "授权码" in explain({"protocol": "smtp"}, {"ok": False, "error": "SMTPAuthenticationError: (535, b'Login fail')"})
+    for st, word in ((404, "路径"), (429, "频繁"), (502, "出错"), (402, "余额")):
+        assert word in explain({"protocol": "http"}, {"ok": False, "status": st, "error": "x"})
+
+
+def test_probe_curl_and_untested(monkeypatch):
+    seen = _mock(monkeypatch, lambda req: httpx.Response(404 if "litecode-test" in str(req.url) else 200,
+                                                         json={"code": "NotFound"}))
+    usage = (f"Key: {KEY}\ncurl -s -X POST https://dash/api/v1/services/x -H 'Authorization: Bearer {{api_key}}' -d '{{}}'\n"
+             "# 测试用 (只验证 Key)\ncurl -s https://dash/api/v1/tasks/litecode-test -H 'Authorization: Bearer {api_key}'")
+    p = P.prepare_draft({"name": "万相", "usage": usage})
+    r = run(provider_probe.test(p))
+    assert r["ok"] and "Key 有效" in r["detail"] and seen[-1].method == "GET"
+    assert seen[-1].headers["authorization"] == f"Bearer {KEY}"
+    _mock(monkeypatch, lambda req: httpx.Response(401, json={"code": "InvalidApiKey"}))
+    assert run(provider_probe.test(p))["hint"].startswith("Key 不对")
+    u = run(provider_probe.test(P.prepare_draft({"name": "说明", "usage": "公司内网服务, 找张三要地址"})))
+    assert u["ok"] and u["untested"] and "自行调用" in u["detail"]
+
+
+def test_router_adopt_and_record(client, monkeypatch):
+    lst = client.get("/api/providers").json()
+    ids = [b["id"] for b in lst["builtins"]]
+    assert "builtin_bgm" in ids and "auto_searxng" in ids                    # cfg 里 search.searxng_url = http://s
+    assert client.put("/api/providers/auto_searxng", json={"name": "x"}).status_code == 400
+    a = client.post("/api/providers/auto_searxng/adopt").json()["provider"]
+    assert a["protocol"] == "searxng" and a["base_url"] == "http://s" and not a.get("readonly")
+    assert "auto_searxng" not in [b["id"] for b in client.get("/api/providers").json()["builtins"]]
+    _mock(monkeypatch, lambda req: httpx.Response(200, json={"results": [{}]}))
+    assert client.post(f"/api/providers/{a['id']}/test").json()["ok"]
+    assert P.find(a["id"])["last_test"]["ok"] is True
+    d = client.post("/api/providers/test", json={"name": "群", "usage": "钉钉 http://fake/robot/send?access_token=ok"}).json()
+    assert d["recognized"] == {"kind": "notify", "protocol": "dingtalk_webhook"}
+
+
+def test_send_notify_manual_fallback(cfg):
+    from core.tools.handlers import providers as H
+    P.create({"name": "老板微信", "kind": "notify", "usage": "发到老板个人微信: 用 wechat 工具发给 wxid_boss"})
+    out, _ = run(H.h_send_notify("s", {"text": "日报好了", "channel": "老板微信"}))
+    assert "不是能自动发送的渠道" in out and "wxid_boss" in out and "日报好了" in out
+
+
+def test_curl_multiline_quoted_body():
+    """2026-10-23 实跑发现: -d '{ … }' 引号里跨多行 (多行 JSON / 歌词) 时只截到第一行, 测试报"引号不闭合"。"""
+    from lib.provider_infer import curls
+    text = ("提交任务:\n```bash\ncurl -s -X POST http://h:1/release_task \\\n  -H 'Content-Type: application/json' \\\n"
+            "  -d '{\n    \"prompt\": \"edm\",\n    \"lyrics\": \"[verse]\\n第一行\\n\"\n  }'\n# 下一条\n```\n"
+            "curl -s http://h:1/health\n")
+    cs = curls(text)
+    assert len(cs) == 2 and cs[1] == "curl -s http://h:1/health"
+    req = P.parse_curl(cs[0])
+    assert req["method"] == "POST" and req["url"] == "http://h:1/release_task"
+    body = req.get("content") or json.dumps(req.get("json"))
+    assert json.loads(body)["lyrics"] == "[verse]\n第一行\n"
+    assert P.first_curl(text) == cs[0]

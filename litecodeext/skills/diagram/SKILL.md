@@ -4,7 +4,7 @@ description: >
   画流程图、时序图、类图、状态图、ER 图、甘特图、思维导图、架构图、关系图: 写 Mermaid / Graphviz(dot) / PlantUML 源码,
   本地渲染成 PNG 或 SVG (不联网、不用显卡)。PPT、文档、报告、短视频里需要示意图时也用它。
   触发: "画个流程图" "时序图" "架构图" "UML" "plantuml" "mermaid" "graphviz" "思维导图" "甘特图" "ER 图"。
-  照片/插画/动漫风格的图不归这里 (用 comfyui-image 或 cpu-image)。
+  照片/插画/动漫风格的图不归这里 (用 comfyui-image)。
 aliases: [流程图, 时序图, 序列图, 架构图, 类图, 状态图, ER图, 甘特图, 思维导图, 脑图, 关系图, 拓扑图, 组织架构图, UML, uml, plantuml, PlantUML, mermaid, Mermaid, graphviz, dot 图]
 ---
 

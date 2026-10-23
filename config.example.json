@@ -422,5 +422,131 @@
     "kb": {
         "enabled": true,
         "dsn": "postgresql://litecode_kb:47ed289d2d452dca93764b2e8049d995@127.0.0.1:15432/litecode_kb"
-    }
+    },
+    "providers": [
+        {
+            "id": "p_1ba4bb15",
+            "name": "ACE-Step 音乐 (gpu-a)",
+            "kind": "music",
+            "protocol": "http",
+            "base_url": "http://127.0.0.1:47012",
+            "api_key": "",
+            "model": "",
+            "extra": {},
+            "usage": "带人声带歌词的歌曲/配乐首选 (开源, gpu-a 自建, 免费)。用法: 提交任务 → 轮询 → 下载, 见下面 curl。\n## 1. ACE-Step 1.5 音乐生成 (带人声歌词) —— 已上线\n\n- 名称: ACE-Step 1.5 (XL-turbo 4B DiT + 5Hz LM 1.7B)\n- 类型: 音乐生成 / 文生歌曲 (任务制: 提交 → 轮询 → 下载)\n- 地址 (本机转发到 gpu-a): http://127.0.0.1:47012\n- 许可证: MIT (代码与权重)\n- 镜像: ccr.ccs.tencentyun.com/preview/litecode-svc-acestep:v1 (权重已打进镜像)\n- GPU: 卡 6 (独占), 显存约 17 GB\n- 鉴权: 无 (只监听本机)\n- 实测: 60 秒 128 BPM 中文 EDM, 热启动端到端 16.8 秒 (含 LM 规划 thinking=true); 冷启动首个请求约 60 秒\n\n# 测试用 (只查服务状态, 不生成)\ncurl -s http://127.0.0.1:47012/health\n\n提交任务:\n```bash\ncurl -s -X POST http://127.0.0.1:47012/release_task \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"prompt\": \"失恋但很嗨的电子舞曲, EDM, DJ, 128 BPM, 强劲四拍底鼓, 合成器主旋律, 女声主唱\",\n    \"lyrics\": \"[verse]\\n你说再见那天我没有哭\\n把你的照片全都删除\\n霓虹在闪 心跳在加速\\n今晚我只想要放肆跳舞\\n\\n[chorus]\\n分手快乐 音乐再大声一点\\n把眼泪甩进旋转的灯光里面\\n没有你 我照样闪耀整夜\\n跟着鼓点 忘了昨天\\n\",\n    \"vocal_language\": \"zh\",\n    \"audio_duration\": 60,\n    \"bpm\": 128,\n    \"thinking\": true,\n    \"audio_format\": \"mp3\"\n  }'\n# → {\"data\":{\"task_id\":\"<TASK_ID>\",\"status\":\"queued\",...},\"code\":200}\n```\n\n查询结果 (status: 0=排队/生成中, 1=成功, 2=失败):\n```bash\ncurl -s -X POST http://127.0.0.1:47012/query_result \\\n  -H 'Content-Type: application/json' \\\n  -d '{\"task_id_list\":[\"<TASK_ID>\"]}'\n# 成功时 data[0].result 是 JSON 字符串, 其中 [0].file = \"/v1/audio?path=...\"\n```\n\n下载音频:\n```bash\ncurl -s -o song.mp3 \"http://127.0.0.1:47012/v1/audio?path=<file 字段里 path= 后面的值>\"\n```\n\n一条命令跑完 (提交 + 轮询 + 下载, 需要 python3):\n```bash\nH=http://127.0.0.1:47012\nTID=$(curl -s -X POST $H/release_task -H 'Content-Type: application/json' \\\n  -d '{\"prompt\":\"华语流行, 女声, 钢琴\",\"lyrics\":\"[verse]\\n清晨的风吹过小城的街\\n\",\"vocal_language\":\"zh\",\"audio_duration\":30,\"thinking\":true,\"audio_format\":\"mp3\"}' \\\n  | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"data\"][\"task_id\"])')\nwhile :; do R=$(curl -s -X POST $H/query_result -H 'Content-Type: application/json' -d \"{\\\"task_id_list\\\":[\\\"$TID\\\"]}\")\n  S=$(echo \"$R\" | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"data\"][0][\"status\"])'); [ \"$S\" != 0 ] && break; sleep 2; done\nF=$(echo \"$R\" | python3 -c 'import json,sys;print(json.loads(json.load(sys.stdin)[\"data\"][0][\"result\"])[0][\"file\"])')\ncurl -s -o song.mp3 \"$H$F\" && echo \"saved song.mp3 (status=$S)\"\n```\n\n常用参数: `prompt`(风格描述) `lyrics`(带 [verse]/[chorus] 段落标签) `vocal_language`(zh/en/ja…) `audio_duration`(秒, 10~600) `bpm` `key_scale` `thinking`(true=LM 先规划, 质量更好) `batch_size` `audio_format`(mp3/wav/flac) `seed`。其它接口: `GET /health`、`GET /v1/models`。完整文档见镜像内 /app/docs/en/API.md。\n\n---\n\n",
+            "note": "⭐ 带人声、带歌词的歌首选 (开源 ACE-Step 1.5, MIT, gpu-a 卡6, 2 分钟歌约 1 分钟出); 由 ai-song 技能固定流程调用",
+            "default": true,
+            "enabled": true,
+            "inferred": [
+                "base_url"
+            ],
+            "last_test": {
+                "ok": true,
+                "ts": 1792731816,
+                "msg": "跑了明文里的 curl: HTTP 200 · {\"data\":{\"status\":\"ok\",\"service\":\"ACE-Step API\",\"version\":\"1.0\",\"models_initialized\":true,\"llm_initialized\":true,\"loaded_model\":\"acestep-v15-xl-turbo\",\"loaded_l…"
+            }
+        },
+        {
+            "id": "p_da5c519c",
+            "name": "SenseVoice 语音识别 (gpu-a)",
+            "kind": "asr",
+            "protocol": "openai_asr",
+            "base_url": "http://127.0.0.1:47011/v1",
+            "api_key": "",
+            "model": "",
+            "extra": {},
+            "usage": "语音转文字首选 (开源, gpu-a 自建, 免费)。\n## 2. SenseVoice 语音识别 —— 已上线\n\n- 名称: SenseVoiceSmall (FunASR) + fsmn-vad\n- 类型: 语音识别 ASR (中/粤/英/日/韩, 附带情绪与事件标签)\n- 地址 (本机转发到 gpu-a): http://127.0.0.1:47011\n- 许可证: 代码 MIT; 权重 FunASR Model License v1.1 (官方澄清: 遵守许可即可商用, 需保留署名/模型名)\n- 镜像: ccr.ccs.tencentyun.com/preview/litecode-svc-sensevoice:v1 (权重已打进镜像, 已推送)\n- GPU: 卡 5 (与 IndexTTS-2 共卡), 显存约 1.2 GB\n- 鉴权: 无 (只监听本机)\n- 实测: 8.7 秒中文语音识别 0.06~0.27 秒, 文字全对 (数字自动规整成 \"3点\")\n\nOpenAI 兼容:\n```bash\ncurl -s http://127.0.0.1:47011/v1/audio/transcriptions \\\n  -F file=@speech.wav -F model=sensevoice -F language=zh -F response_format=json\n# → {\"text\":\"今天天气很好，我们下午3点在会议室……\"}\n# response_format: json | text | verbose_json (多返回 language/duration/情绪标签/raw_text)\n# language: auto | zh | en | yue | ja | ko\n```\n\n官方兼容接口 (可批量):\n```bash\ncurl -s http://127.0.0.1:47011/api/v1/asr -F files=@a.wav -F files=@b.mp3 -F lang=auto\n```\n支持 wav/flac/ogg 直读, mp3/m4a/webm 等经 ffmpeg 转码。\n\n---\n\n",
+            "note": "",
+            "default": true,
+            "enabled": true,
+            "inferred": [
+                "protocol",
+                "base_url"
+            ],
+            "last_test": {
+                "ok": true,
+                "ts": 1792731764,
+                "msg": "服务可达 (该平台没有 /models 列表接口, 未实际调用, key 未验证)"
+            }
+        },
+        {
+            "id": "p_3eb413a3",
+            "name": "IndexTTS 配音 (gpu-a)",
+            "kind": "tts",
+            "protocol": "openai_tts",
+            "base_url": "http://127.0.0.1:47013/v1",
+            "api_key": "",
+            "model": "",
+            "extra": {},
+            "usage": "# 测试用 (只查服务状态)\ncurl -s http://127.0.0.1:47013/health\n\n配音首选 (开源模型, gpu-a 自建, 免费; 支持情绪和参考音频克隆)。\n## 3. IndexTTS-2.5 语音合成 / 声音克隆 —— 已上线\n\n- 名称: IndexTTS-2.5 (B 站 Index 团队; 官方主分支已是 2.5, 比 2 多了语速/时长系数、拼音控制更准、推理更快)\n- 类型: 语音合成 TTS (零样本克隆 + 情绪控制 + 语速), 中/英/日/西/阿\n- 内网地址: http://127.0.0.1:47013   \n- 许可证: bilibili Model Use License —— 可免费商用; 月活 >1 亿或年营收 >10 亿元需另行申请; 不得用其输出改进其它商用 AI 模型; 须保留版权声明。非 OSI 开源许可\n- 镜像: ccr.ccs.tencentyun.com/preview/litecode-svc-indextts2:v1 (38.7 GB, 权重已打进镜像, 已推送)\n- GPU: 卡 5 (与 SenseVoice 共卡), 显存约 7.3 GB\n- 实测 (每段都用 SenseVoice 反向识别核对):\n  - 普通朗读 6.5 秒音频, 首次请求 6.7 秒 (含预热): 识别 \"欢迎使用语音合成服务，这是一段普通朗读测试。今天是10月23日。\" 全对\n  - 情绪 (instructions=\"非常兴奋激动\") 4.0 秒音频, 用时 3.2 秒: 文字全对, SenseVoice 情绪标签 HAPPY\n  - 参考音频克隆 5.5 秒音频, 用时 3.1 秒: 文字全对\n  - speed=0.8: 同一句时长 6.47 → 7.53 秒\n\nOpenAI 兼容朗读 (内置音色 voice_01..voice_09, `GET /v1/audio/voices` 列出):\n```bash\ncurl -s -o out.wav http://127.0.0.1:47013/v1/audio/speech -H 'Content-Type: application/json' \\\n  -d '{\"input\":\"欢迎使用语音合成服务。\",\"voice\":\"voice_01\",\"speed\":1.0,\"response_format\":\"wav\"}'\n```\n\n指定情绪 (自然语言描述情绪, emo_alpha 0~1 控制强度; 或 emo_vector 8 维 [高兴,愤怒,悲伤,害怕,厌恶,忧郁,惊讶,平静]):\n```bash\ncurl -s -o happy.wav http://127.0.0.1:47013/v1/audio/speech -H 'Content-Type: application/json' \\\n  -d '{\"input\":\"太好了！我们终于赢得了比赛！\",\"voice\":\"voice_01\",\"instructions\":\"非常兴奋激动，开心地大喊\",\"emo_alpha\":0.8}'\n```\n\n参考音频克隆 (上传 3~15 秒参考人声; 可选 emo_wav 情绪参考音频、emo_text、emo_vector、duration_factor 0.5~2):\n```bash\ncurl -s -o clone.wav http://127.0.0.1:47013/v1/audio/clone \\\n  -F \"input=这是一段声音克隆测试，用参考音频的音色来朗读新的句子。\" -F prompt_wav=@ref.wav -F response_format=mp3\n```\n响应头 `X-Elapsed` 为合成耗时。`lang`: ZH|EN|JA|ES|AR (默认 ZH)。\n\n---\n\n",
+            "note": "⭐ 配音首选: 自然中文、情绪控制、参考音频克隆 (IndexTTS 2.5, gpu-a 卡5)",
+            "default": true,
+            "enabled": true,
+            "inferred": [
+                "protocol",
+                "base_url"
+            ],
+            "last_test": {
+                "ok": true,
+                "ts": 1792734164,
+                "msg": "服务可达 (该平台没有 /models 列表接口, 未实际调用, key 未验证)"
+            }
+        },
+        {
+            "id": "p_aff45f54",
+            "name": "AniSora 动漫视频 (gpu-a)",
+            "kind": "video",
+            "protocol": "http",
+            "base_url": "http://127.0.0.1:47014",
+            "api_key": "",
+            "model": "",
+            "extra": {},
+            "usage": "# 测试用 (只查服务状态)\ncurl -s http://127.0.0.1:47014/health\n\n动漫视频: 必须给首帧图 (没有图就先用生图卡画一张动漫风首帧), 5 秒镜头约 5 分钟。\n## 4. Index-AniSora V3.2 动漫图生视频 —— 已上线\n\n- 名称: Index-AniSora V3.2 (B 站, 基于 Wan2.2 i2v-A14B, 8 步蒸馏)\n- 类型: 动漫图生视频 (首帧/尾帧/任意帧参考图 + 提示词 → 5 秒 16fps mp4); **没有纯文生视频权重**, 文生视频需先用生图服务画首帧\n- 内网地址: http://127.0.0.1:47014   \n- 许可证: Apache-2.0\n- 镜像: ccr.ccs.tencentyun.com/preview/litecode-svc-anisora:v1 (88 GB, 其中 BF16 权重 69 GB)\n- GPU: 卡 7,8,9,10,11 (5 卡 FSDP + Ulysses 序列并行), 空闲每卡 13 GB, 生成峰值每卡约 21.4 GB\n- 实测 (832×480, 81 帧 = 5.06 秒):\n  - 示例图 + 英文提示词 (小马宝莉): 生成 291 秒 (每步约 35 秒 × 8 步 + 编解码), 画面稳定, 动作符合提示 (独角兽抬蹄说话)\n  - 吉卜力风格人物图 + 中文提示词 (转头微笑): 生成 290 秒, 人物从惊讶到微笑, 动作自然\n  - 容器启动到可用约 100 秒; 任务串行, 同时只跑一个\n\n提交 (multipart; image 可传多张, positions 指定各自位置 0=首帧 0.5=中间 1=尾帧):\n```bash\ncurl -s http://127.0.0.1:47014/v1/videos \\\n  -F \"prompt=动漫风格的室内场景，角色缓缓转过头看向镜头，微笑着眨了眨眼，头发轻轻摆动，镜头缓慢推近\" \\\n  -F image=@first_frame.png -F size=832*480 -F frame_num=81\n# → {\"id\":\"<ID>\",\"status\":\"queued\",\"queue_position\":1}\n# 可选: steps=8 shift=5 guide_scale=1 seed=-1; size: 832*480 | 480*832 | 1280*720 | 720*1280 (720p 更慢、显存更紧)\n```\n\n查询 (status: queued | running | succeeded | failed):\n```bash\ncurl -s http://127.0.0.1:47014/v1/videos/<ID>\n```\n\n下载:\n```bash\ncurl -s -o out.mp4 http://127.0.0.1:47014/v1/videos/<ID>/content\n```\n\n一条命令跑完:\n```bash\nH=http://127.0.0.1:47014\nID=$(curl -s $H/v1/videos -F \"prompt=角色挥手微笑\" -F image=@first_frame.png | python3 -c 'import json,sys;print(json.load(sys.stdin)[\"id\"])')\nfor i in $(seq 90); do curl -s $H/v1/videos/$ID | grep -qE '\"(succeeded|failed)\"' && break; sleep 10; done   # 最多等 15 分钟, 超时就报错别死等\ncurl -s $H/v1/videos/$ID; curl -s -o out.mp4 $H/v1/videos/$ID/content\n```\n\n---\n\n",
+            "note": "⭐ 动漫风视频专用 (图生视频, 需首帧图, 5 秒约 5 分钟; Apache-2.0, gpu-a 卡7-11)",
+            "default": false,
+            "enabled": true,
+            "inferred": [
+                "base_url"
+            ],
+            "last_test": {
+                "ok": true,
+                "ts": 1792734164,
+                "msg": "跑了明文里的 curl: HTTP 200 · {\"status\":\"ok\",\"model\":\"Index-AniSora V3.2 i2v-A14B (bf16)\",\"world_size\":5,\"queue\":0,\"running\":0}"
+            }
+        },
+        {
+            "id": "p_49e0164b",
+            "name": "Qwen-Image 生图 (gpu-a)",
+            "kind": "image",
+            "protocol": "comfyui",
+            "base_url": "http://127.0.0.1:47015",
+            "api_key": "",
+            "model": "",
+            "extra": {
+                "self_url": "http://127.0.0.1:8188"
+            },
+            "usage": "Qwen-Image 2.1 生图 (gpu-a 卡4, ComfyUI 原生接口)。用 comfyui-image 技能的脚本调用:\n# 测试用 (只查服务状态)\ncurl -s http://127.0.0.1:47015/system_stats\n# 文生图 (竖版 768x1376; 横版 1376x768)\npython3 /opt/litecode/skills/comfyui-image/scripts/comfy.py run http://127.0.0.1:47015 -w qwen21_t2i --prompt \"日系动漫, 赛璐璐上色, 少女站在天台上\" --width 768 --height 1376\n# 改图 / 参考图\npython3 /opt/litecode/skills/comfyui-image/scripts/comfy.py run http://127.0.0.1:47015 -w qwen21_edit --input image=参考.png --prompt \"把背景换成雪夜\"\n\n服务器自访问地址 (喂给 *FromURL 节点: 参考图/参考音频走链接): http://127.0.0.1:8188  → comfy.py 加 --self-url http://127.0.0.1:8188\n",
+            "note": "⭐ 生图首选 (Qwen-Image 2.1, 中文提示词, 动漫/写实都行)",
+            "default": true,
+            "enabled": true,
+            "inferred": []
+        },
+        {
+            "id": "p_bbeb5bcf",
+            "name": "MiniMax H3 视频 (gpu-a)",
+            "kind": "video",
+            "protocol": "comfyui",
+            "base_url": "http://127.0.0.1:47016",
+            "api_key": "",
+            "model": "",
+            "extra": {
+                "self_url": "http://127.0.0.1:8188"
+            },
+            "usage": "MiniMax H3 视频 (gpu-a 卡0-3, ComfyUI; 自带环境音轨)。5 秒 = --frames 124 (帧数须 17n+5, 24fps)。\n# 测试用 (只查服务状态)\ncurl -s http://127.0.0.1:47016/system_stats\n# 图生视频 (首帧)\npython3 /opt/litecode/skills/comfyui-image/scripts/comfy.py run http://127.0.0.1:47016 -w h3_i2v --input first=首帧.png --prompt \"人物抬头看向镜头\" --frames 124 --width 480 --height 864\n# 首尾帧\npython3 /opt/litecode/skills/comfyui-image/scripts/comfy.py run http://127.0.0.1:47016 -w h3_fl2v --input first=a.png --input last=b.png --prompt \"人物转身走远\" --frames 124\n# 参考生视频 (参考图 + 参考音频, 画面随音乐: 做 MV 用)\npython3 /opt/litecode/skills/comfyui-image/scripts/comfy.py run http://127.0.0.1:47016 -w h3_r2v --input ref_image=画面.png --input ref_audio=这段歌.wav --prompt \"<Picture 1> 中的人物随 <Audio 1> 的节奏舞动\" --frames 124\n\n服务器自访问地址 (喂给 *FromURL 节点: 参考图/参考音频走链接): http://127.0.0.1:8188  → comfy.py 加 --self-url http://127.0.0.1:8188\n",
+            "note": "⭐ 视频首选 (图生/首尾帧/参考图+参考音频, 带音轨; 5 秒约 3 分钟)",
+            "default": true,
+            "enabled": true,
+            "inferred": []
+        }
+    ]
 }

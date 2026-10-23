@@ -131,7 +131,12 @@ def _load_external_prompt(session_context: str = "") -> str | None:
     try:
         tpl = PROMPT_FILE.read_text(errors="replace")
         tpl = _render_datetime(tpl)
-        tpl = tpl.replace("{{ENV}}", _get_env_probe())
+        try:
+            from .providers import prompt_brief
+            _prov = prompt_brief()
+        except Exception:
+            _prov = ""
+        tpl = tpl.replace("{{ENV}}", _get_env_probe() + _prov)
         tpl = tpl.replace("{{SKILLS}}", load_skills_index() or "(暂无 Skills)")
 
         # 加载外部 prompt 文件

@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import signal
+import time
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -16,6 +19,7 @@ from lib.session import (
 from tool_dispatch import (  # type: ignore[attr-defined]
     _bg_procs, _bg_lock, _check_pid_alive, _unregister_bg,
 )
+from tools.bg import bg_exit_code
 
 from ._deps import require_auth
 
@@ -80,9 +84,37 @@ async def steer_session_api(sid: str, request: Request):
     return {"ok": True, "queued": True, "urgent": urgent}
 
 
+# [bgcard 2026-10-23] 刚结束的后台任务再保留 10 分钟 (alive=False + exit_code), 聊天窗口的
+# 「后台进行中」卡片才能显示 "已完成 / 失败 (code=N)" 并看最后日志; 原来进程一死就从登记表删掉,
+# 只有恰好那一次轮询能看到, tail 接口也立刻 404。字段只增不改, 老调用方不受影响。
+RECENT_KEEP_S = 600
+_bg_recent: dict = {}   # pid → 列表项 (alive=False)
+
+
+def _remember_exit(sid_key, pid, info, stopped=False):
+    log_path = info.get("log", "")
+    _bg_recent[str(pid)] = {
+        "pid": str(pid), "alive": False, "sid": sid_key,
+        "cmd": info.get("cmd", ""), "log": log_path,
+        "ts": info.get("ts", 0), "keep": info.get("keep", False),
+        "exit_code": bg_exit_code(log_path) if log_path else None,
+        "stopped": stopped, "ended": time.time(),
+    }
+
+
+def _find_bg(pid):
+    with _bg_lock:
+        for sid_key, procs in _bg_procs.items():
+            if pid in procs:
+                return sid_key, dict(procs[pid])
+    return None, None
+
+
 @router.get("/v1/bgprocs")
 async def list_bgprocs(request: Request):
-    """列出后台进程，附带存活状态（用于 web UI 监控 + 重启后清理）。"""
+    """列出后台进程，附带存活状态（用于 web UI 监控 + 重启后清理）。
+    已结束的任务保留 RECENT_KEEP_S 秒: alive=False, exit_code=日志里的 [BG-EXIT code=N] (没有则 None),
+    stopped=是否用户手动停止, ended=结束时间。"""
     require_auth(request)
     # [v1.0] _bg_procs 结构变为 {sid: {pid: info}}, 此处 flatten 展开
     with _bg_lock:
@@ -95,6 +127,8 @@ async def list_bgprocs(request: Request):
         alive = await _check_pid_alive(pid)
         if not alive:
             _unregister_bg(pid)
+            _remember_exit(sid_key, pid, info)
+            continue
         result.append({
             "pid": pid, "alive": alive,
             "sid": sid_key,
@@ -102,28 +136,51 @@ async def list_bgprocs(request: Request):
             "log": info.get("log", ""),
             "ts": info.get("ts", 0),
             "keep": info.get("keep", False),
+            "exit_code": None,
         })
+    now = time.time()
+    for pid, e in list(_bg_recent.items()):
+        if now - e.get("ended", 0) > RECENT_KEEP_S:
+            _bg_recent.pop(pid, None)
+        elif not any(r["pid"] == pid for r in result):
+            result.append(dict(e))
     result.sort(key=lambda x: x["ts"], reverse=True)
     return {"procs": result, "count": len(result)}
 
 
 @router.delete("/v1/bgprocs/{pid}")
 async def kill_bgproc(pid: str, request: Request):
-    """强杀指定后台进程（用于清理端口占用）。"""
+    """强杀指定后台进程（用于清理端口占用 / 聊天窗口「停止」）。
+    后台任务都以 start_new_session 启动、自成进程组: 按组发信号, 否则只杀掉外层 bash,
+    真正干活的子进程 (python 生成视频等) 变成孤儿继续跑。"""
     require_auth(request)
     if not pid.isdigit():
         raise HTTPException(400, "invalid pid")
+    sid_key, info = _find_bg(pid)
+
+    def _sig(s):
+        try:
+            pgid = os.getpgid(int(pid))
+            if pgid != os.getpgid(0):
+                os.killpg(pgid, s)
+                return
+        except (ProcessLookupError, PermissionError):
+            pass
+        os.kill(int(pid), s)
+
     try:
-        import os as _os
-        import signal as _sig
-        _os.kill(int(pid), _sig.SIGTERM)
+        _sig(signal.SIGTERM)
         await asyncio.sleep(0.5)
         if await _check_pid_alive(pid):
-            _os.kill(int(pid), _sig.SIGKILL)
+            _sig(signal.SIGKILL)
         _unregister_bg(pid)
+        if info is not None:
+            _remember_exit(sid_key, pid, info, stopped=True)
         return {"ok": True, "pid": pid}
     except ProcessLookupError:
         _unregister_bg(pid)
+        if info is not None:
+            _remember_exit(sid_key, pid, info, stopped=True)
         return {"ok": True, "pid": pid, "note": "already gone"}
     except Exception as e:
         raise HTTPException(500, str(e))

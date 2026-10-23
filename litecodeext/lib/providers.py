@@ -21,19 +21,19 @@ import threading
 import uuid
 from contextvars import ContextVar
 
-KINDS: dict[str, dict] = {
-    "image":     {"label": "生图", "icon": "🎨", "desc": "文生图 / 改图, generate_image 工具按默认卡片自动路由"},
-    "video":     {"label": "生视频", "icon": "🎬", "desc": "文生视频 / 图生视频, 异步出片 (generate_video)"},
-    "tts":       {"label": "语音合成", "icon": "🔊", "desc": "文字转语音 / 配音 (内置 text_to_speech 之外的在线音色)"},
-    "asr":       {"label": "语音识别", "icon": "🎙️", "desc": "录音、视频转文字"},
-    "search":    {"label": "搜索", "icon": "🔎", "desc": "联网搜索接口 (SearXNG / 博查 / Tavily 等)"},
-    "music":     {"label": "音乐", "icon": "🎵", "desc": "配乐 / 歌曲生成 (generate_music), 本地 BGM 兜底"},
-    "embedding": {"label": "向量", "icon": "🧮", "desc": "文本向量化 (/v1/embeddings), 知识库检索用"},
-    "rerank":    {"label": "重排", "icon": "📶", "desc": "检索结果重排 (/v1/rerank), 知识库用"},
-    "notify":    {"label": "通知", "icon": "📣", "desc": "群机器人 / 邮件推送 (send_notify)"},
-    "storage":   {"label": "对象存储", "icon": "🗄️", "desc": "S3 兼容存储 (OSS / COS / MinIO)"},
+KINDS: dict[str, dict] = {   # desc 是给普通用户看的大白话 (面板分组说明), 不出现工具名/协议名
+    "image":     {"label": "生图", "icon": "🎨", "desc": "让 LiteCode 画图: 海报、插画、短视频配图, 也能照着参考图改图"},
+    "video":     {"label": "生视频", "icon": "🎬", "desc": "让 LiteCode 做短视频: 文字生成视频、让图片动起来"},
+    "tts":       {"label": "语音合成", "icon": "🔊", "desc": "把文字读出来: 配音、旁白、有声稿"},
+    "asr":       {"label": "语音识别", "icon": "🎙️", "desc": "把录音、视频里说的话转成文字"},
+    "search":    {"label": "搜索", "icon": "🔎", "desc": "让 LiteCode 上网查资料"},
+    "music":     {"label": "音乐", "icon": "🎵", "desc": "给视频配背景音乐、生成歌曲"},
+    "embedding": {"label": "向量", "icon": "🧮", "desc": "知识库用: 把文字变成可检索的向量 (一般不用管)"},
+    "rerank":    {"label": "重排", "icon": "📶", "desc": "知识库用: 把搜到的内容按相关度重新排序 (一般不用管)"},
+    "notify":    {"label": "通知", "icon": "📣", "desc": "任务做完自动发到你的钉钉 / 飞书 / 企微群或邮箱"},
+    "storage":   {"label": "对象存储", "icon": "🗄️", "desc": "把生成的文件存到云端存储 (OSS / COS / MinIO 等)"},
     "llm":       {"label": "大模型", "icon": "🧠", "desc": "对话模型在「模型管理」里配置"},
-    "other":     {"label": "其他", "icon": "🧩", "desc": "任意 HTTP 服务, 照明文用法调用"},
+    "other":     {"label": "其他", "icon": "🧩", "desc": "其他任何服务: 写清楚怎么调用, LiteCode 照着用"},
 }
 
 PROTOCOLS: dict[str, str] = {
@@ -55,16 +55,16 @@ PROTOCOLS: dict[str, str] = {
 
 # 内置兜底卡片: 不存 config, 列表里只读展示, 路由时排在同类最后
 BUILTINS: list[dict] = [{
-    "id": "builtin_bgm", "name": "本地 BGM (bgm-music)", "kind": "music", "protocol": "builtin",
+    "id": "builtin_bgm", "name": "本地 BGM 配乐 (内置)", "kind": "music", "protocol": "builtin",
     "base_url": "", "api_key": "", "model": "", "default": False, "enabled": True, "readonly": True,
     "extra": {"script": "skills/bgm-music/scripts/bgm_gen.py"},
-    "note": "本机程序化生成无版权配乐 (不联网, 秒级), 没有其他音乐接入或都失败时兜底",
+    "note": "本机直接生成无版权背景音乐 (不联网、免费、几秒出), 没有其他音乐接入时自动用它",
     "usage": ("python3 skills/bgm-music/scripts/bgm_gen.py --mood upbeat --duration 30 -o /tmp/litecode_workspace/music/bgm.mp3\n"
               "mood: calm 舒缓 / upbeat 轻快 / epic 史诗 / sad 伤感 / tech 科技 / warm 温暖 / funny 搞笑 / suspense 悬疑\n"
               "--loop 生成无缝循环段; --bpm / --key 调速度与调性。也可直接调 generate_music 工具。"),
 }]
 
-FIELDS = ("id","name", "kind", "protocol", "base_url", "api_key", "model", "extra", "usage", "note",
+FIELDS = ("id", "name", "kind", "protocol", "base_url", "api_key", "model", "extra", "usage", "note",
           "default", "enabled")
 MASK = "••••"
 _LOCK = threading.Lock()
@@ -130,7 +130,7 @@ def find(ref: str, items: list[dict] | None = None) -> dict | None:
     ref = str(ref or "").strip()
     if not ref:
         return None
-    items = list(items) + [normalize(b) for b in BUILTINS]
+    items = list(items) + [normalize(b) for b in BUILTINS] + _discovered()
     for p in items:
         if p["id"] == ref:
             return p
@@ -138,7 +138,18 @@ def find(ref: str, items: list[dict] | None = None) -> dict | None:
     for p in items:
         if p["name"].lower() == low:
             return p
-    return None
+    # 模型常少写括号后缀, 如 "AniSora 动漫视频" → "AniSora 动漫视频 (gpu-a)": 唯一的包含匹配也算
+    hits = [p for p in items if low in p["name"].lower() or p["name"].lower().split(" (")[0] == low]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _discovered() -> list[dict]:
+    """自动发现的已有能力 (SearXNG / ComfyUI / 内置配音), 只读; 失败就当没有。"""
+    try:
+        from .provider_discover import discover
+        return discover()
+    except Exception:
+        return []
 
 
 def _fix_defaults(items: list[dict], keep: dict | None = None) -> None:
@@ -171,12 +182,81 @@ def _unmask_extra(new: dict, old: dict) -> dict:
     return out
 
 
+# ── 从明文自动识别 (lib/provider_infer.py) ─────────────────────
+
+_EMPTY = {"protocol": "http", "kind": "other"}
+
+
+def _explicit(data: dict) -> set:
+    """调用方明确给了值的字段 (空串 / 默认值不算); extra 里的键记成 extra.xxx。"""
+    out = set()
+    for k, v in (data or {}).items():
+        if k == "extra" and isinstance(v, dict):
+            out |= {f"extra.{x}" for x, y in v.items() if y not in ("", None)}
+        elif v not in ("", None) and _EMPTY.get(k) != v:
+            out.add(k)
+    return out
+
+
+def auto_fill(p: dict, explicit: set, infer_protocol: bool = True) -> dict:
+    """把明文里识别到的字段填进空着的位置; 记下哪些是自动填的 (p["inferred"]), 改明文时重新识别。"""
+    from .provider_infer import infer
+    got = infer(p)
+    filled = list(p.get("inferred") or [])
+    for f, v in got.items():
+        if f in explicit:
+            continue
+        if f.startswith("extra."):
+            k = f[6:]
+            if not (p.get("extra") or {}).get(k):
+                p.setdefault("extra", {})[k] = v
+            else:
+                continue
+        elif f == "protocol":
+            if not infer_protocol or p.get("protocol") not in ("", "http") or v not in PROTOCOLS:
+                continue
+            p["protocol"] = v
+        elif f == "kind":
+            if p.get("kind") not in ("", "other") or v not in KINDS:
+                continue
+            p["kind"] = v
+        elif not p.get(f):
+            p[f] = v
+        else:
+            continue
+        if f not in filled:
+            filled.append(f)
+    p["inferred"] = filled
+    return p
+
+
+def _clear_inferred(p: dict, keep: set) -> None:
+    for f in p.get("inferred") or []:
+        if f in keep:
+            continue
+        if f.startswith("extra."):
+            (p.get("extra") or {}).pop(f[6:], None)
+        else:
+            p[f] = _EMPTY.get(f, "")
+    p["inferred"] = []
+
+
+def prepare_draft(data: dict, base: dict | None = None) -> dict:
+    """测试未保存的草稿: 与 create/update 同一套识别, 但不落盘。"""
+    d = dict(base or {})
+    d.update({k: v for k, v in (data or {}).items() if k != "id"})
+    p = normalize(d)
+    if base and ("usage" in data or "name" in data):
+        _clear_inferred(p, _explicit(data))
+    return auto_fill(p, _explicit(data), infer_protocol=not base or "inferred" in base)
+
+
 def create(data: dict) -> dict:
     with _LOCK:
         items = load_all()
         d = dict(data or {})
         d.pop("id", None)
-        p = normalize(d)
+        p = auto_fill(normalize(d), _explicit(d))
         if not str((data or {}).get("name") or "").strip():
             raise ValueError("名称不能为空")
         if any(x["name"].lower() == p["name"].lower() for x in items):
@@ -195,7 +275,8 @@ def update(pid: str, data: dict) -> dict:
         old = next((x for x in items if x["id"] == pid), None)
         if old is None:
             raise KeyError(pid)
-        merged = dict(old)
+        merged = copy.deepcopy(old)
+        given = {}
         for k, v in (data or {}).items():
             if k == "id":
                 continue
@@ -203,9 +284,17 @@ def update(pid: str, data: dict) -> dict:
                 v = _merge_secret(v, old.get("api_key", ""))
             elif k == "extra" and isinstance(v, dict):
                 v = _unmask_extra(v, old.get("extra") or {})
-            merged[k] = v
+            merged[k] = given[k] = v
         p = normalize(merged)
         p["id"] = pid
+        if set(given) & {"usage", "base_url", "api_key", "protocol", "extra"}:
+            p.pop("last_test", None)   # 内容变了, 之前的测试结果作废 (保存时前端会带上新的)
+        if "last_test" in given:
+            p["last_test"] = given["last_test"]
+        if "usage" in given or "name" in given:   # 明文改了 → 之前自动识别的字段重新识别
+            exp = _explicit(given)
+            _clear_inferred(p, exp)
+            auto_fill(p, exp, infer_protocol="inferred" in old)
         if any(x["id"] != pid and x["name"].lower() == p["name"].lower() for x in items):
             raise ValueError(f"已有同名接入「{p['name']}」, 换个名字")
         items[items.index(old)] = p
@@ -241,6 +330,19 @@ def set_default(pid: str) -> dict:
         p["enabled"] = True
         _write(items)
         return p
+
+
+def record_test(pid: str, r: dict) -> None:
+    """记下最近一次测试结果 (左侧列表的 ✅ / ⚪); 卡片不存在 (内置/自动发现) 时忽略。"""
+    import time as _t
+    with _LOCK:
+        items = load_all()
+        p = next((x for x in items if x["id"] == pid), None)
+        if p is None:
+            return
+        p["last_test"] = {"ok": bool(r.get("ok")) and not r.get("untested"), "ts": int(_t.time()),
+                          "msg": str(r.get("hint") or r.get("detail") or r.get("error") or "")[:200]}
+        _write(items)
 
 
 # ── 脱敏 / 展示 ───────────────────────────────────────────────
@@ -366,21 +468,10 @@ _STOP = {"|", "||", "&&", ";", ">", ">>", "2>", "2>&1", "&"}
 
 
 def first_curl(text: str) -> str | None:
-    """取用法说明里第一条 curl 命令 (支持行尾 \\ 续行; 跳过 ``` 围栏与 # 注释)。"""
-    lines = (text or "").splitlines()
-    for i, ln in enumerate(lines):
-        s = ln.strip()
-        m = re.search(r"(?:^|[\s$(=])(curl\s.*)$", s)
-        if not m or s.startswith("#"):
-            continue
-        buf = [m.group(1)]
-        j = i
-        while buf[-1].rstrip().endswith("\\") and j + 1 < len(lines):
-            buf[-1] = buf[-1].rstrip()[:-1]
-            j += 1
-            buf.append(lines[j].strip())
-        return " ".join(buf)
-    return None
+    """取用法说明里第一条 curl 命令 (续行 / 引号跨行的规则见 provider_infer.curls)。"""
+    from .provider_infer import curls
+    allc = curls(text)
+    return allc[0] if allc else None
 
 
 def parse_curl(cmd: str) -> dict:
@@ -531,3 +622,25 @@ def ref_meta(ids) -> list[dict]:
         if p and not any(o["id"] == p["id"] for o in out):
             out.append({"id": p["id"], "name": p["name"], "kind": p["kind"]})
     return out
+
+
+def prompt_brief(items: list[dict] | None = None) -> str:
+    """系统提示里的一小段「已接入能力」清单 (每类默认在前)。
+    2026-10-23 实跑发现: 用户说"失恋 DJ 要有歌词", 模型按 bgm-music 技能的老说明走本地合成器, 根本不知道
+    能力接入里已经有 ACE-Step。卡片没变时内容不变, 不破坏前缀缓存。"""
+    try:
+        items = load_all() if items is None else items
+    except Exception:
+        return ""
+    on = [p for p in items if p.get("enabled", True) and p.get("kind") not in ("llm",)]
+    if not on:
+        return ""
+    lines = ["\n## 已接入的外部能力 (左上角「能力接入」; 优先于技能说明里写的默认做法)"]
+    for kind, meta in KINDS.items():
+        ps = sorted((p for p in on if p.get("kind") == kind), key=lambda p: not p.get("default"))
+        if ps:
+            names = "、".join(f"{p['name']}{' [默认]' if p.get('default') else ''}" for p in ps)
+            lines.append(f"- {meta['label']}: {names}")
+    lines.append("用的时候先 enable_tools(['providers']), 再 get_provider(名称) 取完整明文 (地址 / key / curl), 照着调用; "
+                 "生图 / 视频 / 音乐也可直接用 generate_image / generate_video / generate_music。")
+    return "\n".join(lines)

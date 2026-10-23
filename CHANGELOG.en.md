@@ -2,6 +2,17 @@
 
 [中文](CHANGELOG.md) · Back to [README](README.en.md)
 
+### v2.0.14 "Desktop" (上桌) (2026-10-23)
+
+- 🎵 **AI songs** `ai-song`: write lyrics → self-hosted open-source ACE-Step sings them → speech recognition checks the vocals.
+- 🎬 **One-sentence MVs / voiced shorts** `anime-short`: listens to the song for lyric timestamps → maps lyrics to scenes → LLM-optimized prompts → Qwen-Image first frames (your photo can be the character reference) → MiniMax H3 video driven by the music (AniSora in parallel for instrumental parts) → per-segment vision review with automatic prompt rewrites → original-lyric subtitles, audio/video aligned. Realistic and full-length by default.
+- 🎤 **Self-hosted open-source services**: SenseVoice ASR, IndexTTS 2.5 voice-over (emotion, cloning), ACE-Step 1.5 songs, AniSora anime video; deployment files and redeploy guide in [docs/GPU_SERVICES.md](docs/GPU_SERVICES.md).
+- ⏳ **Background progress card**: long jobs show live progress, logs and a stop button under the chat, and no longer block the conversation.
+- 🧭 **Fixes**: "New chat" stuck while a long job ran; faster session list; restarts wait for background jobs.
+- 🔌 **Simpler integrations**: a card is a title plus plain text (how-to + curl); the system prompt lists connected services so TTS, music and video use them first.
+- 🧩 **Custom installers** can ship a preset config (models, vision model, integrations).
+- 🛠️ Fixes: multi-line curl parsing, no endless waits when a server drops a task, new skills found without restart, TTS uses the default voice card, remote desktop no longer floods the log.
+
 ### v2.0.13 "Desktop" (上桌) (2026-10-23)
 
 - 🔌 **Integrations**: a new top-left panel to connect image, video, TTS/ASR, music, search and notification services; titles on the left, plain-text usage on the right, one-click test and defaults; type `@` in the input box to attach a service's full details to a message. 29 presets.

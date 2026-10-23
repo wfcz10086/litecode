@@ -94,6 +94,19 @@ from routers.auth_router import (
 _init_auth_router(CFG)
 
 def _sf(sid): return SESSIONS_DIR/f"{sid}.json"
+# [perf 2026-10-23] 会话列表摘要缓存: 文件 (mtime_ns, size) 不变就不再整份 json.loads 全部消息。
+# 侧栏 8 秒轮询一次 GET /api/sessions, 会话多 / 消息长时每次全量解析要 1s+。值: (mtime_ns, size, 摘要|None)
+_LIST_META: dict = {}
+def _list_meta(f, build):
+    st=f.stat(); k=str(f); c=_LIST_META.get(k)
+    if c and c[0]==st.st_mtime_ns and c[1]==st.st_size: return c[2]
+    m=build(json.loads(f.read_text()))
+    if len(_LIST_META)>20000: _LIST_META.clear()
+    _LIST_META[k]=(st.st_mtime_ns,st.st_size,m); return m
+def _web_meta(d):
+    return {"id":d["id"],"name":d.get("name",d["id"]),"created":d.get("created",0),"last_used":d.get("last_used",0),"count":len(d.get("messages",[]))}
+def _srv_has_user(d):  # server 会话只导入有用户消息的; 没有的缓存成 False, 下次不再读
+    return any(m.get("role")=="user" and m.get("content") for m in d.get("msgs",[]))
 def list_sessions():
     """列出所有会话：web_sessions + server sessions（CLI等）"""
     out=[]
@@ -103,15 +116,15 @@ def list_sessions():
     # 1) Web sessions (本地)
     for f in sorted(SESSIONS_DIR.glob("*.json"),key=lambda x:x.stat().st_mtime,reverse=True):
         try:
-            d=json.loads(f.read_text())
-            sid=d["id"]
+            m=_list_meta(f,_web_meta)
+            sid=m["id"]
             if sid in _tombs:
                 # 墓碑里有 → 顺手把残留的本地文件也删掉
                 try: f.unlink()
                 except Exception: pass
                 continue
             seen_ids.add(sid)
-            out.append({"id":sid,"name":d.get("name",sid),"created":d.get("created",0),"last_used":d.get("last_used",0),"count":len(d.get("messages",[]))})
+            out.append(dict(m))
         except: pass
     # 2) Server sessions (CLI/API直连) — 导入未见过的
     _paths=CFG.get("paths",{})
@@ -133,6 +146,7 @@ def list_sessions():
                             shutil.rmtree(sub, ignore_errors=True)
                     except Exception: pass
                     continue
+                if not _list_meta(f,_srv_has_user): continue
                 d=json.loads(f.read_text())
                 msgs=d.get("msgs",[])
                 # 只导入有内容的 session

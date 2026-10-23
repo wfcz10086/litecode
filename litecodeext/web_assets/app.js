@@ -343,7 +343,7 @@ async function loadBG(){
     h+='<div style="display:flex;flex-direction:column;gap:8px">';
     procs.forEach(p=>{
       const pid=p.pid||p.id||'?';
-      const st=p.status||p.state||'running';
+      const st=p.status||p.state||(p.alive===false?(p.stopped?'killed':(p.exit_code>0?'error':'exited')):'running');  // [bgcard] 已结束的任务会保留 10 分钟
       const stCol=st==='running'?'var(--ac3)':(st==='exited'||st==='done'?'var(--tx3)':(st==='error'||st==='killed'?'var(--dg)':'var(--wn)'));
       const started=p.started_at?new Date(p.started_at*1000).toLocaleTimeString('zh-CN',{hour12:false}):'';
       const cmd=p.cmd||p.command||p.name||'';

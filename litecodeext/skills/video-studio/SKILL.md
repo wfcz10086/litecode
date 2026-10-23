@@ -68,4 +68,5 @@ python3 $VS/timeline.py $P/timeline.json -o $P/final.mp4    # 30~90 秒片子约
 1. douyin-toolkit `analyze.py` 拿口播转写 + 关键帧 (`analysis/frames/*.jpg`), vision_ocr 读字幕, 输出解读。
 2. 按解读里的「可复用文案模板」改写新文案 (原创表达, 别照抄原句), 拆成 4~8 段, 每段 1~2 句。
 3. 写 timeline.json: 画面用关键帧图 (或用户素材/生图), bgm 选 mood; 跑 timeline.py; 校验通过后交付 mp4 + srt + 报告。
+   - 生图: 用「能力接入」里的生图卡 (如 ComfyUI Qwen-Image, 走 comfyui-image 技能); 没有生图卡就用关键帧图或用户素材。
 - 原视频画面属于原作者, 二创发布前提醒用户授权问题; 能用自有素材/生图就别直接搬原画面。

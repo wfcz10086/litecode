@@ -236,7 +236,7 @@ _GROUP_NAMES = [
     ("小说写作", ("novel-", "long-novel", "anti-ai-tell-audit", "outline-generation")),
     ("办公文档", ("docx", "xlsx", "pptx", "pdf", "file-reading", "large-file-handling", "longtext-processing",
               "doc-coauthoring", "internal-comms", "html-to-report", "deep-report", "chinese-documentation")),
-    ("图像音视频", ("douyin-", "video-studio", "bgm-music", "slack-gif-creator", "canvas-design",
+    ("图像音视频", ("douyin-", "video-studio", "bgm-music", "ai-song", "anime-short", "diagram", "slack-gif-creator", "canvas-design",
                "algorithmic-art", "theme-factory", "image-ocr")),
     ("运维系统", ("linux-admin", "docker-ops", "network-tools", "log-analyzer", "automation", "remote-ops",
               "service-lifecycle", "single-instance-daemon", "system-selfcheck", "windows-container-dev",
@@ -363,6 +363,12 @@ def index_signature(builtin: Path | None = None) -> tuple:
     for p in (state_path(), builtin or builtin_dir(), home()):
         try:
             sig.append(p.stat().st_mtime_ns)
+        except OSError:
+            sig.append(0)
+    # 再看每个技能子目录: 先建目录、后写 SKILL.md 时, 上一级目录 mtime 不变 (2026-10-23 新加 ai-song 后一直"not found")
+    for d in (builtin or builtin_dir(), home()):
+        try:
+            sig.append(max((e.stat().st_mtime_ns for e in os.scandir(d) if e.is_dir()), default=0))
         except OSError:
             sig.append(0)
     return tuple(sig)

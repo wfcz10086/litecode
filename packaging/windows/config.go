@@ -11,6 +11,8 @@ import (
 	"image/png"
 	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -43,7 +45,9 @@ func ensureConfig() error {
 	sub(cfg, "wecom")["enabled"] = false
 	// 桌面版只保留用户自己的模型: 示例配置里那十几个模型 key 都是占位符, 用户用不了, 设置页里一大串
 	// 反而找不到自己的 (2026-10-21 实机反馈)。没填模型就清空列表, 到「设置」里添加。
-	if m := askModel(); m != nil {
+	if applyPreset(cfg) {
+		// 定制包 (如 mycompany-litecode): 模型 / 识图模型 / 能力接入 / 搜索按预置配置, 不再问模型
+	} else if m := askModel(); m != nil {
 		m["label"] = fmt.Sprintf("%s（我的模型）", m["id"])
 		cfg["model"] = m
 		cfg["default_model_id"] = m["id"]
@@ -67,6 +71,32 @@ func ensureConfig() error {
 		return fmt.Errorf("写入配置失败: %v", err)
 	}
 	return nil
+}
+
+// presetKeys: 定制安装包 payload\preset-config.json 里允许带进来的配置段 (登录密码 / server.token 照常本机生成)
+var presetKeys = []string{"model", "models", "default_model_id", "vision_fallback_id", "vision", "providers",
+	"search", "tts", "kb"}
+
+// applyPreset: payload\preset-config.json 存在就合并进 cfg, 返回 true; 不存在或解析失败返回 false (走正常询问)。
+func applyPreset(cfg map[string]any) bool {
+	raw, err := os.ReadFile(filepath.Join(dataDir(), "payload", "preset-config.json"))
+	if err != nil {
+		return false
+	}
+	var pre map[string]any
+	if err := json.Unmarshal(raw, &pre); err != nil {
+		logf("预置配置解析失败, 忽略: %v", err)
+		return false
+	}
+	n := 0
+	for _, k := range presetKeys {
+		if v, ok := pre[k]; ok {
+			cfg[k] = v
+			n++
+		}
+	}
+	logf("已应用预置配置 (%d 项)", n)
+	return n > 0
 }
 
 func sub(m map[string]any, keys ...string) map[string]any {

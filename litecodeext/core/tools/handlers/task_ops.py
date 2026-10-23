@@ -69,7 +69,7 @@ async def h_task_list(sid: str, args: dict) -> tuple[str, Any]:
 
 @register("task_update")
 async def h_task_update(sid: str, args: dict) -> tuple[str, Any]:
-    tid = (args.get("id") or "").strip()
+    tid = (args.get("id") or "").strip().lstrip("#")   # 模型常写成 "#abc" 或 "##abc"
     status = (args.get("status") or "").strip()
     note = (args.get("note") or "").strip()
     tasks = _store(sid)
@@ -90,7 +90,7 @@ async def h_task_update(sid: str, args: dict) -> tuple[str, Any]:
 
 @register("task_done")
 async def h_task_done(sid: str, args: dict) -> tuple[str, Any]:
-    tid = (args.get("id") or "").strip()
+    tid = (args.get("id") or "").strip().lstrip("#")   # 模型常写成 "#abc" 或 "##abc"
     note = args.get("note") or "完成"
     tasks = _store(sid)
     if not tid or tid not in tasks:

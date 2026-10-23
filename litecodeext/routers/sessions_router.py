@@ -4,6 +4,7 @@
 _load_tombstones / _add_tombstone / _TOMBSTONE_FILE) 仍在 web_ui.py;
 本 router 通过 `_wui()` 拿 web_ui 模块引用 (lazy, 避免循环 import).
 """
+import asyncio
 import json
 import shutil
 import time
@@ -62,7 +63,8 @@ _EDITABLE_MDS = {"MEMORY.md", "USER.md", "TOOLS.md", "SOUL.md",
 @router.get("/api/sessions")
 async def api_sessions(request: Request):
     require_auth(request)
-    return _wui().list_sessions()
+    # [perf 2026-10-23] 扫盘放线程池: 会话多时不再卡住事件循环 (同进程的流式输出 / 新建会话都要等它)
+    return await asyncio.to_thread(_wui().list_sessions)
 
 
 @router.post("/api/sessions")

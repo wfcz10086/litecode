@@ -159,6 +159,8 @@ P=/tmp/litecode_workspace/<项目名>   # 项目目录, 所有命令在 P 里跑
 | quote | 金句收尾: 打字机 + 关注卡 | quote, endcard |
 | image | 有本地图片时: 推拉镜头 + 说明 | src, caption |
 
+`image` 场景要 AI 配图时: 用「能力接入」里的生图卡 (如 ComfyUI Qwen-Image, 走 comfyui-image 技能), 生成的图片 (相对 video.html 所在的 $P) 填进 `src`; 没有生图卡就只用文字动画场景。
+
 题材专属画面 (行情牌、金币雨、K 线…) 写 `$P/custom.js`, 在 engine.js 之前加载:
 ```js
 window.LAYOUTS_EXT = { coins: { build(el, p) { /* 建 DOM 一次 */ },

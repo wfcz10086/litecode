@@ -256,9 +256,12 @@ def open_tunnel(url: str, alias: str) -> int:
 class Comfy:
     """base = 服务器自己认识的地址 (喂给 *FromURL 节点、给人看的链接); api = 本机实际访问的地址 (可能是隧道)。"""
 
-    def __init__(self, url: str, via: str | None = None):
+    def __init__(self, url: str, via: str | None = None, self_url: str | None = None):
         self.base = self.api = norm_url(url)
         self.route = None
+        # 服务器自己访问自己的地址: 经端口转发 / 反向代理访问时, base 是本机这一侧的地址, 服务器上的 *FromURL
+        # 节点访问不到 (2026-10-23 H3 参考音频报 Connection refused)。--self-url / remember --self-url / COMFY_SELF_URL
+        self.self_url = norm_url(self_url or store_get(self.base).get("self_url") or os.environ.get("COMFY_SELF_URL") or self.base)
         h, p = host_port(self.base)
         if via in ("none", "no"):
             return
@@ -317,7 +320,7 @@ class Comfy:
 
     def view(self, filename: str, subfolder: str = "", type_: str = "output", public: bool = True) -> str:
         q = "/view?" + urllib.parse.urlencode({"filename": filename, "subfolder": subfolder, "type": type_})
-        return (self.base if public else "") + q
+        return (self.self_url if public else "") + q
 
 
 def object_info(c: Comfy, refresh: bool = False) -> dict:
@@ -884,6 +887,7 @@ def cmd_run(c: Comfy, args) -> int:
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="comfy.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--via-ssh", help="SSH 跳板: ssh config 别名或 user@host:port (内网地址用; 成功后记住), none=强制直连")
+    ap.add_argument("--self-url", help="服务器访问它自己的地址 (经端口转发/反向代理访问时, 给 *FromURL 节点用; 如容器内 http://127.0.0.1:8188)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("probe")
     p.add_argument("url", nargs="?")
@@ -923,6 +927,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--via", help="SSH 跳板别名 (none=清除)")
     p.add_argument("--wait-idle", choices=["yes", "no"], help="yes=线上机等队列空 / no=独占机")
     p.add_argument("--note")
+    p.add_argument("--self-url", dest="remember_self_url", help="记住服务器自访问地址")
     sub.add_parser("forget").add_argument("url")
     return ap
 
@@ -945,10 +950,11 @@ def main(argv=None) -> int:
             return 0
         if args.cmd == "remember":
             log(describe(store_update(args.url, touch=False, via="" if args.via == "none" else args.via, note=args.note,
-                                      wait_idle=None if args.wait_idle is None else args.wait_idle == "yes")))
+                                      wait_idle=None if args.wait_idle is None else args.wait_idle == "yes",
+                                      self_url=getattr(args, "remember_self_url", None))))
             return 0
         url = resolve_url(args.url)
-        c = Comfy(url, args.via_ssh)
+        c = Comfy(url, args.via_ssh, args.self_url)
         store_update(url, via=c.route)
         if args.cmd == "probe":
             info = do_probe(c, args.refresh)

@@ -40,6 +40,8 @@ async function _streamTurn(bodyEl,open){
   let ft='',sr_=null,fc=true,sdiffs=[],sdesktop=[],_tsk=null;_lu=null;
   try{
     const resp=await open();
+    /* 等响应头期间已切走 / 新建会话: 本订阅作废, 关掉连接 (不然一直占着浏览器的同域连接名额) */
+    if(gen!==_streamGen){try{resp.body&&resp.body.cancel();}catch(e){}return;}
     if(resp.status===409){
       /* 别的标签页 / 别人已在本会话跑一轮: 不重复发, 直接接入实时进度 */
       bodyEl.closest('.msg')?.remove();_streamGen++;_resetStreamUi();

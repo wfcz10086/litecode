@@ -50,8 +50,8 @@ $C run <地址> -w h3_r2v  --input ref_image=p.png --input ref_video=motion.mp4 
   已经是 http(s) 链接就直接填 (必须是 **ComfyUI 服务器能访问到** 的地址)。参考视频 2~15 秒, 24fps。
 - **硬约束** (违反会在采样深处才炸): 宽高是 **32 的倍数** (480/768/864/1344…, **720 不行**);
   帧数 `length` 必须 **17n+5** (22≈1s · 73≈3s · 124≈5s · 243≈10s), 固定 24fps。
-- **默认参数**: 864×480 (16:9) · 124 帧 · **8 步** · res_multistep/simple/cfg 1 · seed 随机。竖屏用 `--width 480 --height 864`;
-  高清 1344×768 (约 2.3 倍耗时)。测试/预览用 `--frames 73` 或 22。不要随便加步数 (线上正式片 15 步, 对比测试统一 8 步)。
+- **默认参数**: 864×480 (16:9, 480p) · 124 帧 · **10 步** · res_multistep/simple/cfg 1 · seed 随机。竖屏用 `--width 480 --height 864`;
+  高清 1344×768 (约 2.3 倍耗时) **只在用户明确要 720p / 高清时用**。测试/预览用 `--frames 73` 或 22。步数默认 10, 不要随便加。
 - 多卡 (Raylight): 提交前 `ray_init` 自动**跟随服务器最近一次同类任务**的参数 (命名空间/卡数/注意力后端), 复用已加载的 Ray worker,
   不在线上机上另起一套占显存; 服务器没有这类历史才用模板值 (4 卡 Ulysses + TORCH_FLASH)。卡数不同 → `--set ray_init.GPU=2 --set ray_init.ulysses_degree=2`。
 - 输出: `SaveVideo` 存 `output/litecode/h3_<模式>_xxxxx_.mp4` (`--prefix` 改前缀); h264 + aac 音轨。

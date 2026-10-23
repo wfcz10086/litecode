@@ -19,6 +19,7 @@ import shutil
 import subprocess
 import tempfile
 import time
+import httpx
 from pathlib import Path
 
 MAX_TEXT_CHARS = 10000
@@ -350,6 +351,46 @@ def duration(p: Path) -> float:
         return 0.0
 
 
+def provider_tts() -> dict | None:
+    """「能力接入」里启用的配音卡 (默认在前) 中第一张提供 OpenAI 兼容 /v1/audio/speech 的。
+    2026-10-23 实测: 用户已把自建 IndexTTS 设为默认配音, text_to_speech 却只认 local/edge/百炼。"""
+    import re as _re
+    try:
+        from lib.providers import load_all
+        cards = [c for c in load_all() if c.get("kind") == "tts" and c.get("enabled", True)]
+    except Exception:
+        return None
+    for c in sorted(cards, key=lambda c: not c.get("default")):
+        m = _re.search(r"(https?://[^\s'\"]+?/v1)/audio/speech", c.get("usage") or "")
+        base = m.group(1) if m else (c.get("base_url") or "").rstrip("/") if c.get("protocol") == "openai_tts" else ""
+        if base:
+            v = _re.search(r'"voice"\s*:\s*"([^"]+)"', c.get("usage") or "")
+            return {"name": c.get("name", ""), "base": base, "key": c.get("api_key") or "",
+                    "voice": (v.group(1) if v else "") or c.get("model") or "alloy"}
+    return None
+
+
+async def _provider_one(text: str, card: dict, rate, out: Path) -> None:
+    speed = 1.0
+    try:
+        if isinstance(rate, (int, float)):
+            speed = float(rate)
+        elif isinstance(rate, str) and rate.strip().endswith("%"):
+            speed = 1 + float(rate.strip().rstrip("%")) / 100
+    except ValueError:
+        pass
+    hdr = {"Content-Type": "application/json"}
+    if card["key"] and card["key"] != "EMPTY":
+        hdr["Authorization"] = f"Bearer {card['key']}"
+    async with httpx.AsyncClient(timeout=180) as c:
+        r = await c.post(f"{card['base']}/audio/speech", headers=hdr,
+                         json={"input": text, "voice": card["voice"], "speed": max(0.5, min(speed, 2.0)),
+                               "response_format": "wav"})
+    if r.status_code != 200 or len(r.content) < 1000:
+        raise RuntimeError(f"HTTP {r.status_code}: {r.text[:200]}")
+    out.write_bytes(r.content)
+
+
 async def synthesize(text: str, out_dir: Path, *, voice: str | None = None, engine: str = "auto",
                      rate=None, pitch=None, volume=None, fmt: str = "mp3", stem: str = "") -> dict:
     """合成到 out_dir/<stem>.<fmt>, 返回 {path, duration, engine, voice, chunks, note}。"""
@@ -363,6 +404,9 @@ async def synthesize(text: str, out_dir: Path, *, voice: str | None = None, engi
         raise ValueError(f"文本 {len(text)} 字, 超过单次上限 {MAX_TEXT_CHARS} 字; 请分段调用")
     key = dashscope_key()
     candidates = plan(voice, engine, has_ds_key=bool(key))
+    card = provider_tts() if engine in ("auto", "provider") else None
+    if card:   # 能力接入里的默认配音卡最先试; 失败再走本地 / edge / 百炼
+        candidates = [("provider", card["voice"], "")] + (candidates if engine == "auto" else [])
     pros = prosody(rate, pitch, volume)
     chunks = split_text(text)
     if not chunks:
@@ -376,7 +420,7 @@ async def synthesize(text: str, out_dir: Path, *, voice: str | None = None, engi
             notes.append(note)
         if eng == "dashscope" and any(pros[k] not in ("+0%", "+0Hz") for k in ("pitch", "volume", "rate")):
             notes.append("百炼音色不支持语速/音调/音量调节, 已忽略。")
-        sem = asyncio.Semaphore(1 if eng == "local" else 3)
+        sem = asyncio.Semaphore(1 if eng in ("local", "provider") else 3)
         try:
             with tempfile.TemporaryDirectory(prefix="tts_") as td:
                 ext = "mp3" if eng == "edge" else "wav"
@@ -384,7 +428,9 @@ async def synthesize(text: str, out_dir: Path, *, voice: str | None = None, engi
 
                 async def one(i: int):
                     async with sem:
-                        if eng == "dashscope":
+                        if eng == "provider":
+                            await _provider_one(chunks[i], card, rate, parts[i])
+                        elif eng == "dashscope":
                             await _dashscope_one(chunks[i], vid, key, parts[i])
                         elif eng == "local":
                             await _local_one(chunks[i], vid, pros, parts[i])
@@ -396,13 +442,14 @@ async def synthesize(text: str, out_dir: Path, *, voice: str | None = None, engi
             errors.append(f"{eng}: {e}")
             notes.append(f"{ENGINE_NAMES.get(eng, eng)} 合成失败, 换下一个引擎。")
             continue
-        shown = _local_mod().VOICES.get(int(vid), (vid,))[0] if eng == "local" else vid
+        shown = (_local_mod().VOICES.get(int(vid), (vid,))[0] if eng == "local"
+                 else f"{card['name']} · {vid}" if eng == "provider" else vid)
         return {"path": str(out), "duration": await asyncio.to_thread(duration, out), "engine": eng,
                 "voice": shown, "chunks": len(chunks), "chars": len(text), "note": " ".join(notes).strip()}
     raise RuntimeError("所有语音引擎都失败: " + " | ".join(errors))
 
 
-ENGINE_NAMES = {"local": "本地引擎", "edge": "edge-tts", "dashscope": "百炼"}
+ENGINE_NAMES = {"local": "本地引擎", "edge": "edge-tts", "dashscope": "百炼", "provider": "能力接入"}
 
 
 def voices_text(has_ds_key: bool | None = None) -> str:

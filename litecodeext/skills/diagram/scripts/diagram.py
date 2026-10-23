@@ -104,7 +104,12 @@ def render_browser(kind: str, code: str, out: Path, theme: str, scale: float, bg
             if out.suffix.lower() == ".svg":
                 out.write_text(svg, encoding="utf-8")
             else:
-                page.locator("#out").screenshot(path=str(out), omit_background=(bg == "transparent"))
+                # 按量出的区域截图: locator.screenshot 要等"元素稳定", 有的机器上一直等不到 (2026-10-23 主机上必现超时)
+                box = page.evaluate("""() => { const r = document.getElementById('out').getBoundingClientRect();
+                    return {x: r.x, y: r.y, width: Math.ceil(r.width), height: Math.ceil(r.height)}; }""")
+                page.set_viewport_size({"width": max(800, int(box["x"] + box["width"]) + 8),
+                                        "height": max(600, int(box["y"] + box["height"]) + 8)})
+                page.screenshot(path=str(out), clip=box, omit_background=(bg == "transparent"), timeout=120000)
         finally:
             b.close()
 

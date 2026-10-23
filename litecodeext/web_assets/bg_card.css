@@ -1,0 +1,21 @@
+/* bg_card.css — 当前对话底部「⏳ 后台进行中」卡片 (bg_card.js) */
+#bgc{max-width:860px;margin:0 auto 8px;border:1px solid var(--bd2);border-radius:12px;background:var(--sf2);padding:8px 10px;font-size:12px;color:var(--tx2);box-sizing:border-box;min-width:0}
+#bgc[hidden]{display:none}
+html body.v2 #bgc{max-width:800px}
+.bgc-hd{font-weight:600;color:var(--tx);margin-bottom:4px;display:flex;align-items:center;gap:6px}
+.bgc-n{font-size:10px;background:var(--ac3);color:#fff;border-radius:8px;padding:0 6px;line-height:16px}
+.bgc-it{padding:4px 0;border-top:1px dashed var(--bd);min-width:0}
+.bgc-it:first-of-type{border-top:none}
+.bgc-row{display:flex;align-items:center;gap:6px;min-width:0}
+.bgc-tg{background:none;border:none;color:var(--tx3);cursor:pointer;padding:0 2px;font-size:12px;flex-shrink:0}
+.bgc-ds{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono);color:var(--tx);cursor:pointer}
+.bgc-el{flex-shrink:0;color:var(--tx3);font-variant-numeric:tabular-nums}
+.bgc-stop{flex-shrink:0;background:transparent;border:1px solid var(--bd2);border-radius:10px;color:var(--tx2);font-size:11px;padding:1px 9px;cursor:pointer}
+.bgc-stop:hover{border-color:var(--dg);color:var(--dg)}
+.bgc-st{flex-shrink:0;font-size:11px;white-space:nowrap}
+.bgc-st.ok{color:var(--ac3)}.bgc-st.bad{color:var(--dg)}.bgc-st.stop{color:var(--tx3)}
+.bgc-ln{margin:2px 0 0 20px;font-family:var(--mono);font-size:11px;color:var(--tx3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.bgc-hint{margin:2px 0 0 20px;font-size:11px;color:var(--ac2)}
+.bgc-log{margin:6px 0 2px 20px;padding:6px 8px;max-height:220px;overflow:auto;background:#111;color:#8f8;border-radius:6px;font-family:var(--mono);font-size:10.5px;line-height:1.45;white-space:pre-wrap;word-break:break-all}
+.bgc-log[hidden]{display:none}
+@media(max-width:640px){#bgc{padding:6px 8px;margin-bottom:6px}.bgc-ln,.bgc-hint,.bgc-log{margin-left:4px}}

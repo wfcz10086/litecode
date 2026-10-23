@@ -71,8 +71,10 @@ def bg_exit_code(log_path) -> "int | None":
 
 def wait_hint(log_file) -> str:
     """起后台任务时告诉模型怎么等它结束 (一条前台命令, 不轮询、不 pgrep)"""
-    return (f"等它结束: execute_shell(command=\"until grep -q 'BG-EXIT' {log_file}; do sleep 5; done; "
-            f"tail -20 {log_file}\", timeout=900) —— 日志最后一行 [BG-EXIT code=0] 是成功, 非 0 是失败。"
+    return (f"预计几分钟内结束、且本轮回答必须用到它的结果时才等: execute_shell(command=\"until grep -q 'BG-EXIT' {log_file}; "
+            f"do sleep 5; done; tail -20 {log_file}\", timeout=900) —— 最后一行 [BG-EXIT code=0] 是成功, 非 0 是失败。"
+            f"**预计超过 5 分钟的 (生成视频/MV、批量出图、长翻译、训练等) 不要在本轮等**: 先把已经做好的东西交付, "
+            f"告诉用户预计多久、问进度时会查 `tail {log_file}`, 然后结束本轮 —— 一直等会堵住对话, 用户的新消息只能排队。"
             f"别用 pgrep -f 判断是否结束 (会匹配到等待命令自己)。")
 
 def _bg_state_path() -> Path:
@@ -112,7 +114,7 @@ def _register_bg(pid: str, cmd: str, log_file, sid: str = "_orphan", keep: bool 
     with _bg_lock:
         sid_key = sid or "_orphan"
         _bg_procs.setdefault(sid_key, {})[pid] = {
-            "cmd": cmd[:120], "log": str(log_file), "ts": time.time(), "keep": keep,
+            "cmd": cmd[:300], "log": str(log_file), "ts": time.time(), "keep": keep,
         }
     _persist_bg_state()
 

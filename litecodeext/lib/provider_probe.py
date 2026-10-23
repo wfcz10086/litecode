@@ -15,12 +15,14 @@ import datetime as _dt
 import hashlib
 import hmac
 import json
+import re
 import time
 import urllib.parse
 from pathlib import Path
 
 import httpx
 
+from . import provider_infer as PI
 from . import providers as P
 
 TEST_TEXT = "LiteCode 测试消息"
@@ -165,27 +167,43 @@ async def run_curl(p: dict, cmd: str, **vars) -> httpx.Response:
         return await c.request(req["method"], req["url"], headers=req["headers"], auth=req.get("auth"), **kw)
 
 
+_AUTH_BAD = re.compile(r"invalid[ _]?api[ _]?key|unauthori[sz]ed|authenticationerror|invalidapikey|incorrect api key|"
+                       r"login fail|\"status_code\"\s*:\s*(?:1004|2049)\b", re.I)
+
+
 async def _http(p: dict) -> dict:
-    cmd = P.first_curl(p.get("usage") or "")
+    usage = p.get("usage") or ""
+    cmd = PI.test_curl(usage)
     if not cmd:
         base = _base(p)
-        if not base:
-            return {"ok": False, "error": "用法里没有 curl 示例, 也没填地址, 没法测试"}
+        if not base or PI.has_placeholder(base):
+            return {"ok": True, "untested": True,
+                    "detail": "已保存。这张卡里没有可以自动测试的 curl, 使用时 LiteCode 会按这段话自行调用。"}
         async with _client(p) as c:
             r = await c.get(base, headers=_UA)
         ok = r.status_code < 500
         return {"ok": ok, "status": r.status_code,
-                "detail" if ok else "error": f"用法里没有 curl, 只 GET 了地址: HTTP {r.status_code}"}
+                "detail" if ok else "error": f"明文里没有 curl, 只访问了地址: HTTP {r.status_code}"}
+    probe = PI.is_probe_curl(usage) and cmd != (PI.curls(usage) or [None])[0]
     try:
         r = await run_curl(p, cmd, prompt="一只橘猫, 测试图", query="LiteCode", text=TEST_TEXT, width=256,
                            height=256, input=TEST_TEXT)
     except ValueError as e:
         return {"ok": False, "error": str(e)}
+    if probe:   # 「测试用」那条只验证 Key: 查不存在的任务, 只要不是鉴权失败就算 Key 有效
+        if r.status_code in (401, 403) or _AUTH_BAD.search(r.text or ""):
+            return {"ok": False, "status": r.status_code, "auth": True, "error": _err_of(r)}
+        if r.status_code >= 500:
+            return {"ok": False, "status": r.status_code, "error": _err_of(r)}
+        return {"ok": True, "status": r.status_code,
+                "detail": f"Key 有效 (用查询接口验证, 没有提交付费任务; HTTP {r.status_code})"}
     if r.status_code >= 400:
         return {"ok": False, "status": r.status_code, "error": _err_of(r)}
+    if _AUTH_BAD.search(r.text or ""):
+        return {"ok": False, "status": r.status_code, "auth": True, "error": _short(r.text, 240)}
     ctype = r.headers.get("content-type", "")
     preview = _short(r.text, 160) if ("json" in ctype or "text" in ctype) else f"{ctype} {len(r.content)} 字节"
-    return {"ok": True, "status": r.status_code, "detail": f"跑了用法里第一条 curl: HTTP {r.status_code} · {preview}"}
+    return {"ok": True, "status": r.status_code, "detail": f"跑了明文里的 curl: HTTP {r.status_code} · {preview}"}
 
 
 # ── 通知 ──────────────────────────────────────────────────────
@@ -221,9 +239,16 @@ async def send_notify(p: dict, text: str, title: str = "") -> dict:
     t0 = time.time()
     try:
         r = await _send(p, text, title)
+    except httpx.TimeoutException:
+        r = {"ok": False, "timeout": True, "error": f"超时 ({_timeout(p):.0f} 秒)"}
+    except httpx.HTTPError as e:
+        r = {"ok": False, "net": True, "error": f"连不上: {type(e).__name__}: {e}"}
     except Exception as e:
         r = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     r["ms"] = int((time.time() - t0) * 1000)
+    if not r.get("ok"):
+        from .provider_hints import explain
+        r["hint"] = explain(p, r)
     return r
 
 
@@ -239,8 +264,8 @@ async def _send(p: dict, text: str, title: str) -> dict:
         ok = r.status_code < 400
         return {"ok": ok, "status": r.status_code, ("detail" if ok else "error"): _err_of(r)}
     url = _webhook_url(p)
-    if not url:
-        return {"ok": False, "error": "没填 webhook 地址"}
+    if not url or PI.has_placeholder(url):
+        return {"ok": False, "error": "没填 webhook 地址" + (" (还是示例里的「粘贴…」)" if url else "")}
     secret = str((p.get("extra") or {}).get("secret") or "")
     msg = (title + "\n" + text) if title else text
     if proto == "wecom_webhook":
@@ -265,9 +290,11 @@ async def _send(p: dict, text: str, title: str) -> dict:
         d = r.json()
     except Exception:
         d = {}
-    code = d.get("errcode", d.get("code", d.get("StatusCode", 0)))
+    code = d.get("errcode", d.get("code", d.get("StatusCode", 0))) if isinstance(d, dict) else 0
     if code not in (0, "0", None):
-        return {"ok": False, "status": r.status_code, "error": f"平台返回错误 {code}: {d.get('errmsg') or d.get('msg')}"}
+        msg = d.get("errmsg") or d.get("msg") or ""
+        return {"ok": False, "status": r.status_code, "code": code, "errmsg": msg, "has_secret": bool(secret),
+                "error": f"平台返回错误 {code}: {msg}"}
     return {"ok": True, "status": r.status_code, "detail": "已发送"}
 
 
@@ -378,10 +405,13 @@ async def test(p: dict) -> dict:
         else:
             r = await (_send(p, TEST_TEXT, "") if p.get("kind") == "notify" else _http(p))
     except httpx.TimeoutException:
-        r = {"ok": False, "error": f"超时 ({_timeout(p):.0f} 秒)"}
+        r = {"ok": False, "timeout": True, "error": f"超时 ({_timeout(p):.0f} 秒)"}
     except httpx.HTTPError as e:
-        r = {"ok": False, "error": f"连不上: {type(e).__name__}: {e}"}
+        r = {"ok": False, "net": True, "error": f"连不上: {type(e).__name__}: {e}"}
     except Exception as e:
         r = {"ok": False, "error": f"{type(e).__name__}: {e}"}
     r["ms"] = int((time.time() - t0) * 1000)
+    if not r.get("ok"):
+        from .provider_hints import explain
+        r["hint"] = explain(p, r)
     return r

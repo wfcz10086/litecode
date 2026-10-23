@@ -50,7 +50,7 @@ function renderSL(){
 async function swS(sid){
   if(sid===cur)return;
   /* [chat-runs] 进行中切走: 只断本页订阅, 后台轮次照跑, 切回来自动接上 */
-  if(streaming){_streamGen++;try{_curReader&&_curReader.cancel();}catch(e){}_resetStreamUi();}
+  _detachStream();
   cur=sid;closeSB();
   try{localStorage.setItem('lc.cur',sid);}catch(e){}
   const s=sess.find(x=>x.id===sid);
@@ -109,7 +109,24 @@ function renameCurSession(){
 function _lcName(n){return String(n==null?'':n).replace(/^🔌\s*/,'');}
 /* [ui-audit 2026-10-21] 工具结果里给模型看的 "[SYSTEM: ...]" 提示不展示给用户 */
 function _lcStripSys(t){const s=String(t==null?'':t);const i=s.indexOf('[SYSTEM:');return i>0?s.slice(0,i).trimEnd():s;}
-async function newChat(){if(streaming)return;const r=await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})});const d=await r.json();cur=d.id;sess.unshift({id:d.id,name:d.name,count:0,created:d.created,last_used:d.last_used||d.created});renderSL();document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">New Chat</div></div>';document.getElementById('ct').textContent='New Chat';closeSB()}
+/* [chat-runs] 进行中切走/新建会话: 只断本页订阅 (后台轮次照跑, 切回来自动接上), 复位输入区 */
+function _detachStream(){if(!streaming)return;_streamGen++;try{_curReader&&_curReader.cancel();}catch(e){}_resetStreamUi();}
+/* [2026-10-23 fix] 原来 if(streaming)return: 长任务进行中点「新对话」直接无反应 (页面像卡住)。
+ * 现在与 swS 一致先断开当前会话的订阅再新建; _ncBusy 防连点建出多个空会话 */
+let _ncBusy=false;
+async function newChat(){
+  if(_ncBusy)return;_ncBusy=true;
+  try{
+    _detachStream();
+    const r=await fetch('/api/sessions',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'New Chat'})});
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();cur=d.id;
+    try{localStorage.setItem('lc.cur',d.id);}catch(e){}
+    sess.unshift({id:d.id,name:d.name,count:0,created:d.created,last_used:d.last_used||d.created});renderSL();
+    document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div><div class="etitle">New Chat</div></div>';document.getElementById('ct').textContent='New Chat';closeSB();
+  }catch(e){toast('新建会话失败: '+e);}
+  finally{_ncBusy=false;}
+}
 async function delS(sid){if(!await confirmCard('删除会话','确定要删除此会话? 消息和上下文将永久移除','删除'))return;await fetch(`/api/sessions/${sid}`,{method:'DELETE'});sess=sess.filter(s=>s.id!==sid);renderSL();if(cur===sid){cur=null;document.getElementById('msgs').innerHTML='<div id="empty"><div class="elogo">⚡</div></div>';}}
 /* [v12.9] 渲染前合并连续 assistant 消息 —— 多轮 iteration 持久化成多条 assistant 时,
    刷新后显示为多个独立 "AI" 气泡, spawn_agent/工具调用被拆散。合并后同一轮成一个气泡。*/

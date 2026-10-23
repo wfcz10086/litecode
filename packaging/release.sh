@@ -144,10 +144,15 @@ if [ "$FULL" = "--full" ]; then
   (cd "$HERE" && GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
      -ldflags "-s -w -H windowsgui -X main.Version=$VER${LITECODE_UPDATE_URL:+ -X main.BaseURL=$LITECODE_UPDATE_URL}" -o "$WORK/LiteCode.exe" .)
   VER4=$(echo "$VER.0.0.0" | cut -d. -f1-4)   # NSIS 文件版本要四段
+  # 定制包: LITECODE_PRESET_CONFIG=预置配置 json (模型/能力接入等, 安装时合并), LITECODE_INSTALLER_NAME=安装包文件名前缀
+  rm -f "$WORK/preset-config.json"
+  [ -n "${LITECODE_PRESET_CONFIG:-}" ] && cp "$LITECODE_PRESET_CONFIG" "$WORK/preset-config.json" && echo "  带预置配置: $LITECODE_PRESET_CONFIG"
   (cd "$HERE" && makensis -V2 -DVER="$VER" -DVER4="$VER4" -DROOTFS_VER="$ROOTFS_VER" -DSRC="$WORK" installer.nsi)
-  mv "$WORK/LiteCode-Setup-$VER.exe" "$OUT/"
+  INST_NAME="${LITECODE_INSTALLER_NAME:-LiteCode-Setup}-$VER.exe"
+  mv "$WORK/LiteCode-Setup-$VER.exe" "$OUT/$INST_NAME"
+  rm -f "$WORK/preset-config.json"
   echo "$ROOTFS_VER" > "$OUT/.rootfs_version"
-  echo "LiteCode-Setup-$VER.exe" > "$OUT/.installer"
+  echo "$INST_NAME" > "$OUT/.installer"
   # 中间产物不删 (2026-10-23 用户要求: 缓存包/临时包都保留, 下次打包失败时可复用和排查):
   # 最近一次的系统包和代码层放到 $CACHE/last-build/, 只保留一份, 避免磁盘无限增长
   mkdir -p "$CACHE/last-build"; rm -f "$CACHE"/last-build/*.tar.gz

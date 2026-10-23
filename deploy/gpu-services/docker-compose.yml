@@ -1,0 +1,116 @@
+# litecode-svc —— 统一编排. 变量见 .env (由 .env.example 复制); 用法: ./svc.sh up [服务]
+# 显卡绑定: 每个服务同时写 deploy.device_ids + NVIDIA_VISIBLE_DEVICES + 显式挂 /dev/nvidia* 设备文件,
+#   防止宿主机 systemctl daemon-reload 后容器丢 GPU (NVML: Unknown Error)。/dev/nvidiaN 的 N ≠ 卡号, 见 .env.example。
+
+x-common: &common
+  restart: unless-stopped
+  logging:
+    driver: json-file
+    options: {max-size: "50m", max-file: "3"}
+
+services:
+  sensevoice:
+    <<: *common
+    image: ${REGISTRY:-ccr.ccs.tencentyun.com/preview}/litecode-svc-sensevoice:${TAG:-v1}
+    build: {context: ./sensevoice}
+    container_name: lc-sensevoice
+    ports: ["${SENSEVOICE_PORT:-18011}:8000"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${SENSEVOICE_GPU:-5}"
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+      - ${SENSEVOICE_DEV:-/dev/nvidia11}:${SENSEVOICE_DEV:-/dev/nvidia11}
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${SENSEVOICE_GPU:-5}"], capabilities: [gpu]}]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+
+  indextts2:
+    <<: *common
+    image: ${REGISTRY:-ccr.ccs.tencentyun.com/preview}/litecode-svc-indextts2:${TAG:-v1}
+    build: {context: ./indextts2}
+    container_name: lc-indextts2
+    ports: ["${INDEXTTS2_PORT:-18013}:8000"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${INDEXTTS2_GPU:-5}"
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+      - ${INDEXTTS2_DEV:-/dev/nvidia11}:${INDEXTTS2_DEV:-/dev/nvidia11}
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${INDEXTTS2_GPU:-5}"], capabilities: [gpu]}]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+
+  acestep:
+    <<: *common
+    image: ${REGISTRY:-ccr.ccs.tencentyun.com/preview}/litecode-svc-acestep:${TAG:-v1}
+    build: {context: ./acestep, dockerfile: Dockerfile.litecode}
+    container_name: lc-acestep
+    ports: ["${ACESTEP_PORT:-18012}:8001"]
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${ACESTEP_GPU:-6}"
+      ACESTEP_NO_INIT: "false"        # 启动即加载模型
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+      - ${ACESTEP_DEV:-/dev/nvidia4}:${ACESTEP_DEV:-/dev/nvidia4}
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, device_ids: ["${ACESTEP_GPU:-6}"], capabilities: [gpu]}]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8001/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 600s
+
+  anisora:
+    <<: *common
+    image: ${REGISTRY:-ccr.ccs.tencentyun.com/preview}/litecode-svc-anisora:${TAG:-v1}
+    build: {context: ./anisora}
+    container_name: lc-anisora
+    ports: ["${ANISORA_PORT:-18014}:8000"]
+    shm_size: "32g"
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${ANISORA_GPU_1:-7},${ANISORA_GPU_2:-8},${ANISORA_GPU_3:-9},${ANISORA_GPU_4:-10},${ANISORA_GPU_5:-11}"
+      ANISORA_NPROC: "${ANISORA_NPROC:-5}"
+    devices:
+      - /dev/nvidiactl:/dev/nvidiactl
+      - /dev/nvidia-uvm:/dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools:/dev/nvidia-uvm-tools
+      - ${ANISORA_DEV_1:-/dev/nvidia5}:${ANISORA_DEV_1:-/dev/nvidia5}
+      - ${ANISORA_DEV_2:-/dev/nvidia0}:${ANISORA_DEV_2:-/dev/nvidia0}
+      - ${ANISORA_DEV_3:-/dev/nvidia1}:${ANISORA_DEV_3:-/dev/nvidia1}
+      - ${ANISORA_DEV_4:-/dev/nvidia2}:${ANISORA_DEV_4:-/dev/nvidia2}
+      - ${ANISORA_DEV_5:-/dev/nvidia3}:${ANISORA_DEV_5:-/dev/nvidia3}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ["${ANISORA_GPU_1:-7}", "${ANISORA_GPU_2:-8}", "${ANISORA_GPU_3:-9}", "${ANISORA_GPU_4:-10}", "${ANISORA_GPU_5:-11}"]
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 900s

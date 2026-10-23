@@ -212,8 +212,7 @@
   }
 
   async function newChatIn(pid) {
-    if (window.streaming) { note('正在生成中, 请稍候'); return; }
-    await newChat();
+    await newChat();   // 进行中也可新建: newChat 会先断开当前会话的订阅 (后台轮次照跑)
     if (curSid()) await moveTo(curSid(), pid);
   }
 

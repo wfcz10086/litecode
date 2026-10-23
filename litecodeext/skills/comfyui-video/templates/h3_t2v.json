@@ -35,7 +35,7 @@
    ]
   },
   "defaults": {
-   "steps": 8,
+   "steps": 10,
    "width": 864,
    "height": 480,
    "frames": 124
@@ -129,7 +129,7 @@
    "inputs": {
     "add_noise": "enable",
     "noise_seed": 0,
-    "steps": 8,
+    "steps": 10,
     "cfg": 1.0,
     "sampler_name": "res_multistep",
     "scheduler": "simple",

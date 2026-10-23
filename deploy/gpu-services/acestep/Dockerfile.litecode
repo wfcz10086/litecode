@@ -1,0 +1,30 @@
+# ACE-Step 1.5 (MIT) 音乐生成 — 权重打进镜像 (XL turbo 4B DiT + 1.7B LM + VAE + 文本编码器)
+# 基础: 本机已有 vllm-openai 镜像 (Ubuntu22.04 + py3.12 + ffmpeg + uv); 依赖按官方 uv.lock 锁版本安装
+FROM swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/vllm/vllm-openai:v0.25.1
+ENV UV_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple \
+    UV_EXTRA_INDEX_URL=https://download.pytorch.org/whl/cu128 \
+    UV_INDEX_STRATEGY=unsafe-best-match UV_HTTP_TIMEOUT=600 \
+    PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+WORKDIR /app
+COPY pyproject.toml uv.lock /app/
+COPY acestep/third_parts/nano-vllm /app/acestep/third_parts/nano-vllm
+RUN uv export --frozen --no-dev --no-hashes --no-emit-project --no-emit-local -o /tmp/req.txt \
+ && grep -v -E "flash-attn|flash_attn" /tmp/req.txt > /tmp/req2.txt \
+ && uv pip install --system --no-cache -r /tmp/req2.txt \
+ && pip install --no-cache-dir --no-deps /app/acestep/third_parts/nano-vllm
+COPY . /app/
+RUN pip install --no-cache-dir --no-deps -e /app && mkdir -p /app/checkpoints /app/output
+# 权重: 走官方下载器 (ModelScope 源), 直接下进镜像层, 宿主机不留副本
+ARG ACE_DIT=acestep-v15-xl-turbo
+RUN cd /app && python3 -c "\
+from acestep.model_downloader import download_main_model, download_submodel; \
+print(download_main_model(prefer_source='modelscope')); \
+print(download_submodel('${ACE_DIT}', prefer_source='modelscope'))" \
+ && rm -rf /root/.cache/modelscope /root/.cache/huggingface && du -sh /app/checkpoints/*
+ENV ACESTEP_API_HOST=0.0.0.0 ACESTEP_API_PORT=8001 ACESTEP_DOWNLOAD_SOURCE=modelscope \
+    ACESTEP_CONFIG_PATH=${ACE_DIT} ACESTEP_INIT_LLM=true ACESTEP_LM_MODEL_PATH=acestep-5Hz-lm-1.7B \
+    ACESTEP_LM_BACKEND=pt TOKENIZERS_PARALLELISM=false
+EXPOSE 8001
+HEALTHCHECK --interval=60s --timeout=10s --start-period=600s --retries=3 CMD curl -sf http://localhost:8001/health || exit 1
+ENTRYPOINT []
+CMD ["python3", "-m", "acestep.api_server", "--host", "0.0.0.0", "--port", "8001"]

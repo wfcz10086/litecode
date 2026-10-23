@@ -47,10 +47,12 @@ Section "LiteCode"
   File "${SRC}\LiteCode.exe"
   SetOutPath "$INSTDIR\payload"
   Delete "$INSTDIR\payload\*.tar.gz"
+  Delete "$INSTDIR\payload\preset-config.json"   ; 上次定制包留下的预置配置不能带到普通包
   SetCompress off
   File "${SRC}\litecode-rootfs-${ROOTFS_VER}.tar.gz"   ; 文件名用系统包内部版本 (依赖层缓存时 ≠ 发布版本)
   File "${SRC}\litecode-code-${VER}.tar.gz"           ; 代码更新包: 系统包没变时安装只换代码
   File "${SRC}\wsl.msi"
+  File /nonfatal "${SRC}\preset-config.json"         ; 定制包才有: 预置模型 / 能力接入 (ensureConfig 合并)
   SetCompress auto
   ; 本机操控离线组件: Python 安装程序 + 桌面代理依赖 wheel (windows_node_bootstrap.ps1 优先用它, 没有才联网)
   SetOutPath "$INSTDIR\payload\offline"

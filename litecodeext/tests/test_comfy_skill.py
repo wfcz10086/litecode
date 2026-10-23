@@ -116,7 +116,7 @@ def test_templates_are_consistent():
         txt = json.dumps(g, ensure_ascii=False)
         assert ("bing" + "te") not in txt and "10.128." not in txt  # 模板不绑定任何具体机器
     h3 = ts["h3_r2v"]
-    assert h3["defaults"]["steps"] == 8 and (h3["defaults"]["frames"] - 5) % 17 == 0
+    assert h3["defaults"]["steps"] == 10 and (h3["defaults"]["frames"] - 5) % 17 == 0
     assert h3["defaults"]["width"] % 32 == 0 and h3["defaults"]["height"] % 32 == 0
     ok, why = comfy.template_fit(ts["qwen21_t2i"]["graph"], ts["qwen21_t2i"], OI)
     assert not ok and "缺节点" in why[0]

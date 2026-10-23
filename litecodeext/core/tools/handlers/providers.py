@@ -142,7 +142,13 @@ async def h_send_notify(sid: str, args: dict):
     if not cands:
         return "ERROR: send_notify 还没有通知渠道, 请用户在网页「🔌 能力接入」里添加群机器人或 SMTP。", None
     p = cands[0]   # 通知不自动换渠道 (避免同一条消息发到多个群)
+    auto = p["protocol"] in ("wecom_webhook", "feishu_webhook", "dingtalk_webhook", "smtp") or \
+        (p["protocol"] == "http" and P.first_curl(p.get("usage") or ""))
+    if not auto:   # 识别不出怎么发: 把明文交给 agent, 按说明自己发
+        return (f"[send_notify] 「{p['name']}」不是能自动发送的渠道 (没识别出钉钉/飞书/企微 webhook、邮箱或 curl)。"
+                f"请按下面这段明文自己发送 (execute_shell 跑 curl 等), 消息正文: {text}\n" + P.card_text(p)), None
     r = await provider_probe.send_notify(p, text, str(args.get("title") or ""))
     if r.get("ok"):
         return f"[send_notify OK] 已通过「{p['name']}」发送 ({r['ms']} ms)", None
-    return f"ERROR: send_notify 「{p['name']}」发送失败: {r.get('error')}", None
+    hint = f"\n  原因: {r['hint']}" if r.get("hint") else ""
+    return f"ERROR: send_notify 「{p['name']}」发送失败: {r.get('error')}{hint}", None

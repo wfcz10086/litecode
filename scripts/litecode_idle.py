@@ -7,8 +7,9 @@
 判断法: 看最近 6 小时容器日志, 每个会话最后一条事件是 `>>>`/`iter=`/工具执行 而之后没有 `[TURN-END]` → 还在跑。
 超过 45 分钟没有任何动静的会话视为已挂掉, 不算活跃 (回合异常也会打 TURN-END, 一般到不了这条)。
 
-用法: python3 scripts/litecode_idle.py            空闲退出码 0, 有活跃回合退出码 1 并列出
+用法: python3 scripts/litecode_idle.py            空闲退出码 0, 有活跃回合或后台长任务退出码 1 并列出
       python3 scripts/litecode_idle.py --wait     一直等到空闲 (每 20 秒查一次)
+      --ignore-bg                                  只看对话回合, 不等后台长任务 (确认可以杀掉时才用)
 """
 import calendar
 import re
@@ -62,10 +63,34 @@ def active() -> dict:
     return res
 
 
+# 后台长任务 (MV / 视频 / 写歌 / 长翻译 …): 重启容器会把它们一起杀掉 (2026-10-23 用户: "任务不能停")
+BG_PAT = r"anime_short\.py|comfy\.py run|song\.py gen|long_translate\.py|BG-EXIT"
+
+
+def bg_jobs() -> dict:
+    """容器里还在跑的后台长任务: {pid: 命令摘要}。"""
+    out = subprocess.run(["docker", "exec", "litecode", "sh", "-c", "ps -eo pid=,etimes=,args="],
+                         capture_output=True, text=True, errors="replace").stdout
+    res = {}
+    for line in out.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) == 3 and re.search(BG_PAT, parts[2]) and "ps -eo" not in parts[2]:
+            res[parts[0]] = f"{parts[2][:90]} (已跑 {int(parts[1]) // 60} 分钟)"
+    return res
+
+
 def main():
     wait = "--wait" in sys.argv
     while True:
         a = active()
+        if not a and "--ignore-bg" not in sys.argv:
+            bg = bg_jobs()
+            if bg:
+                print("有后台长任务在跑 (重启会杀掉它们): " + "; ".join(bg.values()), flush=True)
+                if not wait:
+                    return 1
+                time.sleep(30)
+                continue
         if not a:
             print("空闲: 没有正在跑的回合")
             return 0

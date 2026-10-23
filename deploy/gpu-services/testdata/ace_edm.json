@@ -1,0 +1,10 @@
+{
+  "prompt": "失恋但很嗨的电子舞曲, EDM, DJ, 128 BPM, 强劲四拍底鼓, 合成器主旋律, build-up 后 drop, 女声主唱, 情绪释放, 夜店",
+  "lyrics": "[verse]\n你说再见那天我没有哭\n把你的照片全都删除\n霓虹在闪 心跳在加速\n今晚我只想要放肆跳舞\n\n[chorus]\n分手快乐 音乐再大声一点\n把眼泪甩进旋转的灯光里面\n没有你 我照样闪耀整夜\n跟着鼓点 忘了昨天\n",
+  "vocal_language": "zh",
+  "audio_duration": 60,
+  "bpm": 128,
+  "thinking": true,
+  "audio_format": "mp3",
+  "batch_size": 1
+}
