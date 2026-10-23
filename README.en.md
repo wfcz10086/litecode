@@ -434,9 +434,14 @@ More in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Version history
 
-### v2.0.11 "Desktop" (上桌) (2026-10-22)
+### v2.0.12 "Desktop" (上桌) (2026-10-23)
 
 > Desktop polish: offline voice-over and knowledge base, faster search, and clear reasons when remote control hits a locked or disconnected screen.
+
+**v2.0.12**
+- 🧹 **Pages close when done**: search and page reads close their page right away, and the browser exits when nothing is open.
+- 🐳 **Clear message without Docker**: the desktop container panel no longer shows `ConnectError: [Errno 2]`; it says there is no local Docker and how to manage remote containers.
+- ⬆️ **Tray code updates prefer GitHub**: reads `latest.json` from GitHub and downloads the tagged source tarball, falling back to the mirror if GitHub is unreachable.
 
 **v2.0.11**
 - 🔍 **Remote SearXNG**: set `search.searxng_url` in `config.json` (a token path works) so desktop installs without a local SearXNG still get the primary search engine.

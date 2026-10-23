@@ -119,11 +119,18 @@ type Release struct {
 	ModelsFile      string `json:"models_file"` // 模型包 (本地 TTS + 知识库向量模型), 不进安装包, 托盘后台下载 (models.go)
 	ModelsSHA256    string `json:"models_sha256"`
 	ModelsSize      int64  `json:"models_size"`
+
+	// 同版本的备用代码包 (BaseURL 上的): GitHub 源码包下载失败时改用它
+	fallbackFile, fallbackSHA256 string
 }
 
-func fetchRelease() (*Release, error) {
+// GitHubLatest: 代码更新优先走 GitHub (公开仓库的 latest.json, code_file 是标签源码包完整网址);
+// 系统包 / 安装包 / 模型包仍以 BaseURL 为准。GitHub 连不上 (国内网络) 时整体回落到 BaseURL。
+var GitHubLatest = "https://raw.githubusercontent.com/wfcz10086/litecode/main/latest.json"
+
+func getRelease(url string) (*Release, error) {
 	c := &http.Client{Timeout: 30 * time.Second}
-	resp, err := c.Get(BaseURL + "latest.json")
+	resp, err := c.Get(url)
 	if err != nil {
 		return nil, err
 	}
@@ -136,6 +143,28 @@ func fetchRelease() (*Release, error) {
 		return nil, err
 	}
 	return &r, nil
+}
+
+func fetchRelease() (*Release, error) {
+	base, err := getRelease(BaseURL + "latest.json")
+	gh, gerr := getRelease(GitHubLatest)
+	if gerr != nil || gh.Version == "" || gh.CodeFile == "" {
+		if gerr != nil {
+			logf("GitHub 更新源不可用, 用 %s: %v", BaseURL, gerr)
+		}
+		return base, err
+	}
+	if err != nil {
+		logf("更新源 %s 不可用, 只用 GitHub: %v", BaseURL, err)
+		return gh, nil
+	}
+	if !newer(base.Version, gh.Version) {
+		if base.Version == gh.Version {
+			base.fallbackFile, base.fallbackSHA256 = base.CodeFile, base.CodeSHA256
+		}
+		base.Version, base.CodeFile, base.CodeSHA256, base.CodeSize = gh.Version, gh.CodeFile, gh.CodeSHA256, gh.CodeSize
+	}
+	return base, nil
 }
 
 // download 断点续传下载到 dst, 校验 sha256; progress(已下载, 总大小)
@@ -217,7 +246,6 @@ func sha256Is(p, want string) (bool, string) {
 	got := hex.EncodeToString(h.Sum(nil))
 	return want == "" || strings.EqualFold(got, want), got
 }
-
 
 // urlFor: latest.json 里的文件名是相对 BaseURL 的; 写成完整网址时直接用
 // (代码更新包可以指向 GitHub 的标签源码包, 发版 = 推标签)

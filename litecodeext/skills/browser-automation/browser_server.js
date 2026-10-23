@@ -79,6 +79,16 @@ async function _cleanupSession(session, reason = 'manual') {
   try { if (entry.ctx) await entry.ctx.close(); } catch (e) {}
   _ctxs.delete(session);
   console.log(`[BAS-Node] cleanup session=${session} reason=${reason} (active=${_ctxs.size})`);
+  // 没有会话了: 稍等 10s (避开紧接着的下一次搜索) 再把整个浏览器关掉, 不长驻
+  if (_ctxs.size === 0) {
+    setTimeout(async () => {
+      if (_ctxs.size === 0 && _browser) {
+        const b = _browser; _browser = null;
+        try { await b.close(); } catch (e) {}
+        console.log('[BAS-Node] 无活跃会话, 浏览器已关闭');
+      }
+    }, 10000);
+  }
 }
 
 // ── 按 session 取 ctx + page ────────────────────────────────────

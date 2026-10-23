@@ -201,10 +201,17 @@ func codeUpdate(rel *Release) {
 	}()
 	f := filepath.Join(dataDir(), "downloads", localName(rel.CodeFile))
 	os.MkdirAll(filepath.Dir(f), 0o755)
-	if err := download(urlFor(rel.CodeFile), f, rel.CodeSHA256, func(d, t int64) {
+	progress := func(d, t int64) {
 		dlg.Text(fmt.Sprintf("下载… %s / %s", mb(d), mb(t)))
 		dlg.Value(int(50 * d / max64(t, 1)))
-	}); err != nil {
+	}
+	err := download(urlFor(rel.CodeFile), f, rel.CodeSHA256, progress)
+	if err != nil && rel.fallbackFile != "" {
+		logf("从 %s 下载失败 (%v), 改用备用源", urlFor(rel.CodeFile), err)
+		f = filepath.Join(dataDir(), "downloads", localName(rel.fallbackFile))
+		err = download(urlFor(rel.fallbackFile), f, rel.fallbackSHA256, progress)
+	}
+	if err != nil {
 		zenity.Error("下载失败: "+err.Error(), zenity.Title(appName))
 		return
 	}

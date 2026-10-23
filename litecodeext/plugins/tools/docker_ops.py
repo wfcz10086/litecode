@@ -32,6 +32,18 @@ def _client(timeout: float = DEFAULT_TIMEOUT) -> httpx.AsyncClient:
     return httpx.AsyncClient(transport=transport, base_url="http://d", timeout=timeout)
 
 
+def docker_available() -> bool:
+    return os.path.exists(DOCKER_SOCK)
+
+
+def _err(e: Exception) -> str:
+    # 桌面版 (WSL) / 没挂 docker.sock 的部署: 原来直接报 "ConnectError: [Errno 2] No such file or directory"
+    if not docker_available():
+        return (f"本机没有可用的 Docker ({DOCKER_SOCK} 不存在): 桌面版不带 Docker 引擎, "
+                "管理远程服务器上的容器请用 docker_remote_ps / ssh_exec")
+    return f"{type(e).__name__}: {e}"
+
+
 def _in_scope(name_or_id: str, container_names: list[str]) -> bool:
     """判断是否允许操作该容器 (按名字前缀白名单)."""
     if not ALLOWED_PREFIXES:
@@ -71,7 +83,7 @@ async def docker_ps(all: bool = False) -> dict:
         return {"ok": True, "count": len(items), "containers": items}
     except Exception as e:
         log.exception("docker_ps failed")
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": _err(e)}
 
 
 async def docker_logs(name: str, tail: int = 100) -> dict:
@@ -104,7 +116,7 @@ async def docker_logs(name: str, tail: int = 100) -> dict:
         return {"ok": True, "name": name, "tail": tail, "text": text, "bytes": len(text)}
     except Exception as e:
         log.exception("docker_logs %s failed", name)
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": _err(e)}
 
 
 async def docker_stats() -> dict:
@@ -137,7 +149,7 @@ async def docker_stats() -> dict:
         return {"ok": True, "count": len(rows), "stats": rows}
     except Exception as e:
         log.exception("docker_stats failed")
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": _err(e)}
 
 
 def _calc_cpu_pct(s: dict) -> float:
@@ -175,7 +187,7 @@ async def _lifecycle(name: str, action: str) -> dict:
         return {"ok": True, "action": action, "name": name}
     except Exception as e:
         log.exception("docker_%s %s failed", action, name)
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": _err(e)}
 
 
 async def docker_restart(name: str) -> dict:
@@ -223,7 +235,7 @@ async def docker_inspect(name: str) -> dict:
         }}
     except Exception as e:
         log.exception("docker_inspect %s failed", name)
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": _err(e)}
 
 
 # ─── plugin ABI (给 registry + LLM 用) ──────────────────────

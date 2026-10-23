@@ -16,7 +16,7 @@ browser_search.py — v1.0 浏览器搜索 + 智能网页抓取
 
 设计原则:
   - 轻量: 一次请求 = 一次 HTTP 调用到 browser_server, 不直接起 Playwright
-  - 持久会话: session 名 "search-bot" / "reader-bot", cookie/storage 跨调用复用
+  - 查完即关: 每次搜索/读页面结束就 /cleanup 关掉自己的会话, 无会话时 browser_server 连浏览器一起关
   - 截图保存: 输出到 workspace/screenshots/, 供前端 / agent 复查
   - 对 LLM 友好: 返回 Markdown + JSON 混合, 方便模型继续决策
 """
@@ -28,6 +28,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -276,6 +277,16 @@ def _post_act(action: str, params: dict, session: str = "default",
                 "data": None, "b64": None, "url": ""}
 
 
+def _cleanup_session(session: str) -> None:
+    """查完即关: 让 browser_server 关掉这个会话的页面; 没有会话剩下时它会把浏览器整个关掉。"""
+    if httpx is None:
+        return
+    try:
+        httpx.post(f"{_BROWSER_URL}/cleanup", json={"session": session}, timeout=5.0)
+    except Exception:
+        pass
+
+
 def _save_b64_png(b64: str, prefix: str = "shot") -> Optional[str]:
     """把 base64 截图存到 workspace/screenshots/, 返回绝对路径。"""
     if not b64:
@@ -444,8 +455,8 @@ def _vision_extract_from_screenshot(b64_png: Optional[str], *,
 # ═══════════════════════════════════════════════════════
 # 核心: 浏览器搜索
 # ═══════════════════════════════════════════════════════
-def browser_search(query: str, engine: str = "bing", top_k: int = 5,
-                   save_screenshot: bool = True) -> dict:
+def _browser_search(query: str, engine: str = "bing", top_k: int = 5,
+                    save_screenshot: bool = True) -> dict:
     """
     用真实浏览器搜索。
     Args:
@@ -600,8 +611,9 @@ def browser_search(query: str, engine: str = "bing", top_k: int = 5,
 # ═══════════════════════════════════════════════════════
 # 核心: 浏览器读页面 (智能正文提取)
 # ═══════════════════════════════════════════════════════
-def browser_read(url: str, wait_for: Optional[str] = None,
-                 max_chars: int = 8000, save_screenshot: bool = True) -> dict:
+def _browser_read(url: str, wait_for: Optional[str] = None,
+                  max_chars: int = 8000, save_screenshot: bool = True,
+                  session: str = "reader-bot") -> dict:
     """
     用真实浏览器打开 URL，等 DOM 稳定 → 截图 → 提取主正文。
     绕过反爬、处理 JS 渲染、抓取到真正用户看到的内容。
@@ -627,7 +639,6 @@ def browser_read(url: str, wait_for: Optional[str] = None,
     if not url or not urlparse(url).scheme:
         return {"ok": False, "message": f"ERROR: 无效 URL: {url!r}"}
 
-    session = "reader-bot"
     goto = _post_act("goto", {"url": url}, session=session, wait_ms=0, want_shot=False, timeout=50.0)
     if not goto.get("ok"):
         return {"ok": False, "message": f"ERROR: goto 失败: {goto.get('msg','')}"}
@@ -679,6 +690,25 @@ def browser_read(url: str, wait_for: Optional[str] = None,
         "ok": True, "url": final_url, "title": title, "text": text,
         "screenshot": shot_path, "message": "\n".join(lines),
     }
+
+
+def browser_search(query: str, engine: str = "bing", top_k: int = 5,
+                   save_screenshot: bool = True) -> dict:
+    """真实浏览器搜索 (详见 _browser_search); 结束即关闭该引擎的页面。"""
+    try:
+        return _browser_search(query, engine, top_k, save_screenshot)
+    finally:
+        _cleanup_session(f"search-bot-{engine.lower()}")
+
+
+def browser_read(url: str, wait_for: Optional[str] = None,
+                 max_chars: int = 8000, save_screenshot: bool = True) -> dict:
+    """真实浏览器读页面 (详见 _browser_read); 读完即关闭页面。"""
+    session = f"reader-bot-{os.getpid()}-{threading.get_ident()}-{time.time_ns() % 10**9}"
+    try:
+        return _browser_read(url, wait_for, max_chars, save_screenshot, session=session)
+    finally:
+        _cleanup_session(session)
 
 
 # ═══════════════════════════════════════════════════════

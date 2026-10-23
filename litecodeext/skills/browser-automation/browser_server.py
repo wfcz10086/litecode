@@ -35,10 +35,18 @@ _ctxs: dict = {}
 _pages: dict = {}
 
 
-@app.on_event("startup")
-async def _start():
+IDLE_S = float(os.environ.get("BROWSER_IDLE_MS", 5 * 60 * 1000)) / 1000.0
+_last: dict = {}            # session -> 最近使用时间
+_lock = asyncio.Lock()
+
+
+async def _launch():
+    """浏览器按需拉起: 没有活跃会话时整个关掉, 下次用再开 (用完即关, 不长驻)。"""
     global _pw, _browser
-    _pw = await async_playwright().start()
+    if _browser and _browser.is_connected():
+        return _browser
+    if _pw is None:
+        _pw = await async_playwright().start()
     _browser = await _pw.chromium.launch(
         headless=False,
         args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage",
@@ -46,26 +54,71 @@ async def _start():
               "--exclude-switches=enable-automation"],
     )
     print(f"[BAS] ✅ 浏览器启动完成 (DISPLAY={DISPLAY}, PORT={PORT})")
+    return _browser
+
+
+async def _close_session(session: str):
+    _pages.pop(session, None)
+    _last.pop(session, None)
+    ctx = _ctxs.pop(session, None)
+    if ctx:
+        try: await ctx.close()
+        except Exception: pass
+
+
+async def _close_browser_if_idle():
+    global _browser
+    if not _ctxs and _browser:
+        b, _browser = _browser, None
+        try: await b.close()
+        except Exception: pass
+        print("[BAS] 无活跃会话, 浏览器已关闭")
+
+
+async def _reaper():
+    while True:
+        await asyncio.sleep(30)
+        try:
+            async with _lock:
+                now = time.time()
+                for s in [s for s, t in _last.items() if now - t > IDLE_S]:
+                    await _close_session(s)
+                await _close_browser_if_idle()
+        except Exception:
+            traceback.print_exc()
+
+
+@app.on_event("startup")
+async def _start():
+    asyncio.create_task(_reaper())
 
 
 @app.on_event("shutdown")
 async def _stop():
-    for c in _ctxs.values():
-        try: await c.close()
-        except: pass
+    for s in list(_ctxs):
+        await _close_session(s)
     if _browser: await _browser.close()
     if _pw: await _pw.stop()
 
 
 async def _get(session="default"):
+    _last[session] = time.time()
+    if session in _ctxs:
+        return _ctxs[session], _pages[session]
+    async with _lock:   # 和 cleanup/回收互斥: 防止刚拉起的浏览器被"无会话"判定关掉
+        return await _new_session(session)
+
+
+async def _new_session(session):
     if session not in _ctxs:
+        browser = await _launch()
         sf = STATE_DIR / f"{session}_state.json"
         kw = dict(viewport={"width": 1280, "height": 720},
                   user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
                   locale="zh-CN", timezone_id="Asia/Shanghai")
         if sf.exists():
             kw["storage_state"] = str(sf)
-        ctx = await _browser.new_context(**kw)
+        ctx = await browser.new_context(**kw)
         await ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         _ctxs[session] = ctx
         _pages[session] = await ctx.new_page()
@@ -852,7 +905,20 @@ async def shot_only(body: dict = {}):
 
 @app.get("/health")
 async def health():
-    return {"ok": True, "sessions": list(_ctxs.keys())}
+    return {"ok": True, "sessions": list(_ctxs.keys()),
+            "browser_open": bool(_browser and _browser.is_connected()), "idle_s": IDLE_S}
+
+
+@app.post("/cleanup")
+async def cleanup(body: dict = {}):
+    """关掉指定会话 (不传 session 则全部); 没有会话剩下时连浏览器一起关。"""
+    session = (body or {}).get("session") or ""
+    async with _lock:
+        sids = [session] if session else list(_ctxs)
+        for s in sids:
+            await _close_session(s)
+        await _close_browser_if_idle()
+    return {"ok": True, "msg": f"cleaned: {', '.join(sids) or '(none)'}"}
 
 
 if __name__ == "__main__":
